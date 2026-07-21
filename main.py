@@ -10,7 +10,7 @@ response = client.chat.completions.create(
     messages=[
         {
             "role": "user",
-            "content": "Привет! Расскажи, что ты умеешь?"
+            "content": "Привет! Расскажи, ты крутой?"
         }
     ],
     temperature=0.7,
