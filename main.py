@@ -6,7 +6,7 @@ client = OpenAI(
 )
 
 response = client.chat.completions.create(
-    model="nvidia/gemma-4-31B-it-NVFP4",
+    model="deepseek-ai/DeepSeek-V4-Flash",
     messages=[
         {
             "role": "user",
