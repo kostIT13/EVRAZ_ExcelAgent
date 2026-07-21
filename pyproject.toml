@@ -11,4 +11,6 @@ dependencies = [
     "langgraph>=1.2.9",
     "openai>=2.45.0",
     "sqlalchemy>=2.0.51",
+    "loguru>=0.7.3",
+    "pydantic-settings>=2.14.2",
 ]
