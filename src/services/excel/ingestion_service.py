@@ -11,6 +11,7 @@ from src.core.excel.parser import ExcelParser
 from src.core.excel.schemas import ParsedFile
 from src.core.excel.normalize import ExcelNormalizer
 from src.services.excel.repository import ExcelRepository
+from src.services.rag.rag_service import rag_service
 
 
 class ExcelIngestionService:
@@ -38,7 +39,23 @@ class ExcelIngestionService:
                 repo = ExcelRepository(session)
                 file_record = await repo.save_parsed_file(parsed)
 
-        logger.info("Ingestion complete: file_id={}, filename={}", file_record.id, file_record.filename)
+        # Индексируем файл в векторную БД + BM25
+        # Ошибка индексации не должна блокировать загрузку файла
+        try:
+            logger.info("Indexing file {} in vector database...", file_record.id)
+            await rag_service.build_index_for_file(file_record.id, session=self._session)
+        except Exception as exc:
+            logger.error(
+                "Indexing failed for file_id={}, but file was saved: {}",
+                file_record.id,
+                exc,
+            )
+
+        logger.info(
+            "Ingestion complete: file_id={}, filename={}",
+            file_record.id,
+            file_record.filename,
+        )
         return file_record
 
     async def _save_with_session(self, parsed: ParsedFile) -> File:

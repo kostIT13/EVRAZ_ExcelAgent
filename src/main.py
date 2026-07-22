@@ -4,26 +4,44 @@ from contextlib import asynccontextmanager
 from sqlalchemy import text
 from src.core.db.database import engine
 from src.api.router import router as files_router
+from src.api.agent_router import router as agent_router
+from src.services.rag.rag_service import rag_service
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting EVRAZ RAG service...")
+
+    # Загружаем BM25 индекс с диска (если есть)
+    rag_service.load_bm25()
+    logger.info("BM25 index loaded ({} chunks)", rag_service._bm25.size if rag_service._bm25 else 0)
+
+    # Проверка подключения к БД
     try:
         async with engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
             logger.info("Database connection OK")
     except Exception as e:
         logger.error(f"Database connection error: {e}")
+
     yield
+
+    # Сохраняем BM25 индекс перед выключением
+    rag_service.persist_bm25()
     await engine.dispose()
     logger.info("Engine disposed, shutdown complete")
 
 
-app = FastAPI(title="EVRAZ RAG Service", description="AI-агент для работы с Excel-файлами (ЕВРАЗ). "
-                "Загрузка, парсинг, поиск и ответы на вопросы по данным.", version="0.1.0", lifespan=lifespan,)
+app = FastAPI(
+    title="EVRAZ RAG Service",
+    description="AI-агент для работы с Excel-файлами (ЕВРАЗ). "
+    "Загрузка, парсинг, поиск и ответы на вопросы по данным.",
+    version="0.1.0",
+    lifespan=lifespan,
+)
 
 app.include_router(files_router)
+app.include_router(agent_router)
 
 
 @app.get("/health")
