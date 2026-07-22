@@ -1,6 +1,6 @@
 from src.core.db.base import Base
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy import Integer, String, DateTime, Text, JSON, ForeignKey, Index, func, text
+from sqlalchemy import Integer, Float, String, DateTime, Text, JSON, ForeignKey, Index, func, text
 from datetime import datetime
 from typing import Optional, List
 from typing import TYPE_CHECKING
@@ -20,7 +20,7 @@ class File(Base):
     total_cells: Mapped[int] = mapped_column(Integer, default=0)
     uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     processed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    status: Mapped[str] = mapped_column(String(50), default="uploaded")  #
+    status: Mapped[str] = mapped_column(String(50), default="uploaded")
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     meta: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
@@ -48,8 +48,8 @@ class Sheet(Base):
     file: Mapped["File"] = relationship("File", back_populates="sheets")
     columns: Mapped[List["ColumnMetadata"]] = relationship("ColumnMetadata", back_populates="sheet", cascade="all, delete-orphan")
     cells: Mapped[List["Cell"]] = relationship("Cell", back_populates="sheet", cascade="all, delete-orphan")
-    embedding: Mapped[Optional["SheetEmbedding"]] = relationship("SheetEmbedding", back_populates="sheet", uselist=False, cascade="all, delete-orphan")
 
+    
     __table_args__ = (
         Index("ix_sheets_file_id", "file_id"),
         Index("ix_sheets_normalized_name", "normalized_name"),
@@ -65,12 +65,11 @@ class ColumnMetadata(Base):
     col_index: Mapped[int] = mapped_column(Integer, nullable=False)
     original_name: Mapped[str] = mapped_column(String(255), nullable=False)
     normalized_name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
-    data_type: Mapped[str] = mapped_column(String(50), nullable=False, default="text") 
+    data_type: Mapped[str] = mapped_column(String(50), nullable=False, default="text")
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     sample_values: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
 
     sheet: Mapped["Sheet"] = relationship("Sheet", back_populates="columns")
-    embedding: Mapped[Optional["ColumnEmbedding"]] = relationship("ColumnEmbedding", back_populates="column", uselist=False, cascade="all, delete-orphan")
 
     __table_args__ = (
         Index("ix_column_metadata_sheet_id", "sheet_id"),
@@ -87,10 +86,10 @@ class Cell(Base):
     row_num: Mapped[int] = mapped_column(Integer, nullable=False)
     col_index: Mapped[int] = mapped_column(Integer, nullable=False)
     value_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    value_number: Mapped[Optional[float]] = mapped_column(Integer, nullable=True)
+    value_number: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     value_date: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     is_error: Mapped[bool] = mapped_column(Integer, default=False)
-    error_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  
+    error_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     original_value: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -112,9 +111,9 @@ class QueryLog(Base):
     plan: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     sql_query: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     result: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-    trace: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)  
+    trace: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     latency_ms: Mapped[int] = mapped_column(Integer, default=0)
-    status: Mapped[str] = mapped_column(String(50), default="success") 
+    status: Mapped[str] = mapped_column(String(50), default="success")
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

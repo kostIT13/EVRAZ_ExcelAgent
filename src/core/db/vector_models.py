@@ -1,8 +1,9 @@
-from src.core.db.base import Base 
+from src.core.db.base import Base
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy import Integer, func, String, DateTime, Index, Text, ForeignKey, text
+from sqlalchemy import Integer, String, DateTime, Text, ForeignKey, Index, func
 from pgvector.sqlalchemy import Vector
 from datetime import datetime
+from typing import Optional
 
 
 class SheetEmbedding(Base):
@@ -10,9 +11,9 @@ class SheetEmbedding(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     sheet_id: Mapped[int] = mapped_column(Integer, ForeignKey("sheets.id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
-    source_text: Mapped[text] = mapped_column(Text, nullable=False)  
+    source_text: Mapped[str] = mapped_column(Text, nullable=False) 
     embedding: Mapped[Vector] = mapped_column(Vector(768), nullable=False)
-    model_name: Mapped[str] = mapped_column(String(100), nullable=False)  
+    model_name: Mapped[str] = mapped_column(String(100), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     sheet = relationship("Sheet", back_populates="embedding")
@@ -23,7 +24,7 @@ class ColumnEmbedding(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     column_id: Mapped[int] = mapped_column(Integer, ForeignKey("column_metadata.id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
-    source_text: Mapped[text] = mapped_column(Text, nullable=False)
+    source_text: Mapped[str] = mapped_column(Text, nullable=False) 
     embedding: Mapped[Vector] = mapped_column(Vector(768), nullable=False)
     model_name: Mapped[str] = mapped_column(String(100), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -36,7 +37,7 @@ class QueryEmbeddingCache(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     query_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
-    query_text: Mapped[text] = mapped_column(Text, nullable=False)
+    query_text: Mapped[str] = mapped_column(Text, nullable=False)  
     embedding: Mapped[Vector] = mapped_column(Vector(768), nullable=False)
     model_name: Mapped[str] = mapped_column(String(100), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
