@@ -6,11 +6,13 @@ from fastapi import APIRouter, Depends, UploadFile, HTTPException, Query
 from fastapi import File as FastAPIFile
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from src.core.db.database import get_db
 from src.core.db.models import File as DBFile, Sheet, ColumnMetadata, Cell
 from src.core.logging_settings import logger
 from src.services.excel.ingestion_service import ExcelIngestionService
+from src.services.rag.rag_service import rag_service
 
 from src.api.schemas import (
     FileResponse,
@@ -109,7 +111,11 @@ async def get_file(
     file_id: int,
     session: AsyncSession = Depends(get_db),
 ):
-    result = await session.execute(select(DBFile).where(DBFile.id == file_id))
+    result = await session.execute(
+        select(DBFile)
+        .options(selectinload(DBFile.sheets).selectinload(Sheet.columns))
+        .where(DBFile.id == file_id)
+    )
     file_record = result.scalar_one_or_none()
 
     if not file_record:
@@ -159,7 +165,9 @@ async def get_sheet_detail(
     session: AsyncSession = Depends(get_db),
 ):
     result = await session.execute(
-        select(Sheet).where(Sheet.id == sheet_id, Sheet.file_id == file_id)
+        select(Sheet)
+        .options(selectinload(Sheet.columns))
+        .where(Sheet.id == sheet_id, Sheet.file_id == file_id)
     )
     sheet = result.scalar_one_or_none()
 
@@ -213,3 +221,28 @@ async def get_sheet_cells(
     cells = list(result.scalars().all())
 
     return [CellResponse.model_validate(c) for c in cells]
+
+
+@router.post("/{file_id}/reindex", status_code=200)
+async def reindex_file(
+    file_id: int,
+    session: AsyncSession = Depends(get_db),
+):
+    """Rebuild vector embeddings and BM25 index for a file.
+
+    Useful after data changes or if indexing failed during upload.
+    """
+    # Проверяем, что файл существует
+    file_result = await session.execute(
+        select(DBFile).where(DBFile.id == file_id)
+    )
+    if not file_result.scalar_one_or_none():
+        raise HTTPException(
+            status_code=404, detail=f"File with id={file_id} not found"
+        )
+
+    logger.info("Reindexing file id={}", file_id)
+    await rag_service.build_index_for_file(file_id, session=session)
+    logger.info("Reindex complete for file id={}", file_id)
+
+    return {"message": f"File {file_id} reindexed successfully"}

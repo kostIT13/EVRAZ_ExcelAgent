@@ -18,6 +18,21 @@ services:
     networks:
       - app_network
 
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_KEEP_ALIVE=24h
+      - OLLAMA_NUM_PARALLEL=4
+    restart: unless-stopped
+    networks:
+      - app_network
+    command: serve
+
   service:
     build:
       context: .
@@ -29,15 +44,18 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      ollama:
+        condition: service_started
     volumes:
       - ./data:/app/data
       - ./src:/app/src
     command: uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
-    networks:                    # 👈 ДОБАВИТЬ ЭТО
+    networks:                   
       - app_network
 
 volumes:
   pgdata:
+  ollama_data:
 
 networks:
   app_network:
