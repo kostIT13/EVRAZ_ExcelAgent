@@ -15,4 +15,9 @@ dependencies = [
     "pydantic-settings>=2.14.2",
     "openpyxl>=3.1.5",
     "pandas>=3.0.3",
+    "pgvector>=0.5.0",
+    "uvicorn[standard]>=0.27",
+    "psycopg2>=2.9.12",
+    "dotenv>=0.9.9",
 ]
+
