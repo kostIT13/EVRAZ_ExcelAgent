@@ -19,5 +19,7 @@ dependencies = [
     "uvicorn[standard]>=0.27",
     "psycopg2>=2.9.12",
     "dotenv>=0.9.9",
+    "openpyxl>=3.1.5",
+    "python-multipart>=0.0.18",
 ]
 
