@@ -48,8 +48,14 @@ class Sheet(Base):
     file: Mapped["File"] = relationship("File", back_populates="sheets")
     columns: Mapped[List["ColumnMetadata"]] = relationship("ColumnMetadata", back_populates="sheet", cascade="all, delete-orphan")
     cells: Mapped[List["Cell"]] = relationship("Cell", back_populates="sheet", cascade="all, delete-orphan")
+    embedding: Mapped[Optional["SheetEmbedding"]] = relationship(
+        "SheetEmbedding", 
+        back_populates="sheet", 
+        uselist=False, 
+        cascade="all, delete-orphan", 
+        lazy="raise"
+    )
 
-    
     __table_args__ = (
         Index("ix_sheets_file_id", "file_id"),
         Index("ix_sheets_normalized_name", "normalized_name"),
@@ -69,7 +75,15 @@ class ColumnMetadata(Base):
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     sample_values: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
 
+    # 👇 Эти строки должны быть ВНУТРИ класса
     sheet: Mapped["Sheet"] = relationship("Sheet", back_populates="columns")
+    embedding: Mapped[Optional["ColumnEmbedding"]] = relationship(
+        "ColumnEmbedding", 
+        back_populates="column", 
+        uselist=False, 
+        cascade="all, delete-orphan", 
+        lazy="raise"
+    )
 
     __table_args__ = (
         Index("ix_column_metadata_sheet_id", "sheet_id"),
