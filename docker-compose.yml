@@ -50,7 +50,19 @@ services:
       - ./data:/app/data
       - ./src:/app/src
     command: uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
-    networks:                   
+    networks:
+      - app_network
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: evraz_frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - service
+    networks:
       - app_network
 
 volumes:

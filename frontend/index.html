@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>EVRAZ AI Agent</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="stylesheet" href="/src/styles/main.css" />
+</head>
+<body>
+  <!-- Шапка -->
+  <header class="header">
+    <div class="header__inner">
+      <h1 class="header__title">🔷 EVRAZ AI Agent</h1>
+      <span class="header__subtitle">Интеллектуальный помощник для работы с Excel-данными</span>
+      <div class="header__status" id="healthStatus">
+        <span class="status-dot status-dot--checking"></span>
+        <span>Проверка подключения...</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="main">
+    <div class="layout">
+      <!-- Левая панель: Файлы -->
+      <aside class="panel panel--files">
+        <div class="panel__header">
+          <h2 class="panel__title">📁 Файлы</h2>
+          <button class="btn btn--sm btn--icon" id="refreshFilesBtn" title="Обновить список">↻</button>
+        </div>
+
+        <!-- Форма загрузки -->
+        <form class="upload-form" id="uploadForm">
+          <label class="upload-form__label">
+            <input type="file" accept=".xlsx,.xls" id="fileInput" hidden />
+            <span class="upload-form__dropzone" id="dropzone">
+              <span class="upload-form__icon">📤</span>
+              <span>Выберите файл или перетащите сюда</span>
+              <span class="upload-form__hint">.xlsx / .xls до 50 МБ</span>
+            </span>
+          </label>
+          <button class="btn btn--primary btn--full" type="submit" id="uploadBtn" disabled>
+            ⬆ Загрузить
+          </button>
+        </form>
+
+        <!-- Список файлов -->
+        <div class="file-list" id="fileList">
+          <div class="file-list__empty">Файлы не загружены</div>
+        </div>
+      </aside>
+
+      <!-- Центральная панель: Чат / Детали -->
+      <section class="panel panel--chat">
+        <!-- Вкладки -->
+        <div class="tabs">
+          <button class="tab tab--active" data-tab="chat">💬 Чат</button>
+          <button class="tab" data-tab="details">📋 Детали файла</button>
+          <button class="tab" data-tab="trace">🔍 Трассировка</button>
+        </div>
+
+        <!-- Вкладка: Чат -->
+        <div class="tab-content tab-content--active" id="tabChat">
+          <div class="chat-messages" id="chatMessages">
+            <div class="chat-message chat-message--system">
+              <div class="chat-message__content">
+                Здравствуйте! Я — AI-агент для работы с Excel-данными ЕВРАЗ.
+                Загрузите файл и задайте вопрос о данных.
+              </div>
+            </div>
+          </div>
+
+          <!-- Панель настроек -->
+          <div class="chat-settings">
+            <label class="chat-settings__item">
+              <span class="chat-settings__label">Режим:</span>
+              <select class="chat-settings__select" id="modeSelect">
+                <option value="auto">🤖 Auto</option>
+                <option value="rag">📚 RAG</option>
+                <option value="agent">🧠 Agent</option>
+              </select>
+            </label>
+            <label class="chat-settings__item">
+              <span class="chat-settings__label">Top-K:</span>
+              <input class="chat-settings__input" type="number" id="topKInput" value="10" min="1" max="50" />
+            </label>
+          </div>
+
+          <!-- Форма ввода -->
+          <form class="chat-input" id="chatForm">
+            <input
+              class="chat-input__field"
+              type="text"
+              id="questionInput"
+              placeholder="Задайте вопрос о данных..."
+              autocomplete="off"
+            />
+            <button class="btn btn--primary chat-input__btn" type="submit" id="askBtn" disabled>
+              ➤
+            </button>
+          </form>
+        </div>
+
+        <!-- Вкладка: Детали файла -->
+        <div class="tab-content" id="tabDetails">
+          <div class="details-placeholder" id="detailsPlaceholder">
+            Выберите файл из списка слева
+          </div>
+          <div class="details-content" id="detailsContent" hidden>
+            <div class="details-header">
+              <h3 id="detailsFileName"></h3>
+              <div class="details-meta" id="detailsMeta"></div>
+            </div>
+            <div class="details-sheets" id="detailsSheets"></div>
+          </div>
+        </div>
+
+        <!-- Вкладка: Трассировка -->
+        <div class="tab-content" id="tabTrace">
+          <div class="trace-search">
+            <input
+              class="chat-input__field"
+              type="text"
+              id="traceInput"
+              placeholder="Введите request_id..."
+            />
+            <button class="btn btn--primary" id="traceBtn">🔍 Найти</button>
+            <button class="btn" id="traceRefreshBtn">↻</button>
+          </div>
+
+          <!-- История запросов -->
+          <div class="trace-history" id="traceHistory">
+            <div class="trace-history__header">
+              <span>📋 История запросов</span>
+            </div>
+            <div class="trace-history__list" id="traceHistoryList">
+              <div class="trace-history__empty">История пуста</div>
+            </div>
+          </div>
+
+          <div class="trace-result" id="traceResult" hidden></div>
+          <div class="trace-placeholder" id="tracePlaceholder" hidden>
+            Выберите запрос из истории или введите request_id
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <!-- Модальное окно для просмотра данных -->
+  <div class="modal-overlay" id="modalOverlay" hidden>
+    <div class="modal">
+      <div class="modal__header">
+        <h3 class="modal__title" id="modalTitle"></h3>
+        <button class="modal__close" id="modalClose">&times;</button>
+      </div>
+      <div class="modal__body" id="modalBody"></div>
+    </div>
+  </div>
+
+  <!-- Toasts -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
