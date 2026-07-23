@@ -107,15 +107,29 @@ class HybridRetriever:
         bm25_results: List[dict],
         dense_results: List[DenseSearchResult],
     ) -> List[HybridSearchResult]:
-        # Dedup key: use (source_type, source_id) when available,
-        # otherwise fall back to chunk text hash.
+        # Строим lookup для dense-результатов по тексту чанка,
+        # чтобы нормализовать source_type/source_id из BM25
+        dense_by_text: dict[str, DenseSearchResult] = {}
+        for r in dense_results:
+            dense_by_text[r.chunk] = r
+
+        # Dedup key: используем (source_type, source_id) из dense если доступно,
+        # иначе fallback на текст чанка.
         score_map: dict[tuple, dict] = {}
 
         for rank, item in enumerate(bm25_results, start=1):
             text = item["chunk"]
             rrf = _rrf_score(rank, self._rrf_k)
-            sid = item.get("source_id", 0)
-            stype = item.get("source_type", "unknown")
+
+            # Пытаемся найти соответствующий dense-результат по тексту
+            dense_match = dense_by_text.get(text)
+            if dense_match is not None:
+                stype = dense_match.source_type
+                sid = dense_match.source_id
+            else:
+                stype = item.get("source_type", "unknown")
+                sid = item.get("source_id", 0)
+
             key = (stype, sid) if sid else ("__bm25_text__", hash(text))
             if key not in score_map:
                 score_map[key] = {

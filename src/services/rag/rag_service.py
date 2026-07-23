@@ -9,13 +9,13 @@ from pathlib import Path
 from typing import List, Optional
 
 from loguru import logger
-from sqlalchemy import select, func
+from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.config import settings
 from src.core.db.database import async_session_maker
 from src.core.db.models import Sheet, ColumnMetadata, Cell
-from src.core.db.vector_models import SheetEmbedding, ColumnEmbedding
+from src.core.db.vector_models import ChunkEmbedding, ColumnEmbedding, SheetEmbedding
 from src.services.rag.bm25 import BM25Index
 from src.services.rag.chunker import make_chunks
 from src.services.rag.embedder import Embedder
@@ -55,38 +55,47 @@ class RagService:
     ) -> None:
         """Chunk, embed, and store a sheet's text representation.
 
-        Also updates the BM25 index.
+        Каждый чанк эмбеддится отдельно для точного dense-поиска.
+        Также обновляет BM25 индекс.
         """
         chunks = make_chunks(text, strategy="adaptive")
         logger.info("Sheet {}: split into {} chunks", sheet_id, len(chunks))
 
-        # --- Dense: embed and store in pgvector (upsert) ---
         async with session or async_session_maker() as s:
-            # Проверяем существующую запись
+            # --- Dense: удаляем старые чанки и создаём новые ---
+            await s.execute(
+                delete(ChunkEmbedding).where(ChunkEmbedding.sheet_id == sheet_id)
+            )
+
+            for chunk_idx, chunk_text in enumerate(chunks):
+                vector = await self._embedder.embed(chunk_text)
+                chunk_emb = ChunkEmbedding(
+                    sheet_id=sheet_id,
+                    chunk_index=chunk_idx,
+                    source_text=chunk_text[:2000],
+                    embedding=vector,
+                    model_name=settings.OLLAMA_EMBED_MODEL,
+                )
+                s.add(chunk_emb)
+
+            # --- Также сохраняем общий эмбеддинг листа (для fallback) ---
+            full_vector = await self._embedder.embed(text)
             existing = await s.execute(
                 select(SheetEmbedding).where(SheetEmbedding.sheet_id == sheet_id)
             )
             existing_record = existing.scalar_one_or_none()
-            
-            vector = await self._embedder.embed(text)
-            
             if existing_record:
-                # Обновляем существующую запись
                 existing_record.source_text = text[:2000]
-                existing_record.embedding = vector
+                existing_record.embedding = full_vector
                 existing_record.model_name = settings.OLLAMA_EMBED_MODEL
-                logger.debug("Updated embedding for sheet {}", sheet_id)
             else:
-                # Создаём новую запись
-                embedding = SheetEmbedding(
+                s.add(SheetEmbedding(
                     sheet_id=sheet_id,
                     source_text=text[:2000],
-                    embedding=vector,
+                    embedding=full_vector,
                     model_name=settings.OLLAMA_EMBED_MODEL,
-                )
-                s.add(embedding)
-                logger.debug("Created embedding for sheet {}", sheet_id)
-            
+                ))
+
             await s.commit()
 
         # --- Sparse: update BM25 index ---
@@ -94,10 +103,10 @@ class RagService:
         if self._bm25 is not None and chunks:
             metadata = [{"source_type": "sheet", "source_id": sheet_id}] * len(chunks)
             self._bm25.add_chunks(chunks, metadata=metadata)
-            self._bm25.build()  # Перестраиваем индекс после добавления
+            self._bm25.build()
             self._bm25_dirty = True
 
-        logger.info("Sheet {} indexed (dense + BM25)", sheet_id)
+        logger.info("Sheet {} indexed: {} chunks (dense) + BM25", sheet_id, len(chunks))
 
     async def build_index_for_column(
         self,
@@ -193,7 +202,7 @@ class RagService:
     async def _build_sheet_text(
         sheet: Sheet,
         session: AsyncSession,
-        max_rows: int = 100,
+        max_rows: int = 500,
     ) -> str:
         """Build a text representation of a sheet for embedding.
 
@@ -266,14 +275,21 @@ class RagService:
         self,
         session: Optional[AsyncSession] = None,
     ) -> None:
-        """Rebuild the full BM25 index from all sheet embeddings in the DB."""
+        """Rebuild the full BM25 index from all chunk embeddings in the DB."""
         async with session or async_session_maker() as s:
-            result = await s.execute(select(SheetEmbedding))
+            result = await s.execute(select(ChunkEmbedding))
             records = result.scalars().all()
 
         chunks = [r.source_text for r in records if r.source_text]
         if chunks:
+            # Собираем metadata из записей БД (sheet_id уже есть в ChunkEmbedding)
+            metadata = [
+                {"source_type": "chunk", "source_id": r.sheet_id}
+                for r in records
+                if r.source_text
+            ]
             self._bm25 = BM25Index(chunks)
+            self._bm25._metadata = metadata
             self._bm25.build()
             self._bm25_dirty = True
             logger.info("Full BM25 index rebuilt from {} chunks", len(chunks))
@@ -286,7 +302,7 @@ class RagService:
     async def hybrid_search(
         self,
         query: str,
-        top_k: int = 10,
+        top_k: int = 20,
     ) -> List[HybridSearchResult]:
         """Run hybrid BM25 + Dense search.
 
@@ -322,7 +338,7 @@ class RagService:
     async def dense_search(
         self,
         query: str,
-        top_k: int = 10,
+        top_k: int = 20,
     ) -> list:
         """Run dense-only search."""
         return await self._dense.search(query, top_k=top_k)
