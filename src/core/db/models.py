@@ -1,12 +1,15 @@
-from src.core.db.base import Base
-from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy import Integer, Float, String, DateTime, Text, JSON, ForeignKey, Index, func, text
+from __future__ import annotations
+
 from datetime import datetime
-from typing import Optional, List
-from typing import TYPE_CHECKING
+from typing import List, Optional, TYPE_CHECKING
+
+from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, func, text
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from src.core.db.base import Base
 
 if TYPE_CHECKING:
-    from src.core.db.vector_models import SheetEmbedding, ColumnEmbedding, QueryEmbeddingCache
+    from src.core.db.vector_models import ChunkEmbedding, ColumnEmbedding, QueryEmbeddingCache, SheetEmbedding
 
 
 class File(Base):
@@ -49,11 +52,17 @@ class Sheet(Base):
     columns: Mapped[List["ColumnMetadata"]] = relationship("ColumnMetadata", back_populates="sheet", cascade="all, delete-orphan")
     cells: Mapped[List["Cell"]] = relationship("Cell", back_populates="sheet", cascade="all, delete-orphan")
     embedding: Mapped[Optional["SheetEmbedding"]] = relationship(
-        "SheetEmbedding", 
-        back_populates="sheet", 
-        uselist=False, 
-        cascade="all, delete-orphan", 
-        lazy="raise"
+        "SheetEmbedding",
+        back_populates="sheet",
+        uselist=False,
+        cascade="all, delete-orphan",
+        lazy="raise",
+    )
+    chunk_embeddings: Mapped[List["ChunkEmbedding"]] = relationship(
+        "ChunkEmbedding",
+        back_populates="sheet",
+        cascade="all, delete-orphan",
+        lazy="raise",
     )
 
     __table_args__ = (
