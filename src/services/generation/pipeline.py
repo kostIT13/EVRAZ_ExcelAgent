@@ -11,6 +11,7 @@ from src.services.generation.verifier import Verifier, VerificationResult
 from src.services.llm.llm_client import LLMClient
 from src.services.rag.hybrid import HybridSearchResult
 from src.services.rag.rag_service import RagService, rag_service
+from src.services.agent.orchestrator import AgentOrchestrator, AgentResult
 
 
 class GenerationResult:
@@ -56,10 +57,12 @@ class GenerationPipeline:
         rag: Optional[RagService] = None,
         llm: Optional[LLMClient] = None,
         verifier: Optional[Verifier] = None,
+        agent: Optional[AgentOrchestrator] = None,
     ) -> None:
         self._rag = rag or rag_service
         self._llm = llm or LLMClient()
         self._verifier = verifier or Verifier()
+        self._agent = agent or AgentOrchestrator(llm=self._llm)
 
     async def run(
         self,
@@ -68,6 +71,7 @@ class GenerationPipeline:
         use_cheap_model: bool = False,
         session: Optional[AsyncSession] = None,
     ) -> GenerationResult:
+        """Запустить RAG-пайплайн (без агента, как было раньше)."""
         request_id = str(uuid.uuid4())
         start_time = time.monotonic()
 
@@ -135,6 +139,36 @@ class GenerationPipeline:
             model_used="primary/cheap", 
         )
 
+    async def run_agent(
+        self,
+        question: str,
+        session: Optional[AsyncSession] = None,
+    ) -> AgentResult:
+        """Запустить агента (Classifier → Planner → CodeGen → Executor → Verifier).
+
+        Args:
+            question: Вопрос пользователя.
+            session: Опциональная асинхронная сессия.
+
+        Returns:
+            AgentResult с ответом и полным trace.
+        """
+        logger.info(
+            "Pipeline [{}]: running agent for '{}'",
+            "agent",
+            question[:80],
+        )
+
+        result = await self._agent.run(question=question)
+
+        # Логируем в БД
+        await self._log_agent_to_db(
+            result=result,
+            session=session,
+        )
+
+        return result
+
     async def _log_to_db(
         self,
         request_id: str,
@@ -145,7 +179,7 @@ class GenerationPipeline:
         latency_ms: int,
         session: Optional[AsyncSession],
     ) -> None:
-        """Persist query log to the database."""
+        """Persist query log to the database (RAG mode)."""
         trace = {
             "retrieved_count": len(retrieved),
             "retrieved_scores": [r.score for r in retrieved],
@@ -168,6 +202,39 @@ class GenerationPipeline:
             "Pipeline [{}]: logged to DB (latency={}ms)",
             request_id[:8],
             latency_ms,
+        )
+
+    async def _log_agent_to_db(
+        self,
+        result: AgentResult,
+        session: Optional[AsyncSession],
+    ) -> None:
+        """Persist agent query log to the database."""
+        trace = {
+            "agent_trace": result.trace,
+            "query_type": result.query_type,
+            "sql_query": result.sql_query,
+            "sql_result_preview": result.sql_result[:5],
+            "retry_count": result.retry_count,
+        }
+
+        async with session or async_session_maker() as s:
+            log = QueryLog(
+                request_id=result.request_id,
+                question="",  # вопрос не передаётся в AgentResult, но можно достать из trace
+                result={"answer": result.answer},
+                trace=trace,
+                latency_ms=result.latency_ms,
+                status=result.status,
+            )
+            s.add(log)
+            await s.commit()
+
+        logger.info(
+            "Pipeline [{}]: agent logged to DB (latency={}ms, status={})",
+            result.request_id[:8],
+            result.latency_ms,
+            result.status,
         )
 
 

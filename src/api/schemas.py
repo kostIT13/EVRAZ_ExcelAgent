@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import List, Optional, Any
+from typing import List, Optional, Any, Dict
 from pydantic import BaseModel, Field
 
 
@@ -95,6 +95,11 @@ class AskRequest(BaseModel):
 
     question: str = Field(..., min_length=1, max_length=2000, description="Вопрос пользователя")
     top_k: int = Field(default=10, ge=1, le=50, description="Количество чанков для поиска")
+    mode: str = Field(
+        default="auto",
+        pattern="^(auto|rag|agent)$",
+        description="Режим: auto (автоопределение), rag (только RAG), agent (только агент)",
+    )
 
 
 class SourceInfo(BaseModel):
@@ -108,10 +113,36 @@ class SourceInfo(BaseModel):
 
 
 class AskResponse(BaseModel):
-    """Response from the RAG pipeline."""
+    """Response from the pipeline."""
 
     answer: str = Field(..., description="Сгенерированный ответ")
     confidence: float = Field(..., ge=0.0, le=1.0, description="Уверенность в ответе (0-1)")
     sources: List[SourceInfo] = Field(default_factory=list, description="Источники, использованные для ответа")
     request_id: str = Field(..., description="Уникальный ID запроса")
     latency_ms: int = Field(..., description="Время выполнения в миллисекундах")
+    # Поля агента (опциональные)
+    mode_used: str = Field(default="rag", description="Какой режим использовался: rag/agent")
+    query_type: str = Field(default="", description="Тип запроса (только для agent): lookup/aggregate/cross_sheet/delta")
+    sql_query: str = Field(default="", description="Сгенерированный SQL (только для agent)")
+    sql_result_preview: List[Any] = Field(default_factory=list, description="Первые строки результата (только для agent)")
+    retry_count: int = Field(default=0, description="Количество retry (только для agent)")
+    status: str = Field(default="success", description="Статус: success/low_confidence/failed")
+
+
+# След
+
+class TraceStepInfo(BaseModel):
+    """Информация об одном шаге traceability."""
+    step: str = Field(..., description="Название шага")
+    data: Any = Field(default=None, description="Данные шага")
+
+
+class TraceResponse(BaseModel):
+    """Response from the traceability endpoint."""
+    request_id: str = Field(..., description="Уникальный ID запроса")
+    question: str = Field(default="", description="Вопрос пользователя")
+    answer: str = Field(default="", description="Ответ")
+    status: str = Field(default="", description="Статус выполнения")
+    latency_ms: int = Field(default=0, description="Время выполнения")
+    trace: Dict[str, Any] = Field(default_factory=dict, description="Полный trace всех шагов")
+    steps: List[TraceStepInfo] = Field(default_factory=list, description="Шаги для отображения")

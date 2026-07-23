@@ -6,7 +6,7 @@ from src.core.db.database import engine
 from src.api.router import router as files_router
 from src.api.agent_router import router as agent_router
 from src.services.rag.rag_service import rag_service
-
+from src.api.trace_router import router as trace_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -42,7 +42,7 @@ app = FastAPI(
 
 app.include_router(files_router)
 app.include_router(agent_router)
-
+app.include_router(trace_router)
 
 @app.get("/health")
 async def health():

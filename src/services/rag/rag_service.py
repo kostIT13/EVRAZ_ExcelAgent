@@ -197,11 +197,8 @@ class RagService:
     ) -> str:
         """Build a text representation of a sheet for embedding.
 
-        Includes ALL data rows (up to *max_rows*) so that BM25 and dense
-        search can find any product name (e.g. "Лом бронзы").
-
-        Only key columns are included: наименование_лома and среднерыночная_цена_рубтн
-        to keep the text compact and fit more sheets into the LLM context.
+        Includes ALL data rows (up to *max_rows*) with ALL columns,
+        so that BM25 and dense search can find any product name or value.
         """
         parts = [
             f"Лист: {sheet.normalized_name}",
@@ -211,27 +208,23 @@ class RagService:
         if sheet.description:
             parts.append(f"описание: {sheet.description}")
 
-        # Get column names and identify key columns
+        # Get column names
         cols_result = await session.execute(
             select(ColumnMetadata)
             .where(ColumnMetadata.sheet_id == sheet.id)
             .order_by(ColumnMetadata.col_index)
         )
         columns = list(cols_result.scalars().all())
+        
+        # Build col_index → normalized_name mapping
+        col_names_map = {}
         if columns:
             col_names = [c.normalized_name for c in columns]
             parts.append(f"колонки: {', '.join(col_names)}")
+            for c in columns:
+                col_names_map[c.col_index] = c.normalized_name
 
-        # Find key column indices: наименование_лома and среднерыночная_цена_рубтн
-        name_col_idx = None
-        price_col_idx = None
-        for c in columns:
-            if c.normalized_name == "наименование_лома":
-                name_col_idx = c.col_index
-            elif c.normalized_name == "среднерыночная_цена_рубтн":
-                price_col_idx = c.col_index
-
-        # Add ALL data rows (only key columns)
+        # Add ALL data rows with ALL columns
         distinct_rows = (
             await session.execute(
                 select(Cell.row_num)
@@ -243,7 +236,7 @@ class RagService:
         ).scalars().all()
 
         if distinct_rows:
-            parts.append("данные (наименование_лома | среднерыночная_цена_рубтн):")
+            parts.append("данные (все колонки):")
             for row_num in distinct_rows:
                 row_cells = (
                     await session.execute(
@@ -256,18 +249,16 @@ class RagService:
                     )
                 ).scalars().all()
 
-                # Only extract key columns
-                name_val = ""
-                price_val = ""
+                # Collect all column values for this row
+                row_values = []
                 for c in row_cells:
                     val = c.value_text or str(c.value_number or "")
-                    if c.col_index == name_col_idx:
-                        name_val = val
-                    elif c.col_index == price_col_idx:
-                        price_val = val
+                    col_name = col_names_map.get(c.col_index, f"col_{c.col_index}")
+                    if val:
+                        row_values.append(f"{col_name}: {val}")
 
-                if name_val or price_val:
-                    parts.append(f"  {row_num}: {name_val} | {price_val}")
+                if row_values:
+                    parts.append(f"  строка {row_num}: " + " | ".join(row_values))
 
         return "\n".join(parts)
 
