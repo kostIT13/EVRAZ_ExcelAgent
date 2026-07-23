@@ -90,6 +90,12 @@ class ErrorResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class ConversationTurn(BaseModel):
+    """Один turn диалога для self-correction."""
+    role: str = Field(..., pattern="^(user|assistant)$", description="Роль: user или assistant")
+    content: str = Field(..., description="Текст сообщения")
+
+
 class AskRequest(BaseModel):
     """Request body for the RAG question-answering endpoint."""
 
@@ -99,6 +105,10 @@ class AskRequest(BaseModel):
         default="auto",
         pattern="^(auto|rag|agent)$",
         description="Режим: auto (автоопределение), rag (только RAG), agent (только агент)",
+    )
+    conversation_history: List[ConversationTurn] = Field(
+        default_factory=list,
+        description="История предыдущих попыток для self-correction",
     )
 
 
@@ -127,6 +137,7 @@ class AskResponse(BaseModel):
     sql_result_preview: List[Any] = Field(default_factory=list, description="Первые строки результата (только для agent)")
     retry_count: int = Field(default=0, description="Количество retry (только для agent)")
     status: str = Field(default="success", description="Статус: success/low_confidence/failed")
+    self_corrected: bool = Field(default=False, description="Был ли применён self-correction")
 
 
 # След

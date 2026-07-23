@@ -4,9 +4,10 @@ API router for traceability endpoint.
 """
 
 from __future__ import annotations
+from typing import List
 
-from fastapi import APIRouter, HTTPException
-from sqlalchemy import select
+from fastapi import APIRouter, HTTPException, Query
+from sqlalchemy import select, desc
 
 from src.api.schemas import TraceResponse, TraceStepInfo
 from src.core.db.database import async_session_maker
@@ -14,6 +15,35 @@ from src.core.db.models import QueryLog
 from src.core.logging_settings import logger
 
 router = APIRouter(prefix="/trace", tags=["traceability"])
+
+
+@router.get("", response_model=List[dict])
+async def list_traces(
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+) -> List[dict]:
+    """Получить список последних запросов (для истории trace)."""
+    logger.info("List traces: limit={}, offset={}", limit, offset)
+
+    async with async_session_maker() as session:
+        result = await session.execute(
+            select(QueryLog)
+            .order_by(desc(QueryLog.created_at))
+            .offset(offset)
+            .limit(limit)
+        )
+        logs = result.scalars().all()
+
+        return [
+            {
+                "request_id": log.request_id,
+                "question": log.question[:200] if log.question else "",
+                "status": log.status,
+                "latency_ms": log.latency_ms,
+                "created_at": log.created_at.isoformat() if log.created_at else None,
+            }
+            for log in logs
+        ]
 
 
 @router.get("/{request_id}", response_model=TraceResponse)

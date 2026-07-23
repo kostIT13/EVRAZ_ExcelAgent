@@ -179,6 +179,7 @@ class AgentResult:
     sql_result: List[Dict[str, Any]]
     retry_count: int
     status: str  # "success", "low_confidence", "failed"
+    self_corrected: bool = False  # был ли применён self-correction
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -207,23 +208,31 @@ class LangGraphAgent:
         self._llm = llm or LLMClient()
         self._graph = build_agent_graph()
 
-    async def run(self, question: str, top_k: int = 30) -> AgentResult:
+    async def run(
+        self,
+        question: str,
+        top_k: int = 30,
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+    ) -> AgentResult:
         """Запустить агента для ответа на вопрос.
 
         Args:
             question: Вопрос пользователя.
             top_k: Количество чанков для RAG-поиска.
+            conversation_history: История предыдущих попыток для self-correction.
 
         Returns:
             AgentResult с ответом и полным trace.
         """
         request_id = str(uuid.uuid4())
         start_time = time.monotonic()
+        is_retry = bool(conversation_history)
 
         logger.info(
-            "LangGraphAgent [{}]: starting for '{}'",
+            "LangGraphAgent [{}]: starting for '{}' (retry={})",
             request_id[:8],
             question[:80],
+            is_retry,
         )
 
         # 1. Начальное состояние
@@ -251,6 +260,10 @@ class LangGraphAgent:
             "trace": {},
             "error": None,
         }
+
+        # Если есть история self-correction — добавляем её в trace для контекста
+        if conversation_history:
+            initial_state["trace"]["conversation_history"] = conversation_history
 
         # 2. Запускаем граф
         try:

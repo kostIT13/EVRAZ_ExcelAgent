@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
@@ -9,6 +8,11 @@ from src.services.generation.pipeline import pipeline
 router = APIRouter(prefix="/ask", tags=["rag"])
 
 
+def _history_to_dicts(history):
+    """Преобразовать список ConversationTurn в список dict для JSON-сериализации."""
+    return [{"role": t.role, "content": t.content} for t in history]
+
+
 @router.post("", response_model=AskResponse)
 async def ask_question(request: AskRequest) -> AskResponse:
     """Ask a question about the uploaded Excel data.
@@ -17,12 +21,21 @@ async def ask_question(request: AskRequest) -> AskResponse:
     - auto: агент сам выбирает RAG или Agent
     - rag: только RAG (гибридный поиск + LLM)
     - agent: только Agent (Classifier → Planner → CodeGen → Executor → Verifier)
+
+    Self-correction:
+    - conversation_history содержит предыдущие попытки (user question + assistant answer)
+    - При повторном запросе агент учитывает предыдущую ошибку и пытается найти другой подход
     """
+    # Преобразуем Pydantic модели в простые dict для JSON-сериализации
+    history_dicts = _history_to_dicts(request.conversation_history)
+    is_retry = len(history_dicts) > 0
+
     logger.info(
-        "Ask request: question='{}', top_k={}, mode={}",
+        "Ask request: question='{}', top_k={}, mode={}, retry={}",
         request.question[:100],
         request.top_k,
         request.mode,
+        is_retry,
     )
 
     try:
@@ -31,6 +44,7 @@ async def ask_question(request: AskRequest) -> AskResponse:
             result = await pipeline.run(
                 question=request.question,
                 top_k=request.top_k,
+                conversation_history=history_dicts,
             )
 
             return AskResponse(
@@ -55,6 +69,7 @@ async def ask_question(request: AskRequest) -> AskResponse:
         agent_result = await pipeline.run_agent(
             question=request.question,
             top_k=request.top_k,
+            conversation_history=history_dicts,
         )
 
         # Для auto: если агент не справился — fallback на RAG
@@ -66,6 +81,7 @@ async def ask_question(request: AskRequest) -> AskResponse:
             rag_result = await pipeline.run(
                 question=request.question,
                 top_k=request.top_k,
+                conversation_history=history_dicts,
             )
 
             return AskResponse(
@@ -99,6 +115,7 @@ async def ask_question(request: AskRequest) -> AskResponse:
             sql_result_preview=agent_result.sql_result[:10],
             retry_count=agent_result.retry_count,
             status=agent_result.status,
+            self_corrected=agent_result.self_corrected,
         )
 
     except Exception as exc:

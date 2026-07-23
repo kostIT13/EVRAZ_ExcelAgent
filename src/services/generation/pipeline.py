@@ -1,7 +1,7 @@
 from __future__ import annotations
 import time
 import uuid
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.db.database import async_session_maker
 from src.core.db.models import QueryLog
@@ -70,16 +70,27 @@ class GenerationPipeline:
         top_k: int = 10,
         use_cheap_model: bool = False,
         session: Optional[AsyncSession] = None,
+        conversation_history: Optional[List[Dict[str, str]]] = None,
     ) -> GenerationResult:
-        """Запустить RAG-пайплайн (без агента, как было раньше)."""
+        """Запустить RAG-пайплайн (без агента, как было раньше).
+
+        Args:
+            question: Вопрос пользователя.
+            top_k: Количество чанков для поиска.
+            use_cheap_model: Использовать дешёвую модель.
+            session: Опциональная сессия БД.
+            conversation_history: История предыдущих попыток для self-correction.
+        """
         request_id = str(uuid.uuid4())
         start_time = time.monotonic()
+        is_retry = bool(conversation_history)
 
         logger.info(
-            "Pipeline [{}]: retrieving top_k={} for query '{}'",
+            "Pipeline [{}]: retrieving top_k={} for query '{}' (retry={})",
             request_id[:8],
             top_k,
             question[:80],
+            is_retry,
         )
         retrieved: List[HybridSearchResult] = await self._rag.hybrid_search(
             query=question, top_k=top_k
@@ -91,7 +102,7 @@ class GenerationPipeline:
         )
 
         context = format_context(retrieved)
-        messages = build_rag_prompt(question, context)
+        messages = build_rag_prompt(question, context, conversation_history=conversation_history)
 
         logger.info(
             "Pipeline [{}]: calling LLM (cheap={})",
@@ -101,7 +112,7 @@ class GenerationPipeline:
         try:
             answer = await self._llm.chat(
                 messages=messages,
-                model=None, 
+                model=None,
                 temperature=0.1,
                 max_tokens=2048,
             )
@@ -136,7 +147,7 @@ class GenerationPipeline:
             verification=verification,
             latency_ms=latency_ms,
             request_id=request_id,
-            model_used="primary/cheap", 
+            model_used="primary/cheap",
         )
 
     async def run_agent(
@@ -144,24 +155,90 @@ class GenerationPipeline:
         question: str,
         top_k: int = 30,
         session: Optional[AsyncSession] = None,
+        conversation_history: Optional[List[Dict[str, str]]] = None,
     ) -> AgentResult:
-        """Запустить агента (Classifier → Planner → CodeGen → Executor → Verifier).
+        """Запустить агента (Classifier → Planner → CodeGen → Executor → Verifier)
+        с автоматическим Self-Correction при низком качестве ответа.
+
+        Если после первого прохода confidence < 0.5 или статус failed/low_confidence,
+        агент автоматически делает второй проход с контекстом предыдущей ошибки.
 
         Args:
             question: Вопрос пользователя.
             top_k: Количество чанков для RAG-поиска.
             session: Опциональная асинхронная сессия.
+            conversation_history: История предыдущих попыток для self-correction.
 
         Returns:
             AgentResult с ответом и полным trace.
         """
+        is_retry = bool(conversation_history)
         logger.info(
-            "Pipeline [{}]: running agent for '{}'",
+            "Pipeline [{}]: running agent for '{}' (retry={})",
             "agent",
             question[:80],
+            is_retry,
         )
 
-        result = await self._agent.run(question=question, top_k=top_k)
+        # --- Первый проход ---
+        result = await self._agent.run(
+            question=question,
+            top_k=top_k,
+            conversation_history=conversation_history,
+        )
+
+        # --- Self-Correction: если ответ низкого качества, пробуем ещё раз ---
+        needs_correction = (
+            result.status in ("failed", "low_confidence")
+            or result.confidence < 0.5
+            or not result.answer
+            or len(result.answer) < 20
+        )
+
+        if needs_correction and not is_retry:
+            logger.info(
+                "Pipeline [{}]: self-correction triggered (status={}, confidence={:.2f}). "
+                "Retrying with previous attempt context...",
+                result.request_id[:8],
+                result.status,
+                result.confidence,
+            )
+
+            # Формируем историю из предыдущей попытки
+            correction_history = [
+                {"role": "user", "content": question},
+                {"role": "assistant", "content": result.answer or "Не удалось получить ответ"},
+            ]
+
+            # Добавляем информацию об ошибке, если есть
+            if result.trace:
+                error_details = []
+                for step_name in ["rag", "classifier", "planner", "codegen", "executor", "verifier"]:
+                    step_data = result.trace.get(step_name, {})
+                    if isinstance(step_data, dict):
+                        err = step_data.get("error") or step_data.get("sql_error")
+                        if err:
+                            error_details.append(f"{step_name}: {err}")
+                if error_details:
+                    correction_history.append({
+                        "role": "assistant",
+                        "content": f"Ошибки при выполнении: {'; '.join(error_details)}",
+                    })
+
+            # Второй проход с историей
+            result = await self._agent.run(
+                question=question,
+                top_k=top_k,
+                conversation_history=correction_history,
+            )
+            result.self_corrected = True
+
+            logger.info(
+                "Pipeline [{}]: self-correction completed (status={}, confidence={:.2f})",
+                result.request_id[:8],
+                result.status,
+                result.confidence,
+            )
 
         # Логируем в БД
         await self._log_agent_to_db(
