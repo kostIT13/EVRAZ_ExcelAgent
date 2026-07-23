@@ -11,7 +11,7 @@ from src.services.generation.verifier import Verifier, VerificationResult
 from src.services.llm.llm_client import LLMClient
 from src.services.rag.hybrid import HybridSearchResult
 from src.services.rag.rag_service import RagService, rag_service
-from src.services.agent.orchestrator import AgentOrchestrator, AgentResult
+from src.services.agent.graph import LangGraphAgent, AgentResult
 
 
 class GenerationResult:
@@ -57,12 +57,12 @@ class GenerationPipeline:
         rag: Optional[RagService] = None,
         llm: Optional[LLMClient] = None,
         verifier: Optional[Verifier] = None,
-        agent: Optional[AgentOrchestrator] = None,
+        agent: Optional[LangGraphAgent] = None,
     ) -> None:
         self._rag = rag or rag_service
         self._llm = llm or LLMClient()
         self._verifier = verifier or Verifier()
-        self._agent = agent or AgentOrchestrator(llm=self._llm)
+        self._agent = agent or LangGraphAgent(llm=self._llm)
 
     async def run(
         self,
