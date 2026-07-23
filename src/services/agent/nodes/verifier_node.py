@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import json
-from typing import Optional
+from typing import Any, Optional
 
 from src.core.logging_settings import logger
 from src.services.agent.graph_state import GraphState, NODE_VERIFIER
@@ -56,6 +56,7 @@ MAX_RETRY_COUNT = 3
 async def verifier_node(
     state: GraphState,
     llm: Optional[LLMClient] = None,
+    **kwargs: Any,
 ) -> GraphState:
     """Узел Verifier: проверяет, отвечает ли результат на вопрос.
 
@@ -63,6 +64,7 @@ async def verifier_node(
         state: Состояние с заполненными question, sql_query, sql_result,
                rag_context.
         llm: LLMClient.
+        **kwargs: Дополнительные аргументы (config от LangGraph).
 
     Returns:
         Обновлённое состояние с answer, confidence, retry_count, needs_retry.
@@ -124,7 +126,7 @@ async def verifier_node(
         default=str,
     )
     rag_section = (
-        f"\nRAG-контекст (релевантные данные):\n{rag_context[:2000]}"
+        f"\nRAG-контекст (релевантные данные):\n{rag_context[:20000]}"
         if rag_context
         else ""
     )
@@ -170,6 +172,7 @@ SQL-запрос:
         state["needs_retry"] = result.get("needs_retry", not is_correct)
         state["retry_reason"] = result.get("retry_reason", "")
 
+        # Инкрементируем retry_count ТОЛЬКО если нужен retry
         if state["needs_retry"]:
             state["retry_count"] = retry_count + 1
         else:

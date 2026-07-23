@@ -68,6 +68,7 @@ async def get_all_sheets() -> List[Dict[str, Any]]:
 async def classifier_node(
     state: GraphState,
     llm: Optional[LLMClient] = None,
+    **kwargs: Any,
 ) -> GraphState:
     """Узел Classifier: определяет тип запроса и релевантные листы.
 
@@ -100,7 +101,7 @@ async def classifier_node(
     # 2. Формируем промпт с RAG-контекстом
     sheets_json = json.dumps(sheets, ensure_ascii=False, indent=2)
     rag_section = (
-        f"\nRAG-контекст (релевантные данные):\n{rag_context[:2000]}"
+        f"\nRAG-контекст (релевантные данные):\n{rag_context[:20000]}"
         if rag_context
         else ""
     )

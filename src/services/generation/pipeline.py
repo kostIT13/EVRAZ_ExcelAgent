@@ -142,12 +142,14 @@ class GenerationPipeline:
     async def run_agent(
         self,
         question: str,
+        top_k: int = 30,
         session: Optional[AsyncSession] = None,
     ) -> AgentResult:
         """Запустить агента (Classifier → Planner → CodeGen → Executor → Verifier).
 
         Args:
             question: Вопрос пользователя.
+            top_k: Количество чанков для RAG-поиска.
             session: Опциональная асинхронная сессия.
 
         Returns:
@@ -159,7 +161,7 @@ class GenerationPipeline:
             question[:80],
         )
 
-        result = await self._agent.run(question=question)
+        result = await self._agent.run(question=question, top_k=top_k)
 
         # Логируем в БД
         await self._log_agent_to_db(
@@ -221,7 +223,7 @@ class GenerationPipeline:
         async with session or async_session_maker() as s:
             log = QueryLog(
                 request_id=result.request_id,
-                question="",  # вопрос не передаётся в AgentResult, но можно достать из trace
+                question=result.question,
                 result={"answer": result.answer},
                 trace=trace,
                 latency_ms=result.latency_ms,

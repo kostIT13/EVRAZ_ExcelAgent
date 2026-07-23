@@ -47,9 +47,9 @@ from src.services.llm.llm_client import LLMClient
 # Failed Node
 # ---------------------------------------------------------------------------
 
-async def failed_node(state: GraphState) -> GraphState:
+async def failed_node(state: GraphState, **kwargs: Any) -> GraphState:
     """Узел-заглушка для ошибочных состояний.
-    
+
     Просто логирует ошибку и завершает граф.
     """
     request_id = state.get("request_id", "?")[:8]
@@ -171,6 +171,7 @@ class AgentResult:
     answer: str
     confidence: float
     request_id: str
+    question: str
     latency_ms: int
     trace: Dict[str, Any]
     query_type: str
@@ -184,6 +185,7 @@ class AgentResult:
             "answer": self.answer,
             "confidence": self.confidence,
             "request_id": self.request_id,
+            "question": self.question,
             "latency_ms": self.latency_ms,
             "trace": self.trace,
             "query_type": self.query_type,
@@ -205,11 +207,12 @@ class LangGraphAgent:
         self._llm = llm or LLMClient()
         self._graph = build_agent_graph()
 
-    async def run(self, question: str) -> AgentResult:
+    async def run(self, question: str, top_k: int = 30) -> AgentResult:
         """Запустить агента для ответа на вопрос.
 
         Args:
             question: Вопрос пользователя.
+            top_k: Количество чанков для RAG-поиска.
 
         Returns:
             AgentResult с ответом и полным trace.
@@ -227,6 +230,7 @@ class LangGraphAgent:
         initial_state: GraphState = {
             "question": question,
             "request_id": request_id,
+            "top_k": top_k,
             "rag_context": "",
             "rag_chunks": [],
             "rag_error": None,
@@ -234,6 +238,7 @@ class LangGraphAgent:
             "entities": [],
             "relevant_sheets": [],
             "plan": "",
+            "schema": [],
             "sql_query": "",
             "validation_errors": [],
             "sql_result": [],
@@ -297,6 +302,7 @@ class LangGraphAgent:
             answer=answer,
             confidence=confidence,
             request_id=request_id,
+            question=question,
             latency_ms=latency_ms,
             trace=final_state.get("trace", {}),
             query_type=(
@@ -321,5 +327,4 @@ class LangGraphAgent:
         return result
 
 
-# Синглтон
 langgraph_agent: LangGraphAgent = LangGraphAgent()

@@ -25,12 +25,14 @@ QUERY_TIMEOUT_SECONDS = 30
 async def executor_node(
     state: GraphState,
     session: Optional[AsyncSession] = None,
+    **kwargs: Any,
 ) -> GraphState:
     """Узел Executor: выполняет SQL-запрос и возвращает результат.
 
     Args:
         state: Состояние с заполненным sql_query.
         session: Опциональная асинхронная сессия (для тестов).
+        **kwargs: Дополнительные аргументы (config от LangGraph).
 
     Returns:
         Обновлённое состояние с sql_result или sql_error.
@@ -64,13 +66,14 @@ async def executor_node(
 
     # 2. Выполняем запрос
     try:
-        async with session or async_session_maker() as s:
-            # Таймаут
-            await s.execute(
-                text(f"SET LOCAL statement_timeout = '{QUERY_TIMEOUT_SECONDS}s'")
-            )
-
-            result = await s.execute(text(sql_query))
+        async with (session or async_session_maker()) as s:
+            # Явно начинаем транзакцию, чтобы SET LOCAL сработал
+            async with s.begin():
+                # Таймаут
+                await s.execute(
+                    text(f"SET LOCAL statement_timeout = '{QUERY_TIMEOUT_SECONDS}s'")
+                )
+                result = await s.execute(text(sql_query))
 
             if result.returns_rows:
                 columns = result.keys()

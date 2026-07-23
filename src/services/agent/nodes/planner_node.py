@@ -95,6 +95,7 @@ async def get_sheet_schema(sheet_ids: List[int]) -> List[Dict[str, Any]]:
 async def planner_node(
     state: GraphState,
     llm: Optional[LLMClient] = None,
+    **kwargs: Any,
 ) -> GraphState:
     """Узел Planner: генерирует текстовый план действий.
 
@@ -136,10 +137,13 @@ async def planner_node(
         state["trace"][NODE_PLANNER] = {"error": "no_schema", "sheet_ids": sheet_ids}
         return state
 
-    # 2. Формируем промпт с RAG-контекстом
+    # 2. Сохраняем схему в state для CodeGen (напрямую, не через trace)
+    state["schema"] = schema
+
+    # 3. Формируем промпт с RAG-контекстом
     schema_json = json.dumps(schema, ensure_ascii=False, indent=2)
     rag_section = (
-        f"\nRAG-контекст (релевантные данные):\n{rag_context[:2000]}"
+        f"\nRAG-контекст (релевантные данные):\n{rag_context[:20000]}"
         if rag_context
         else ""
     )

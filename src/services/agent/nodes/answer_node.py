@@ -6,11 +6,13 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from src.core.logging_settings import logger
 from src.services.agent.graph_state import GraphState, NODE_ANSWER
 
 
-async def answer_node(state: GraphState) -> GraphState:
+async def answer_node(state: GraphState, **kwargs: Any) -> GraphState:
     """Узел Answer: финализирует ответ пользователю.
 
     Args:

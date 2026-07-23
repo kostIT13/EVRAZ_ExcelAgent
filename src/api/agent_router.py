@@ -54,6 +54,7 @@ async def ask_question(request: AskRequest) -> AskResponse:
         # Режим: Agent или Auto
         agent_result = await pipeline.run_agent(
             question=request.question,
+            top_k=request.top_k,
         )
 
         # Для auto: если агент не справился — fallback на RAG

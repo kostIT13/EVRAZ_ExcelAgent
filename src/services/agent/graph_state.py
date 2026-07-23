@@ -35,6 +35,8 @@ class GraphState(TypedDict, total=False):
     """Исходный вопрос пользователя."""
     request_id: str
     """UUID запроса."""
+    top_k: int
+    """Количество чанков для RAG-поиска."""
 
     # === RAG Node ===
     rag_context: str
@@ -55,6 +57,8 @@ class GraphState(TypedDict, total=False):
     # === Planner Node ===
     plan: str
     """Текстовый план действий для CodeGen."""
+    schema: List[Dict[str, Any]]
+    """Схема релевантных листов (передаётся напрямую, не через trace)."""
 
     # === CodeGen Node ===
     sql_query: str
@@ -96,9 +100,3 @@ NODE_EXECUTOR = "executor"
 NODE_VERIFIER = "verifier"
 NODE_ANSWER = "answer"
 NODE_FAILED = "failed"
-
-# Константы: имена conditional edges
-EDGE_NEXT = "next"  # безусловный переход к следующему узлу
-EDGE_RETRY = "retry"  # retry → codegen
-EDGE_DONE = "done"  # завершение → answer
-EDGE_FAIL = "fail"  # ошибка → failed

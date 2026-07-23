@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from src.core.logging_settings import logger
 from src.services.agent.graph_state import GraphState, NODE_CODEGEN
@@ -127,13 +127,15 @@ def validate_sql(sql: str) -> List[str]:
 async def codegen_node(
     state: GraphState,
     llm: Optional[LLMClient] = None,
+    **kwargs: Any,
 ) -> GraphState:
     """Узел CodeGen: генерирует SQL-запрос на основе плана и RAG-контекста.
 
     Args:
         state: Состояние с заполненными question, plan, query_type,
-               entities, rag_context.
+               entities, rag_context, schema.
         llm: LLMClient.
+        **kwargs: Дополнительные аргументы (config от LangGraph).
 
     Returns:
         Обновлённое состояние с sql_query и validation_errors.
@@ -145,6 +147,7 @@ async def codegen_node(
     entities = state.get("entities", [])
     plan = state.get("plan", "")
     rag_context = state.get("rag_context", "")
+    schema = state.get("schema", [])
 
     logger.info(
         "CodeGen Node [{}]: generating SQL for type={}",
@@ -152,24 +155,10 @@ async def codegen_node(
         query_type.value if query_type else "?",
     )
 
-    # 1. Инкрементируем retry_count при повторном вызове
-    current_retry = state.get("retry_count", 0)
-    state["retry_count"] = current_retry + 1
-    logger.info(
-        "CodeGen Node [{}]: retry #{}/{}",
-        request_id,
-        current_retry + 1,
-        3,
-    )
-
-    # 2. Формируем промпт с планом, схемой и RAG-контекстом
-    schema_json = json.dumps(
-        state.get("trace", {}).get("planner", {}).get("schema_used", []),
-        ensure_ascii=False,
-        indent=2,
-    )
+    # 1. Формируем промпт с планом, схемой и RAG-контекстом
+    schema_json = json.dumps(schema, ensure_ascii=False, indent=2)
     rag_section = (
-        f"\nRAG-контекст (релевантные данные):\n{rag_context[:3000]}"
+        f"\nRAG-контекст (релевантные данные):\n{rag_context[:20000]}"
         if rag_context
         else ""
     )
@@ -177,9 +166,8 @@ async def codegen_node(
     # Извлекаем normalized_name из RAG-контекста для явной подсказки LLM
     rag_names_hint = ""
     if rag_context:
-        import re as _re
-        sheet_names = set(_re.findall(r'(?:Лист|лист)[:\s]+(\S+)', rag_context))
-        col_names = set(_re.findall(r'(?:колонк[иа]|колонки):\s*([^\n]+)', rag_context))
+        sheet_names = set(re.findall(r'(?:Лист|лист)[:\s]+(\S+)', rag_context))
+        col_names = set(re.findall(r'(?:колонк[иа]|колонки):\s*([^\n]+)', rag_context))
         if sheet_names:
             rag_names_hint += "\nЯвные normalized_name листов из RAG-контекста (используй их БЕЗ транслитерации):\n"
             for nm in sorted(sheet_names):

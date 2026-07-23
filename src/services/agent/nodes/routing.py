@@ -135,7 +135,7 @@ def route_after_verifier(state: GraphState) -> Literal["answer", "codegen", "fai
         logger.warning(
             "Routing: needs_retry ({}), retry #{}/{} → codegen",
             state.get("retry_reason", "?"),
-            retry_count,
+            retry_count + 1,
             MAX_RETRY_COUNT,
         )
         return NODE_CODEGEN
