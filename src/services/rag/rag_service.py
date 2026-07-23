@@ -72,7 +72,7 @@ class RagService:
                 chunk_emb = ChunkEmbedding(
                     sheet_id=sheet_id,
                     chunk_index=chunk_idx,
-                    source_text=chunk_text[:2000],
+                    source_text=chunk_text[:5000],
                     embedding=vector,
                     model_name=settings.OLLAMA_EMBED_MODEL,
                 )
@@ -85,13 +85,13 @@ class RagService:
             )
             existing_record = existing.scalar_one_or_none()
             if existing_record:
-                existing_record.source_text = text[:2000]
+                existing_record.source_text = text[:5000]
                 existing_record.embedding = full_vector
                 existing_record.model_name = settings.OLLAMA_EMBED_MODEL
             else:
                 s.add(SheetEmbedding(
                     sheet_id=sheet_id,
-                    source_text=text[:2000],
+                    source_text=text[:5000],
                     embedding=full_vector,
                     model_name=settings.OLLAMA_EMBED_MODEL,
                 ))
@@ -126,7 +126,7 @@ class RagService:
             
             if existing_record:
                 # Обновляем
-                existing_record.source_text = text[:2000]
+                existing_record.source_text = text[:5000]
                 existing_record.embedding = vector
                 existing_record.model_name = settings.OLLAMA_EMBED_MODEL
                 logger.debug("Updated embedding for column {}", column_id)
@@ -134,7 +134,7 @@ class RagService:
                 # Создаём
                 embedding = ColumnEmbedding(
                     column_id=column_id,
-                    source_text=text[:2000],
+                    source_text=text[:5000],
                     embedding=vector,
                     model_name=settings.OLLAMA_EMBED_MODEL,
                 )

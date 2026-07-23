@@ -10,7 +10,7 @@ from rank_bm25 import BM25Okapi
 
 def _tokenize(text: str) -> List[str]:
     text = text.lower()
-    tokens = re.split(r"[^\w]+", text)
+    tokens = re.findall(r'\w+', text, re.UNICODE)
     return [t for t in tokens if len(t) > 1]
 
 
