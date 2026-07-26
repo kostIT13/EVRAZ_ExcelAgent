@@ -98,16 +98,20 @@ def normalize_item_name(name: str) -> str:
 def extract_period_from_sheet_name(sheet_name: str) -> str:
     """Извлекает период из названия листа.
 
-    Примеры:
+    Поддерживает форматы:
         "цвломна_дек25" → "2025-12"
         "цвломна_янв25" → "2025-01"
+        "цвломна_нояб25" → "2025-11"  (нояб = ноя + суффикс)
+        "цвломна_сент25" → "2025-09"  (сент = сен + суффикс)
         "Лист1" → "unknown"
     """
     name_lower = sheet_name.lower().strip()
 
-    # Паттерн: месяц_год (дек25, янв2025, etc.)
+    # Паттерн: сокращение месяца + любые буквы (суффикс) + год
+    # Например: "нояб25" (ноя + б + 25), "сент25" (сен + т + 25)
+    # Разрешаем 0-3 любых буквы между сокращением и годом
     for ru_month, month_num in MONTH_MAP.items():
-        pattern = rf'{ru_month}\s*(\d{{2,4}})'
+        pattern = rf'{ru_month}[а-яё]*\s*(\d{{2,4}})'
         match = re.search(pattern, name_lower)
         if match:
             year_str = match.group(1)

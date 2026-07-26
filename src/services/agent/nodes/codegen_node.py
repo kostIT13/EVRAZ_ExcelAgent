@@ -273,7 +273,15 @@ async def codegen_node(
 - Для вопросов о количестве листов/месяцев/периодов → используй sheets (SELECT COUNT(*) FROM sheets)
 - Для вопросов о сущностях/справочниках → используй entity_dictionary
 
-Для поиска по названию лома используй ILIKE с item_name_normalized."""
+Для поиска по названию лома используй ILIKE с item_name_normalized.
+
+ВАЖНО: В схеме релевантных листов есть поле "fact_prices_samples" — это реальные данные из fact_prices для этих листов. Используй их чтобы:
+1. Убедиться, что данные существуют (если fact_prices_samples пуст — данных нет)
+2. Посмотреть точный формат item_name_normalized для правильного ILIKE-поиска
+3. Посмотреть точный формат period для правильной фильтрации
+4. Посмотреть какие price_source доступны
+
+Пример: если fact_prices_samples содержит item_name_normalized = "лом меди стружка", то ILIKE '%медь%' или ILIKE '%стружка%' сработает."""
 
     messages = [
         {"role": "system", "content": CODEGEN_SYSTEM_PROMPT.format(

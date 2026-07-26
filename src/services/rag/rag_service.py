@@ -72,7 +72,7 @@ class RagService:
                 chunk_emb = ChunkEmbedding(
                     sheet_id=sheet_id,
                     chunk_index=chunk_idx,
-                    source_text=chunk_text[:5000],
+                    source_text=chunk_text[:10000],
                     embedding=vector,
                     model_name=settings.OLLAMA_EMBED_MODEL,
                 )
@@ -85,13 +85,13 @@ class RagService:
             )
             existing_record = existing.scalar_one_or_none()
             if existing_record:
-                existing_record.source_text = text[:5000]
+                existing_record.source_text = text[:10000]
                 existing_record.embedding = full_vector
                 existing_record.model_name = settings.OLLAMA_EMBED_MODEL
             else:
                 s.add(SheetEmbedding(
                     sheet_id=sheet_id,
-                    source_text=text[:5000],
+                    source_text=text[:10000],
                     embedding=full_vector,
                     model_name=settings.OLLAMA_EMBED_MODEL,
                 ))
@@ -254,48 +254,63 @@ class RagService:
     ) -> str:
         """Build a text representation of a sheet for embedding.
 
-        Includes ALL data rows (up to *max_rows*) with ALL columns,
-        so that BM25 and dense search can find any product name or value.
+        Использует fact_prices как основной источник данных (нормализованная
+        факт-таблица), а cells — только для fallback.
+
+        Каждая запись fact_prices группируется по наименованию лома,
+        что позволяет chunk_adaptive создавать семантические чанки.
         """
         parts = [
             f"Лист: {sheet.normalized_name}",
-            f"строк: {sheet.row_count}",
-            f"колонок: {sheet.col_count}",
+            f"период: {sheet.period or 'unknown'}",
         ]
-        if sheet.description:
-            parts.append(f"описание: {sheet.description}")
-        if sheet.period:
-            parts.append(f"период: {sheet.period}")
 
-        # Get column names
+        # Получаем названия колонок для контекста
         cols_result = await session.execute(
             select(ColumnMetadata)
             .where(ColumnMetadata.sheet_id == sheet.id)
             .order_by(ColumnMetadata.col_index)
         )
         columns = list(cols_result.scalars().all())
-        
-        # Build col_index → normalized_name mapping
-        col_names_map = {}
         if columns:
             col_names = [c.normalized_name for c in columns]
             parts.append(f"колонки: {', '.join(col_names)}")
-            for c in columns:
-                col_names_map[c.col_index] = c.normalized_name
 
-        # Add ALL data rows with ALL columns
-        distinct_rows = (
-            await session.execute(
-                select(Cell.row_num)
-                .where(Cell.sheet_id == sheet.id)
-                .distinct()
-                .order_by(Cell.row_num)
-                .limit(max_rows)
-            )
-        ).scalars().all()
+        # Основные данные — из fact_prices (нормализованная таблица)
+        fact_result = await session.execute(
+            select(FactPrice)
+            .where(FactPrice.sheet_id == sheet.id)
+            .order_by(FactPrice.item_name_normalized, FactPrice.price_source)
+            .limit(500)
+        )
+        fact_rows = list(fact_result.scalars().all())
 
-        if distinct_rows:
+        if fact_rows:
+            # Группируем по наименованию лома для компактности
+            # Каждая группа отделяется пустой строкой для chunk_adaptive
+            current_item = None
+            for fp in fact_rows:
+                if fp.item_name_normalized != current_item:
+                    if current_item is not None:
+                        parts.append("")  # пустая строка между группами
+                    current_item = fp.item_name_normalized
+                    parts.append(f"{current_item}:")
+                parts.append(
+                    f"  {fp.price_source}: {fp.price_value} руб/тн"
+                )
+        else:
+            # Fallback: данные из cells (если fact_prices пусты)
             parts.append("данные (все колонки):")
+            col_names_map = {c.col_index: c.normalized_name for c in columns}
+            distinct_rows = (
+                await session.execute(
+                    select(Cell.row_num)
+                    .where(Cell.sheet_id == sheet.id)
+                    .distinct()
+                    .order_by(Cell.row_num)
+                    .limit(max_rows)
+                )
+            ).scalars().all()
             for row_num in distinct_rows:
                 row_cells = (
                     await session.execute(
@@ -307,31 +322,14 @@ class RagService:
                         .order_by(Cell.col_index)
                     )
                 ).scalars().all()
-
-                # Collect all column values for this row
                 row_values = []
                 for c in row_cells:
                     val = c.value_text or str(c.value_number or "")
                     col_name = col_names_map.get(c.col_index, f"col_{c.col_index}")
                     if val:
                         row_values.append(f"{col_name}: {val}")
-
                 if row_values:
                     parts.append(f"  строка {row_num}: " + " | ".join(row_values))
-
-        # Добавляем нормализованные данные из fact_prices для лучшего поиска
-        fact_result = await session.execute(
-            select(FactPrice)
-            .where(FactPrice.sheet_id == sheet.id)
-            .limit(200)
-        )
-        fact_rows = list(fact_result.scalars().all())
-        if fact_rows:
-            parts.append("нормализованные данные (источник_цены → значение):")
-            for fp in fact_rows:
-                parts.append(
-                    f"  {fp.item_name_normalized}: {fp.price_source} = {fp.price_value} руб/тн"
-                )
 
         return "\n".join(parts)
 

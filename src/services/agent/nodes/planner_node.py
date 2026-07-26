@@ -47,7 +47,12 @@ PLANNER_SYSTEM_PROMPT = """Ты — планировщик запросов к �
 
 
 async def get_sheet_schema(sheet_ids: List[int]) -> List[Dict[str, Any]]:
-    """Получить схему колонок для указанных листов."""
+    """Получить схему колонок для указанных листов.
+
+    Возвращает две секции для каждого листа:
+    1. generic_schema — колонки из column_metadata (исходная структура Excel)
+    2. fact_prices_schema — нормализованная факт-таблица с примерами данных
+    """
     if not sheet_ids:
         return []
 
@@ -82,12 +87,47 @@ async def get_sheet_schema(sheet_ids: List[int]) -> List[Dict[str, Any]]:
                 if col.sheet_id == sid
             ]
 
+            # Получаем sample-данные из fact_prices для этого листа
+            from src.core.db.models import FactPrice
+            fact_result = await session.execute(
+                select(FactPrice)
+                .where(FactPrice.sheet_id == sid)
+                .limit(20)
+            )
+            fact_rows = fact_result.scalars().all()
+
+            # Группируем fact_prices по item_name_normalized для компактности
+            fact_samples = []
+            seen_items = set()
+            for fp in fact_rows:
+                if fp.item_name_normalized not in seen_items:
+                    seen_items.add(fp.item_name_normalized)
+                    fact_samples.append({
+                        "item_name_normalized": fp.item_name_normalized,
+                        "period": fp.period,
+                        "price_source": fp.price_source,
+                        "price_value": fp.price_value,
+                    })
+                if len(fact_samples) >= 10:
+                    break
+
             schema.append({
                 "id": sheet.id,
                 "name": sheet.normalized_name,
                 "original_name": sheet.original_name,
                 "description": sheet.description or "",
+                "period": sheet.period,
                 "columns": sheet_columns,
+                "fact_prices_samples": fact_samples,
+                "fact_prices_schema": {
+                    "table": "fact_prices",
+                    "columns": [
+                        {"name": "period", "type": "TEXT", "description": "период (например, '2025-11')"},
+                        {"name": "item_name_normalized", "type": "TEXT", "description": "нормализованное название лома"},
+                        {"name": "price_source", "type": "TEXT", "description": "источник цены: среднерыночная, аукцион_старт, аукцион_победитель, или название поставщика"},
+                        {"name": "price_value", "type": "FLOAT", "description": "значение цены в руб/тн"},
+                    ],
+                },
             })
         return schema
 
