@@ -46,11 +46,13 @@ class Sheet(Base):
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     row_count: Mapped[int] = mapped_column(Integer, default=0)
     col_count: Mapped[int] = mapped_column(Integer, default=0)
+    period: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     file: Mapped["File"] = relationship("File", back_populates="sheets")
     columns: Mapped[List["ColumnMetadata"]] = relationship("ColumnMetadata", back_populates="sheet", cascade="all, delete-orphan")
     cells: Mapped[List["Cell"]] = relationship("Cell", back_populates="sheet", cascade="all, delete-orphan")
+    fact_prices: Mapped[List["FactPrice"]] = relationship("FactPrice", back_populates="sheet", cascade="all, delete-orphan")
     embedding: Mapped[Optional["SheetEmbedding"]] = relationship(
         "SheetEmbedding",
         back_populates="sheet",
@@ -69,6 +71,7 @@ class Sheet(Base):
         Index("ix_sheets_file_id", "file_id"),
         Index("ix_sheets_normalized_name", "normalized_name"),
         Index("ix_sheets_original_name", "original_name"),
+        Index("ix_sheets_period", "period"),
     )
 
 
@@ -84,13 +87,12 @@ class ColumnMetadata(Base):
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     sample_values: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
 
-    # 👇 Эти строки должны быть ВНУТРИ класса
     sheet: Mapped["Sheet"] = relationship("Sheet", back_populates="columns")
     embedding: Mapped[Optional["ColumnEmbedding"]] = relationship(
-        "ColumnEmbedding", 
-        back_populates="column", 
-        uselist=False, 
-        cascade="all, delete-orphan", 
+        "ColumnEmbedding",
+        back_populates="column",
+        uselist=False,
+        cascade="all, delete-orphan",
         lazy="raise"
     )
 
@@ -121,6 +123,141 @@ class Cell(Base):
     __table_args__ = (
         Index("ix_cells_sheet_id", "sheet_id"),
         Index("ix_cells_value_number", "value_number"),
+    )
+
+
+class FactPrice(Base):
+    """Нормализованная факт-таблица цен на металлы.
+
+    Превращает generic cells-grid в tidy/long-формат:
+    период | наименование_лома | источник_цены | значение
+
+    Источники цены: поставщик, среднерыночная, аукцион_старт, аукцион_победитель
+    """
+    __tablename__ = "fact_prices"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    sheet_id: Mapped[int] = mapped_column(Integer, ForeignKey("sheets.id", ondelete="CASCADE"), nullable=False, index=True)
+    item_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("entity_dictionary.id", ondelete="SET NULL"), nullable=True, index=True)
+    period: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    item_name_raw: Mapped[str] = mapped_column(Text, nullable=False)
+    item_name_normalized: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    price_source: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    price_value: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    row_num: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    sheet: Mapped["Sheet"] = relationship("Sheet", back_populates="fact_prices")
+    entity: Mapped[Optional["EntityDictionary"]] = relationship("EntityDictionary", back_populates="fact_prices")
+
+    __table_args__ = (
+        Index("ix_fact_prices_period", "period"),
+        Index("ix_fact_prices_item_name", "item_name_normalized"),
+        Index("ix_fact_prices_price_source", "price_source"),
+        Index("ix_fact_prices_sheet_item", "sheet_id", "item_name_normalized"),
+        Index("ix_fact_prices_period_source", "period", "price_source"),
+    )
+
+
+class EntityDictionary(Base):
+    """Справочник сущностей (канонические названия лома + алиасы).
+
+    Резолвит 'Лом меди кусок' из разных месяцев в одну сущность,
+    даже если в тексте есть опечатки/пробелы.
+    """
+    __tablename__ = "entity_dictionary"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    canonical_name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
+    aliases: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    category: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    embedding: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, onupdate=func.now())
+
+    fact_prices: Mapped[List["FactPrice"]] = relationship("FactPrice", back_populates="entity")
+
+    __table_args__ = (
+        Index("ix_entity_dictionary_canonical_name", "canonical_name"),
+        Index("ix_entity_dictionary_category", "category"),
+    )
+
+
+class ExcelComment(Base):
+    """Excel-комментарии (xl/comments*.xml), извлечённые при парсинге.
+
+    Комментарии содержат важный неструктурированный контекст (пояснения к ценам),
+    который теряется при парсинге через openpyxl с data_only=True.
+    """
+    __tablename__ = "excel_comments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    sheet_id: Mapped[int] = mapped_column(Integer, ForeignKey("sheets.id", ondelete="CASCADE"), nullable=False, index=True)
+    cell_ref: Mapped[str] = mapped_column(String(20), nullable=False)
+    row_num: Mapped[int] = mapped_column(Integer, nullable=False)
+    col_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    author: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    text: Mapped[Text] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    sheet: Mapped["Sheet"] = relationship("Sheet")
+
+    __table_args__ = (
+        Index("ix_excel_comments_sheet_id", "sheet_id"),
+        Index("ix_excel_comments_cell_ref", "cell_ref"),
+    )
+
+
+class QueryCache(Base):
+    """Кэш вопрос→SQL для near-duplicate запросов.
+
+    Расширенная версия: хранит вопрос, SQL, результат и метаданные.
+    Позволяет отвечать на повторяющиеся вопросы мгновенно.
+    """
+    __tablename__ = "query_cache"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    question_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    normalized_question: Mapped[str] = mapped_column(Text, nullable=False)
+    sql_query: Mapped[str] = mapped_column(Text, nullable=False)
+    result: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    query_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    entities: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    hit_count: Mapped[int] = mapped_column(Integer, default=1)
+    last_used: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_query_cache_question_hash", "question_hash"),
+        Index("ix_query_cache_query_type", "query_type"),
+    )
+
+
+class GoldenDataset(Base):
+    """Golden dataset для регрессионного тестирования.
+
+    Хранит эталонные вопросы с правильными SQL/ответами.
+    Позволяет объективно оценивать качество системы.
+    """
+    __tablename__ = "golden_dataset"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    query_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    entities: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    expected_sql: Mapped[str] = mapped_column(Text, nullable=False)
+    expected_result: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    expected_answer: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    category: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
+    tags: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Integer, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_golden_dataset_category", "category"),
+        Index("ix_golden_dataset_is_active", "is_active"),
     )
 
 

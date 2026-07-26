@@ -23,7 +23,7 @@ class SheetEmbedding(Base):
         Integer, ForeignKey("sheets.id", ondelete="CASCADE"), nullable=False, unique=True, index=True
     )
     source_text: Mapped[str] = mapped_column(Text, nullable=False)
-    embedding: Mapped[Vector] = mapped_column(Vector(768), nullable=False)
+    embedding: Mapped[Vector] = mapped_column(Vector(1024), nullable=False)
     model_name: Mapped[str] = mapped_column(String(100), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -45,7 +45,7 @@ class ChunkEmbedding(Base):
     )
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     source_text: Mapped[str] = mapped_column(Text, nullable=False)
-    embedding: Mapped[Vector] = mapped_column(Vector(768), nullable=False)
+    embedding: Mapped[Vector] = mapped_column(Vector(1024), nullable=False)
     model_name: Mapped[str] = mapped_column(String(100), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -64,7 +64,7 @@ class ColumnEmbedding(Base):
         Integer, ForeignKey("column_metadata.id", ondelete="CASCADE"), nullable=False, unique=True, index=True
     )
     source_text: Mapped[str] = mapped_column(Text, nullable=False)
-    embedding: Mapped[Vector] = mapped_column(Vector(768), nullable=False)
+    embedding: Mapped[Vector] = mapped_column(Vector(1024), nullable=False)
     model_name: Mapped[str] = mapped_column(String(100), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -77,7 +77,7 @@ class QueryEmbeddingCache(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     query_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
     query_text: Mapped[str] = mapped_column(Text, nullable=False)
-    embedding: Mapped[Vector] = mapped_column(Vector(768), nullable=False)
+    embedding: Mapped[Vector] = mapped_column(Vector(1024), nullable=False)
     model_name: Mapped[str] = mapped_column(String(100), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     last_used_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
