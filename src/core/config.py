@@ -12,9 +12,10 @@ class Settings(BaseSettings):
     LLM_MODEL_PRIMARY: str
     LLM_MODEL_CHEAP: str
 
-    OLLAMA_BASE_URL: str = "http://ollama:11434/v1"
-    OLLAMA_EMBED_MODEL: str = "nomic-embed-text"
-    EMBED_DIMENSION: int = 768
+    OLLAMA_BASE_URL: str
+    # Мультиязычная модель для лучшей работы с русской доменной лексикой
+    OLLAMA_EMBED_MODEL: str = "jeffh/intfloat-multilingual-e5-large:q8_0"
+    EMBED_DIMENSION: int = 1024
 
     LLM_TEMPERATURE: float = 0.1
     LLM_MAX_TOKENS: int = 2048
