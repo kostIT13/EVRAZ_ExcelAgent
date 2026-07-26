@@ -9,13 +9,25 @@ from pathlib import Path
 
 from alembic import context
 from dotenv import load_dotenv
+from pgvector.sqlalchemy import VECTOR  # noqa: F401
 from sqlalchemy import engine_from_config, pool
 
 # Загружаем .env перед импортом settings
 load_dotenv()
 
 from src.core.db.base import Base  # noqa: E402
-from src.core.db.models import Cell, ColumnMetadata, File, QueryLog, Sheet  # noqa: E402
+from src.core.db.models import (  # noqa: E402
+    Cell,
+    ColumnMetadata,
+    EntityDictionary,
+    ExcelComment,
+    FactPrice,
+    File,
+    GoldenDataset,
+    QueryCache,
+    QueryLog,
+    Sheet,
+)
 from src.core.db.vector_models import (  # noqa: E402
     ChunkEmbedding,
     ColumnEmbedding,
