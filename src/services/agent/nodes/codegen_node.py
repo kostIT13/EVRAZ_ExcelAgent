@@ -2,6 +2,10 @@
 
 Генерирует SQL-запрос на основе плана, схемы и RAG-контекста.
 Выполняет валидацию SQL без выполнения.
+
+Поддерживает две схемы:
+1. Новая нормализованная: fact_prices (период | наименование | источник_цены | значение)
+2. Старая generic: sheets → columns → cells (для обратной совместимости)
 """
 
 from __future__ import annotations
@@ -14,71 +18,153 @@ from src.core.logging_settings import logger
 from src.services.agent.graph_state import GraphState, NODE_CODEGEN
 from src.services.llm.llm_client import LLMClient
 
-CODEGEN_SYSTEM_PROMPT = """Ты — генератор SQL-запросов для базы данных Excel-файла с ценами на металлы.
+# ---------------------------------------------------------------------------
+# Few-shot examples для text-to-SQL
+# ---------------------------------------------------------------------------
 
-Схема базы данных:
+FEW_SHOT_EXAMPLES = [
+    {
+        "question": "Какая среднерыночная цена на лом меди в январе 2025?",
+        "sql": """SELECT fp.price_value
+FROM fact_prices fp
+WHERE fp.period = '2025-01'
+  AND fp.price_source = 'среднерыночная'
+  AND fp.item_name_normalized ILIKE '%медь%'
+LIMIT 1""",
+    },
+    {
+        "question": "Сравни цены на латунь у всех поставщиков в декабре 2025",
+        "sql": """SELECT fp.price_source, fp.price_value
+FROM fact_prices fp
+WHERE fp.period = '2025-12'
+  AND fp.price_source NOT IN ('среднерыночная', 'аукцион_старт', 'аукцион_победитель')
+  AND fp.item_name_normalized ILIKE '%латун%'
+ORDER BY fp.price_source""",
+    },
+    {
+        "question": "Какая средняя цена на никель по всем месяцам?",
+        "sql": """SELECT fp.period, AVG(fp.price_value) as avg_price
+FROM fact_prices fp
+WHERE fp.price_source = 'среднерыночная'
+  AND fp.item_name_normalized ILIKE '%никел%'
+GROUP BY fp.period
+ORDER BY fp.period""",
+    },
+    {
+        "question": "На сколько изменилась цена на медь между январем и февралем 2025?",
+        "sql": """SELECT
+  jan.price_value as цена_январь,
+  feb.price_value as цена_февраль,
+  (feb.price_value - jan.price_value) as изменение
+FROM
+  (SELECT price_value FROM fact_prices
+   WHERE period = '2025-01' AND price_source = 'среднерыночная'
+     AND item_name_normalized ILIKE '%медь%' LIMIT 1) jan,
+  (SELECT price_value FROM fact_prices
+   WHERE period = '2025-02' AND price_source = 'среднерыночная'
+     AND item_name_normalized ILIKE '%медь%' LIMIT 1) feb""",
+    },
+    {
+        "question": "Какая стартовая цена аукциона на лом меди в марте 2025?",
+        "sql": """SELECT fp.price_value
+FROM fact_prices fp
+WHERE fp.period = '2025-03'
+  AND fp.price_source = 'аукцион_старт'
+  AND fp.item_name_normalized ILIKE '%медь%'
+LIMIT 1""",
+    },
+    {
+        "question": "Кто победил в аукционе по латуни в январе 2025 и по какой цене?",
+        "sql": """SELECT fp.price_source, fp.price_value
+FROM fact_prices fp
+WHERE fp.period = '2025-01'
+  AND fp.price_source = 'аукцион_победитель'
+  AND fp.item_name_normalized ILIKE '%латун%'
+LIMIT 1""",
+    },
+    {
+        "question": "Покажи все цены на бронзу в апреле 2025",
+        "sql": """SELECT fp.price_source, fp.price_value
+FROM fact_prices fp
+WHERE fp.period = '2025-04'
+  AND fp.item_name_normalized ILIKE '%бронз%'
+ORDER BY fp.price_source""",
+    },
+    {
+        "question": "Какая цена на лом меди кусок у поставщика ООО Металл в январе 2025?",
+        "sql": """SELECT fp.price_value
+FROM fact_prices fp
+WHERE fp.period = '2025-01'
+  AND fp.price_source ILIKE '%металл%'
+  AND fp.item_name_normalized ILIKE '%медь%'
+LIMIT 1""",
+    },
+    {
+        "question": "О скольки месяцах у тебя есть информация?",
+        "sql": """SELECT COUNT(*) AS количество_месяцев
+FROM sheets
+WHERE period IS NOT NULL""",
+    },
+    {
+        "question": "Сколько всего листов в базе данных?",
+        "sql": """SELECT COUNT(*) AS количество_листов
+FROM sheets""",
+    },
+]
+
+CODEGEN_SYSTEM_PROMPT = """Ты — генератор SQL-запросов для базы данных с ценами на металлы.
+
+Схема базы данных (основная — нормализованная):
+
+Таблица fact_prices (НОРМАЛИЗОВАННАЯ ФАКТ-ТАБЛИЦА):
+- id: INTEGER PRIMARY KEY
+- sheet_id: INTEGER — ID листа (FK → sheets.id)
+- item_id: INTEGER — ID сущности (FK → entity_dictionary.id)
+- period: TEXT — период (например, '2025-01', '2025-12')
+- item_name_raw: TEXT — оригинальное название лома
+- item_name_normalized: TEXT — нормализованное название (для ILIKE-поиска)
+- price_source: TEXT — источник цены:
+    * 'среднерыночная' — среднерыночная цена
+    * 'аукцион_старт' — стартовая цена аукциона
+    * 'аукцион_победитель' — цена победителя аукциона
+    * Другие значения — названия поставщиков (например, 'ООО Металл', 'ИП Иванов')
+- price_value: DOUBLE PRECISION — значение цены в руб/тн
+- row_num: INTEGER — номер строки в исходном листе
+
+Таблица entity_dictionary (СПРАВОЧНИК СУЩНОСТЕЙ):
+- id: INTEGER PRIMARY KEY
+- canonical_name: TEXT — каноническое название (уникальное)
+- aliases: JSONB — список алиасов (синонимов)
+- category: TEXT — категория (например, 'цветной_лом', 'черный_лом')
 
 Таблица sheets:
-- id: INTEGER PRIMARY KEY — ID листа
-- file_id: INTEGER — ID файла
-- sheet_index: INTEGER — порядковый номер листа
-- original_name: TEXT — оригинальное название листа
-- normalized_name: TEXT — нормализованное название (например, "цвломна_дек25")
-- description: TEXT — описание содержимого листа
-- row_count: INTEGER — количество строк
-- col_count: INTEGER — количество колонок
+- id: INTEGER PRIMARY KEY
+- normalized_name: TEXT — нормализованное название листа
+- period: TEXT — период листа
+- description: TEXT — описание
 
-Таблица column_metadata:
-- id: INTEGER PRIMARY KEY — ID колонки
-- sheet_id: INTEGER — ID листа (FK → sheets.id)
-- col_index: INTEGER — порядковый номер колонки
-- original_name: TEXT — оригинальное название колонки
-- normalized_name: TEXT — нормализованное название (например, "среднерыночная_цена_рубтн")
-- data_type: TEXT — тип данных
-- description: TEXT — описание колонки
-- sample_values: JSONB — примеры значений
-
-Таблица cells:
-- id: BIGINT PRIMARY KEY — ID ячейки
-- sheet_id: INTEGER — ID листа (FK → sheets.id)
-- row_num: INTEGER — номер строки
-- col_index: INTEGER — номер колонки
-- value_text: TEXT — текстовое значение
-- value_number: DOUBLE PRECISION — числовое значение
-- value_date: TIMESTAMP — дата
-- original_value: TEXT — оригинальное значение из Excel
+Таблица excel_comments:
+- id: INTEGER PRIMARY KEY
+- sheet_id: INTEGER — ID листа
+- cell_ref: TEXT — ссылка на ячейку (например, 'B12')
+- author: TEXT — автор комментария
+- text: TEXT — текст комментария
 
 ПРАВИЛА:
 1. Только SELECT запросы (read-only)
-2. Всегда используй JOIN с sheets для фильтрации по листу
-3. Для фильтрации по названию листа используй sheets.normalized_name
-4. ВАЖНО: Для числовых значений (цены, суммы) ВСЕГДА используй cells.value_number
-5. Для текстовых значений (названия, описания) используй cells.value_text
-6. Для дат используй cells.value_date
-7. Не используй SELECT *
-8. Используй понятные алиасы для колонок
-9. Если нужна агрегация (SUM, AVG, MIN, MAX) — используй GROUP BY
-10. Если нужна сортировка — используй ORDER BY
+2. Для вопросов о ценах используй fact_prices — она содержит все цены в плоском формате
+3. Для вопросов о количестве листов/месяцев используй sheets
+4. Для фильтрации по названию лома используй ILIKE с item_name_normalized
+5. Для фильтрации по периоду используй period (формат: 'YYYY-MM')
+6. Для фильтрации по источнику цены используй price_source
+7. Если нужна агрегация (AVG, SUM, MIN, MAX) — используй GROUP BY
+8. Если нужно сравнение между периодами — используй подзапросы или JOIN fact_prices
+9. Для поиска по названию поставщика используй price_source ILIKE '%текст%'
+10. Не используй SELECT *
+11. Используй понятные алиасы для колонок
 
-КРИТИЧЕСКИ ВАЖНО: ИСПОЛЬЗУЙ sheets.normalized_name ИЗ RAG-КОНТЕКСТА БЕЗ ИЗМЕНЕНИЙ!
-НЕ ТРАНСЛИТЕРИРУЙ normalized_name!
-Например, если в RAG-контексте написано "Лист: цвломна_дек25", то в SQL пиши:
-  sheets.normalized_name = 'цвломна_дек25'
-НЕ пиши 'tsvlonma_dek25' — это неправильно!
-
-То же самое для column_metadata.normalized_name:
-Если в RAG-контексте написано "среднерыночная_цена_рубтн", то в SQL пиши:
-  cm.normalized_name = 'среднерыночная_цена_рубтн'
-
-ВАЖНОЕ ПРАВИЛО ДЛЯ ПОИСКА ЦЕНЫ ПО НАИМЕНОВАНИЮ:
-- Цена хранится в cells.value_number, колонка с col_index = 10 (среднерыночная_цена_рубтн)
-- Наименование материала хранится в cells.value_text, колонка с col_index = 2 (наименование_лома)
-- Для поиска цены конкретного материала используй ПОДЗАПРОС:
-  SELECT c.value_number FROM cells c JOIN sheets s ...
-  WHERE s.normalized_name = '...'
-    AND c.col_index = 10
-    AND c.row_num IN (SELECT c2.row_num FROM cells c2 WHERE c2.sheet_id = s.id AND c2.col_index = 2 AND c2.value_text ILIKE '%материал%')
-- Для агрегации по нескольким листам используй UNION ALL или IN с несколькими sheet_id
+ПРИМЕРЫ ЗАПРОСОВ (few-shot):
+{few_shot_examples}
 
 Верни ТОЛЬКО SQL-запрос без пояснений. Без markdown-обёртки ```sql.
 """
@@ -163,22 +249,11 @@ async def codegen_node(
         else ""
     )
 
-    # Извлекаем normalized_name из RAG-контекста для явной подсказки LLM
-    rag_names_hint = ""
-    if rag_context:
-        sheet_names = set(re.findall(r'(?:Лист|лист)[:\s]+(\S+)', rag_context))
-        col_names = set(re.findall(r'(?:колонк[иа]|колонки):\s*([^\n]+)', rag_context))
-        if sheet_names:
-            rag_names_hint += "\nЯвные normalized_name листов из RAG-контекста (используй их БЕЗ транслитерации):\n"
-            for nm in sorted(sheet_names):
-                rag_names_hint += f"  - '{nm}'\n"
-        if col_names:
-            for col_line in col_names:
-                parts = [p.strip() for p in col_line.split(",")]
-                rag_names_hint += "\nЯвные normalized_name колонок из RAG-контекста (используй их БЕЗ транслитерации):\n"
-                for p in parts:
-                    if p and not p.startswith("строк") and not p.startswith("колон"):
-                        rag_names_hint += f"  - '{p}'\n"
+    # Форматируем few-shot примеры
+    few_shot_text = "\n\n".join(
+        f"Вопрос: {ex['question']}\nSQL: {ex['sql']}"
+        for ex in FEW_SHOT_EXAMPLES
+    )
 
     user_message = f"""Вопрос пользователя: {question}{rag_section}
 
@@ -190,13 +265,20 @@ async def codegen_node(
 
 Схема релевантных листов:
 {schema_json}
-{rag_names_hint}
+
 Сгенерируй SQL-запрос для получения ответа на вопрос.
 
-ВАЖНО: Используй sheets.normalized_name и column_metadata.normalized_name в точности как они указаны в RAG-контексте выше. НЕ ТРАНСЛИТЕРИРУЙ их!"""
+ВАЖНО: Выбери правильную таблицу в зависимости от вопроса:
+- Для вопросов о ценах, поставщиках, аукционах → используй fact_prices
+- Для вопросов о количестве листов/месяцев/периодов → используй sheets (SELECT COUNT(*) FROM sheets)
+- Для вопросов о сущностях/справочниках → используй entity_dictionary
+
+Для поиска по названию лома используй ILIKE с item_name_normalized."""
 
     messages = [
-        {"role": "system", "content": CODEGEN_SYSTEM_PROMPT},
+        {"role": "system", "content": CODEGEN_SYSTEM_PROMPT.format(
+            few_shot_examples=few_shot_text
+        )},
         {"role": "user", "content": user_message},
     ]
 

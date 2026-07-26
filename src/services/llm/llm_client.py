@@ -26,9 +26,12 @@ class LLMClient:
             base_url=settings.LLM_BASE_URL,
             timeout=settings.REQUEST_TIMEOUT_S,
         )
+        embed_url = settings.OLLAMA_BASE_URL.rstrip("/")
+        if not embed_url.endswith("/v1"):
+            embed_url += "/v1"
         self._embed = AsyncOpenAI(
             api_key="sk-no-key-required",
-            base_url=settings.OLLAMA_BASE_URL,
+            base_url=embed_url,
             timeout=settings.REQUEST_TIMEOUT_S,
         )
         self._embed_model: str = settings.OLLAMA_EMBED_MODEL

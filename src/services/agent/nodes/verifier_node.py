@@ -1,50 +1,52 @@
-"""Verifier Node — узел верификации ответа в графе LangGraph.
+"""Verifier Node — узел верификации в графе LangGraph.
 
-Проверяет, отвечает ли результат SQL-запроса на исходный вопрос.
-Если нет — возвращает причину для retry.
+Проверяет SQL, а не текст ответа:
+1. Semantic-проверка SQL: соответствует ли он query_type/entities (LLM-critic)
+2. Sanity-checks на результат: пустой result, все NULL, аномальный размер набора
+3. Детерминированное форматирование ответа из sql_result (без LLM-пересказа)
 """
 
 from __future__ import annotations
 
 import json
-from typing import Any, Optional
+from typing import Any, Dict, List, Optional
 
 from src.core.logging_settings import logger
 from src.services.agent.graph_state import GraphState, NODE_VERIFIER
 from src.services.llm.llm_client import LLMClient
 
-VERIFIER_SYSTEM_PROMPT = """Ты — верификатор ответов на вопросы по Excel-файлу с ценами на металлы.
+VERIFIER_SYSTEM_PROMPT = """Ты — верификатор SQL-запросов для базы данных Excel-файла с ценами на металлы.
 
 У тебя есть:
 1. Исходный вопрос пользователя
-2. RAG-контекст (релевантные данные из Excel)
-3. SQL-запрос, который был выполнен
-4. Результат SQL-запроса (таблица с данными)
+2. Тип запроса (lookup/aggregate/cross_sheet/delta)
+3. Сущности, извлечённые из вопроса
+4. Сгенерированный SQL-запрос
 
-Твоя задача — проверить, отвечает ли результат на вопрос пользователя.
+Твоя задача — проверить, правильно ли SQL отвечает на вопрос пользователя.
+Проверяй SQL, а не данные! Ты проверяешь логику запроса.
 
 Верни JSON с полями:
-1. "is_correct": true/false — отвечает ли результат на вопрос
+1. "is_correct": true/false — правильно ли SQL отвечает на вопрос
 2. "confidence": число от 0.0 до 1.0 — насколько ты уверен
-3. "answer": человекочитаемый ответ на русском языке (всегда, даже если is_correct=false, напиши что пошло не так)
+3. "issues": список проблем, если есть (пустой массив если всё ок)
 4. "needs_retry": true/false — нужно ли перегенерировать SQL
 5. "retry_reason": причина retry (если needs_retry=true), например:
-   - "wrong_sheet" — не тот лист
+   - "wrong_table" — не тот лист/таблица
    - "wrong_column" — не та колонка
-   - "wrong_aggregation" — не та агрегация
-   - "missing_filter" — не хватает фильтра
-   - "incomplete_result" — неполный результат
-   - "sql_error" — ошибка выполнения SQL
+   - "wrong_aggregation" — не та агрегация (SUM вместо AVG и т.д.)
+   - "missing_filter" — не хватает фильтра (WHERE)
+   - "wrong_filter" — неправильный фильтр
+   - "missing_join" — не хватает JOIN
+   - "syntax_error" — синтаксическая ошибка
 
-Правила:
-- Если результат пустой — скорее всего needs_retry=true
-- ЕСЛИ В РЕЗУЛЬТАТЕ ЕСТЬ ДАННЫЕ, КОТОРЫЕ ОТВЕЧАЮТ НА ВОПРОС — is_correct=true, сформируй ответ
-- Не будь излишне строгим: если в результате есть число, похожее на цену, и оно соответствует вопросу — считай ответ правильным
-- Если SQL-запрос содержит ошибку — needs_retry=true
-- Не выдумывай данные, которых нет в результате
-- Сверяйся с RAG-контекстом: если результат совпадает с контекстом — это подтверждение правильности
-- Если не уверен — лучше is_correct=true с низким confidence, чем ложный retry
-- Всегда заполняй answer: если ответ правильный — напиши его понятно, если нет — объясни проблему
+Правила проверки:
+- Если тип запроса aggregate — SQL должен содержать агрегатную функцию (SUM/AVG/MIN/MAX/COUNT)
+- Если тип запроса delta — SQL должен вычислять разницу между значениями
+- Если тип запроса cross_sheet — SQL должен обращаться к нескольким листам
+- Если в entities есть конкретные названия — SQL должен их фильтровать
+- SQL должен использовать правильные имена таблиц и колонок
+- Не будь излишне строгим к синтаксису — сосредоточься на семантике
 
 Верни ТОЛЬКО JSON без дополнительного текста.
 """
@@ -52,34 +54,101 @@ VERIFIER_SYSTEM_PROMPT = """Ты — верификатор ответов на 
 # Максимальное количество retry
 MAX_RETRY_COUNT = 3
 
+# Пороги для sanity checks
+MAX_ROWS_WARNING = 1000  # если больше этого числа строк — возможно, не хватает фильтра
+MIN_CONFIDENCE_PASS = 0.5
+
+
+def _format_result_deterministically(sql_result: List[Dict[str, Any]], max_rows: int = 10) -> str:
+    """Детерминированно форматирует sql_result в читаемый ответ.
+
+    Без LLM — чисто шаблонное форматирование.
+    """
+    if not sql_result:
+        return "Данные не найдены."
+
+    rows = sql_result[:max_rows]
+    total = len(sql_result)
+
+    # Определяем колонки
+    columns = list(rows[0].keys()) if rows else []
+
+    # Форматируем как таблицу
+    lines = []
+    for row in rows:
+        parts = []
+        for col in columns:
+            val = row.get(col)
+            if val is None:
+                continue
+            # Пытаемся красиво отформатировать числа
+            if isinstance(val, float):
+                if val == int(val):
+                    val_str = f"{int(val):,}".replace(",", " ")
+                else:
+                    val_str = f"{val:,.2f}".replace(",", " ")
+            else:
+                val_str = str(val)
+            parts.append(f"{col}: {val_str}")
+        if parts:
+            lines.append("; ".join(parts))
+
+    result = "\n".join(lines)
+
+    if total > max_rows:
+        result += f"\n\n... и ещё {total - max_rows} строк(и)"
+
+    return result
+
+
+def _sanity_check_result(sql_result: List[Dict[str, Any]]) -> List[str]:
+    """Sanity checks на результат SQL."""
+    issues: List[str] = []
+
+    if not sql_result:
+        issues.append("empty_result")
+        return issues
+
+    # Проверка на аномальный размер
+    if len(sql_result) > MAX_ROWS_WARNING:
+        issues.append(f"large_result:{len(sql_result)}")
+
+    # Проверка на NULL-значения
+    if sql_result:
+        first_row = sql_result[0]
+        all_nulls = all(v is None for v in first_row.values())
+        if all_nulls:
+            issues.append("all_null_values")
+
+    return issues
+
 
 async def verifier_node(
     state: GraphState,
     llm: Optional[LLMClient] = None,
     **kwargs: Any,
 ) -> GraphState:
-    """Узел Verifier: проверяет, отвечает ли результат на вопрос.
+    """Узел Verifier: проверяет SQL и результат.
 
     Args:
-        state: Состояние с заполненными question, sql_query, sql_result,
-               rag_context.
+        state: Состояние с заполненными question, sql_query, sql_result.
         llm: LLMClient.
-        **kwargs: Дополнительные аргументы (config от LangGraph).
 
     Returns:
-        Обновлённое состояние с answer, confidence, retry_count, needs_retry.
+        Обновлённое состояние с answer, confidence, needs_retry.
     """
     llm = llm or LLMClient()
     request_id = state.get("request_id", "?")[:8]
     question = state.get("question", "")
+    query_type = state.get("query_type")
+    entities = state.get("entities", [])
     sql_query = state.get("sql_query", "")
     sql_result = state.get("sql_result", [])
     sql_error = state.get("sql_error")
-    rag_context = state.get("rag_context", "")
     retry_count = state.get("retry_count", 0)
 
     logger.info(
-        "Verifier Node [{}]: verifying result (retry #{})",
+        "Verifier Node [{}]: verifying SQL+result (retry #{})",
         request_id,
         retry_count,
     )
@@ -101,8 +170,9 @@ async def verifier_node(
         }
         return state
 
-    # 2. Если результат пустой
-    if not sql_result:
+    # 2. Sanity checks на результат
+    sanity_issues = _sanity_check_result(sql_result)
+    if "empty_result" in sanity_issues:
         state["answer"] = "Запрос не вернул данных."
         state["confidence"] = 0.0
         state["needs_retry"] = True
@@ -115,38 +185,30 @@ async def verifier_node(
             "confidence": 0.0,
             "needs_retry": True,
             "retry_reason": "empty_result",
+            "sanity_issues": sanity_issues,
         }
         return state
 
-    # 3. Формируем промпт для LLM
-    result_preview = json.dumps(
-        sql_result[:20],
-        ensure_ascii=False,
-        indent=2,
-        default=str,
-    )
-    rag_section = (
-        f"\nRAG-контекст (релевантные данные):\n{rag_context[:20000]}"
-        if rag_context
-        else ""
-    )
-    user_message = f"""Вопрос пользователя: {question}{rag_section}
+    # 3. Semantic-проверка SQL через LLM-critic
+    try:
+        user_message = f"""Вопрос пользователя: {question}
+
+Тип запроса: {query_type.value if query_type else 'unknown'}
+Сущности: {', '.join(entities) if entities else 'не определены'}
 
 SQL-запрос:
 {sql_query}
 
 Результат запроса ({len(sql_result)} строк):
-{result_preview}
+{json.dumps(sql_result[:5], ensure_ascii=False, indent=2, default=str)}
 
-Проверь, отвечает ли результат на вопрос пользователя."""
+Проверь, правильно ли SQL отвечает на вопрос пользователя."""
 
-    messages = [
-        {"role": "system", "content": VERIFIER_SYSTEM_PROMPT},
-        {"role": "user", "content": user_message},
-    ]
+        messages = [
+            {"role": "system", "content": VERIFIER_SYSTEM_PROMPT},
+            {"role": "user", "content": user_message},
+        ]
 
-    # 4. Вызываем LLM
-    try:
         raw_response = await llm.chat(
             messages=messages,
             model=None,
@@ -167,23 +229,36 @@ SQL-запрос:
         result = json.loads(cleaned)
 
         is_correct = result.get("is_correct", False)
-        state["confidence"] = float(result.get("confidence", 0.0))
-        state["answer"] = result.get("answer", "")
+        llm_confidence = float(result.get("confidence", 0.0))
+        issues = result.get("issues", [])
         state["needs_retry"] = result.get("needs_retry", not is_correct)
         state["retry_reason"] = result.get("retry_reason", "")
 
-        # Инкрементируем retry_count ТОЛЬКО если нужен retry
+        # 4. Детерминированное форматирование ответа
+        state["answer"] = _format_result_deterministically(sql_result)
+
+        # 5. Итоговая confidence: комбинируем LLM-оценку и sanity checks
+        confidence = llm_confidence
+        if "large_result" in sanity_issues:
+            confidence *= 0.8  # штраф за аномально большой результат
+        if "all_null_values" in sanity_issues:
+            confidence *= 0.5  # серьёзный штраф за NULL-значения
+
+        state["confidence"] = max(0.0, min(1.0, confidence))
+
+        # Инкрементируем retry_count только если нужен retry
         if state["needs_retry"]:
             state["retry_count"] = retry_count + 1
         else:
             state["retry_count"] = retry_count
 
         logger.info(
-            "Verifier Node [{}]: correct={}, confidence={:.2f}, needs_retry={}",
+            "Verifier Node [{}]: correct={}, confidence={:.2f}, needs_retry={}, issues={}",
             request_id,
             is_correct,
             state["confidence"],
             state["needs_retry"],
+            issues,
         )
 
         state["trace"] = state.get("trace", {})
@@ -192,6 +267,8 @@ SQL-запрос:
             "confidence": state["confidence"],
             "needs_retry": state["needs_retry"],
             "retry_reason": state["retry_reason"],
+            "issues": issues,
+            "sanity_issues": sanity_issues,
         }
 
     except (json.JSONDecodeError, KeyError, TypeError) as exc:
@@ -200,13 +277,8 @@ SQL-запрос:
             request_id,
             exc,
         )
-        # Fallback: отдаём сырой результат
-        state["answer"] = json.dumps(
-            sql_result[:10],
-            ensure_ascii=False,
-            indent=2,
-            default=str,
-        )
+        # Fallback: детерминированное форматирование
+        state["answer"] = _format_result_deterministically(sql_result)
         state["confidence"] = 0.5
         state["needs_retry"] = False
         state["retry_reason"] = ""

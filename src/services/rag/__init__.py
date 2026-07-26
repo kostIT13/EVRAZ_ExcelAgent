@@ -13,6 +13,8 @@ Components
 - ``hybrid`` — Hybrid retriever (BM25 + Dense fusion)
 - ``chunker`` — Text chunking strategies
 - ``rag_service`` — High-level orchestrator
+- ``entity_resolver`` — Entity resolution service
+- ``query_cache`` — Query cache service
 """
 
 from src.services.rag.bm25 import BM25Index
@@ -21,6 +23,8 @@ from src.services.rag.embedder import Embedder, cosine_similarity
 from src.services.rag.hybrid import HybridRetriever, HybridSearchResult
 from src.services.rag.rag_service import RagService, rag_service
 from src.services.rag.retrieval import DenseRetriever, DenseSearchResult
+from src.services.rag.entity_resolver import EntityResolver, entity_resolver
+from src.services.rag.query_cache import QueryCacheService, query_cache_service
 
 __all__ = [
     "BM25Index",
@@ -36,4 +40,8 @@ __all__ = [
     "rag_service",
     "DenseRetriever",
     "DenseSearchResult",
+    "EntityResolver",
+    "entity_resolver",
+    "QueryCacheService",
+    "query_cache_service",
 ]

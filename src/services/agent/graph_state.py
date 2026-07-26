@@ -54,6 +54,12 @@ class GraphState(TypedDict, total=False):
     relevant_sheets: List[Dict[str, Any]]
     """Список релевантных листов."""
 
+    # === Disambiguation Node ===
+    disambiguation_needed: bool
+    """Флаг: нуждается ли вопрос в уточнении."""
+    disambiguation_info: Dict[str, Any]
+    """Информация о неоднозначности (тип, уточняющий вопрос, опции)."""
+
     # === Planner Node ===
     plan: str
     """Текстовый план действий для CodeGen."""
@@ -94,6 +100,7 @@ class GraphState(TypedDict, total=False):
 # Константы: имена узлов графа
 NODE_RAG = "rag"
 NODE_CLASSIFIER = "classifier"
+NODE_DISAMBIGUATION = "disambiguation"
 NODE_PLANNER = "planner"
 NODE_CODEGEN = "codegen"
 NODE_EXECUTOR = "executor"

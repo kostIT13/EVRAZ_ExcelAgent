@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.config import settings
 from src.core.db.database import async_session_maker
-from src.core.db.models import Sheet, ColumnMetadata, Cell
+from src.core.db.models import Sheet, ColumnMetadata, Cell, FactPrice, ExcelComment
 from src.core.db.vector_models import ChunkEmbedding, ColumnEmbedding, SheetEmbedding
 from src.services.rag.bm25 import BM25Index
 from src.services.rag.chunker import make_chunks
@@ -192,11 +192,59 @@ class RagService:
                         col.id, col_text, session=s
                     )
 
+                # Index Excel comments for this sheet
+                await self._index_comments(sheet.id, s)
+
             logger.info(
                 "File {} fully indexed: {} sheets",
                 file_id,
                 len(sheets),
             )
+
+    async def _index_comments(
+        self,
+        sheet_id: int,
+        session: AsyncSession,
+    ) -> None:
+        """Индексирует Excel-комментарии для листа."""
+        result = await session.execute(
+            select(ExcelComment).where(ExcelComment.sheet_id == sheet_id)
+        )
+        comments = list(result.scalars().all())
+
+        if not comments:
+            return
+
+        # Группируем комментарии в один текст для индексации
+        comment_texts = []
+        for c in comments:
+            comment_texts.append(
+                f"Комментарий к ячейке {c.cell_ref} (автор: {c.author or 'неизвестен'}): {c.text}"
+            )
+
+        full_text = "\n".join(comment_texts)
+        chunks = make_chunks(full_text, strategy="adaptive")
+
+        for chunk_idx, chunk_text in enumerate(chunks):
+            vector = await self._embedder.embed(chunk_text)
+            chunk_emb = ChunkEmbedding(
+                sheet_id=sheet_id,
+                chunk_index=chunk_idx,
+                source_text=chunk_text[:5000],
+                embedding=vector,
+                model_name=settings.OLLAMA_EMBED_MODEL,
+            )
+            session.add(chunk_emb)
+
+        # Также добавляем в BM25
+        self._lazy_init_bm25()
+        if self._bm25 is not None and chunks:
+            metadata = [{"source_type": "comment", "source_id": sheet_id}] * len(chunks)
+            self._bm25.add_chunks(chunks, metadata=metadata)
+            self._bm25.build()
+            self._bm25_dirty = True
+
+        logger.info("Indexed {} comments for sheet_id={}", len(comments), sheet_id)
 
     @staticmethod
     async def _build_sheet_text(
@@ -216,6 +264,8 @@ class RagService:
         ]
         if sheet.description:
             parts.append(f"описание: {sheet.description}")
+        if sheet.period:
+            parts.append(f"период: {sheet.period}")
 
         # Get column names
         cols_result = await session.execute(
@@ -268,6 +318,20 @@ class RagService:
 
                 if row_values:
                     parts.append(f"  строка {row_num}: " + " | ".join(row_values))
+
+        # Добавляем нормализованные данные из fact_prices для лучшего поиска
+        fact_result = await session.execute(
+            select(FactPrice)
+            .where(FactPrice.sheet_id == sheet.id)
+            .limit(200)
+        )
+        fact_rows = list(fact_result.scalars().all())
+        if fact_rows:
+            parts.append("нормализованные данные (источник_цены → значение):")
+            for fp in fact_rows:
+                parts.append(
+                    f"  {fp.item_name_normalized}: {fp.price_source} = {fp.price_value} руб/тн"
+                )
 
         return "\n".join(parts)
 

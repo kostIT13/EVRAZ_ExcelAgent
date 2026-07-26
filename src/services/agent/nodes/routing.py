@@ -13,6 +13,7 @@ from src.services.agent.graph_state import (
     GraphState,
     NODE_RAG,
     NODE_CLASSIFIER,
+    NODE_DISAMBIGUATION,
     NODE_PLANNER,
     NODE_CODEGEN,
     NODE_EXECUTOR,
@@ -38,8 +39,19 @@ def route_after_rag(state: GraphState) -> Literal["classifier", "failed"]:
     return NODE_CLASSIFIER
 
 
-def route_after_classifier(state: GraphState) -> Literal["planner", "failed"]:
-    """После Classifier всегда идём в Planner."""
+def route_after_classifier(state: GraphState) -> Literal["disambiguation", "planner", "failed"]:
+    """После Classifier:
+    - Если вопрос неоднозначен → Disambiguation
+    - Иначе → Planner
+    """
+    # Пока всегда идём в Disambiguation для проверки
+    return NODE_DISAMBIGUATION
+
+
+def route_after_disambiguation(state: GraphState) -> Literal["planner", "failed"]:
+    """После Disambiguation всегда идём в Planner.
+    Если disambiguation выявила критическую неоднозначность — она уже обработана в узле.
+    """
     return NODE_PLANNER
 
 

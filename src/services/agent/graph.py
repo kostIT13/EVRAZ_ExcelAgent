@@ -18,6 +18,7 @@ from src.services.agent.graph_state import (
     GraphState,
     NODE_RAG,
     NODE_CLASSIFIER,
+    NODE_DISAMBIGUATION,
     NODE_PLANNER,
     NODE_CODEGEN,
     NODE_EXECUTOR,
@@ -27,6 +28,7 @@ from src.services.agent.graph_state import (
 )
 from src.services.agent.nodes.rag_node import rag_node
 from src.services.agent.nodes.classifier_node import classifier_node
+from src.services.agent.nodes.disambiguation_node import disambiguation_node
 from src.services.agent.nodes.planner_node import planner_node
 from src.services.agent.nodes.codegen_node import codegen_node
 from src.services.agent.nodes.executor_node import executor_node
@@ -35,12 +37,14 @@ from src.services.agent.nodes.answer_node import answer_node
 from src.services.agent.nodes.routing import (
     route_after_rag,
     route_after_classifier,
+    route_after_disambiguation,
     route_after_planner,
     route_after_codegen,
     route_after_executor,
     route_after_verifier,
 )
 from src.services.llm.llm_client import LLMClient
+from src.services.rag.query_cache import query_cache_service
 
 
 # ---------------------------------------------------------------------------
@@ -74,6 +78,7 @@ def build_agent_graph() -> StateGraph:
     # 2. Добавляем узлы
     workflow.add_node(NODE_RAG, rag_node)
     workflow.add_node(NODE_CLASSIFIER, classifier_node)
+    workflow.add_node(NODE_DISAMBIGUATION, disambiguation_node)
     workflow.add_node(NODE_PLANNER, planner_node)
     workflow.add_node(NODE_CODEGEN, codegen_node)
     workflow.add_node(NODE_EXECUTOR, executor_node)
@@ -95,10 +100,21 @@ def build_agent_graph() -> StateGraph:
         },
     )
 
-    # Classifier → Planner (безусловно)
+    # Classifier → Disambiguation (условно)
     workflow.add_conditional_edges(
         NODE_CLASSIFIER,
         route_after_classifier,
+        {
+            NODE_DISAMBIGUATION: NODE_DISAMBIGUATION,
+            NODE_PLANNER: NODE_PLANNER,
+            NODE_FAILED: NODE_FAILED,
+        },
+    )
+
+    # Disambiguation → Planner | Failed
+    workflow.add_conditional_edges(
+        NODE_DISAMBIGUATION,
+        route_after_disambiguation,
         {
             NODE_PLANNER: NODE_PLANNER,
             NODE_FAILED: NODE_FAILED,
@@ -180,6 +196,7 @@ class AgentResult:
     retry_count: int
     status: str  # "success", "low_confidence", "failed"
     self_corrected: bool = False  # был ли применён self-correction
+    from_cache: bool = False  # был ли ответ из кэша
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -194,6 +211,7 @@ class AgentResult:
             "sql_result": self.sql_result[:5],
             "retry_count": self.retry_count,
             "status": self.status,
+            "from_cache": self.from_cache,
         }
 
 
@@ -201,7 +219,7 @@ class LangGraphAgent:
     """Агент на базе LangGraph.
 
     Использует StateGraph с узлами:
-    RAG → Classifier → Planner → CodeGen → Executor → Verifier → Answer
+    RAG → Classifier → Disambiguation → Planner → CodeGen → Executor → Verifier → Answer
     """
 
     def __init__(self, llm: Optional[LLMClient] = None) -> None:
@@ -235,6 +253,34 @@ class LangGraphAgent:
             is_retry,
         )
 
+        # 0. Проверяем query cache (через asyncio.to_thread, чтобы избежать greenlet-конфликта)
+        try:
+            cached = await query_cache_service.lookup(question)
+        except Exception as exc:
+            logger.warning("LangGraphAgent [{}]: cache lookup failed: {}", request_id[:8], exc)
+            cached = None
+
+        if cached is not None:
+            latency_ms = int((time.monotonic() - start_time) * 1000)
+            logger.info(
+                "LangGraphAgent [{}]: cache HIT, returning cached result",
+                request_id[:8],
+            )
+            return AgentResult(
+                answer=cached.get("result", {}).get("formatted_answer", "Данные из кэша."),
+                confidence=1.0,
+                request_id=request_id,
+                question=question,
+                latency_ms=latency_ms,
+                trace={"from_cache": True, "cached_sql": cached["sql_query"]},
+                query_type=cached.get("query_type", "unknown"),
+                sql_query=cached["sql_query"],
+                sql_result=cached.get("result", {}).get("data", []),
+                retry_count=0,
+                status="success",
+                from_cache=True,
+            )
+
         # 1. Начальное состояние
         initial_state: GraphState = {
             "question": question,
@@ -243,9 +289,11 @@ class LangGraphAgent:
             "rag_context": "",
             "rag_chunks": [],
             "rag_error": None,
-            "query_type": None,  # type: ignore[typeddict-item]
+            "query_type": None,
             "entities": [],
             "relevant_sheets": [],
+            "disambiguation_needed": False,
+            "disambiguation_info": {},
             "plan": "",
             "schema": [],
             "sql_query": "",
@@ -311,6 +359,25 @@ class LangGraphAgent:
                     "Попробуйте переформулировать запрос."
                 )
 
+        # Сохраняем в кэш (если успешно)
+        sql_query = final_state.get("sql_query", "")
+        sql_result = final_state.get("sql_result", [])
+        query_type = (
+            final_state.get("query_type").value
+            if final_state.get("query_type")
+            else "unknown"
+        )
+        entities = final_state.get("entities", [])
+
+        if sql_query and status == "success":
+            await query_cache_service.store(
+                question=question,
+                sql_query=sql_query,
+                result={"data": sql_result[:100], "formatted_answer": answer},
+                query_type=query_type,
+                entities=entities,
+            )
+
         result = AgentResult(
             answer=answer,
             confidence=confidence,
@@ -318,15 +385,12 @@ class LangGraphAgent:
             question=question,
             latency_ms=latency_ms,
             trace=final_state.get("trace", {}),
-            query_type=(
-                final_state.get("query_type").value
-                if final_state.get("query_type")
-                else "unknown"
-            ),
-            sql_query=final_state.get("sql_query", ""),
-            sql_result=final_state.get("sql_result", []),
+            query_type=query_type,
+            sql_query=sql_query,
+            sql_result=sql_result,
             retry_count=final_state.get("retry_count", 0),
             status=status,
+            from_cache=False,
         )
 
         logger.info(

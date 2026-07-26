@@ -5,11 +5,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.logging_settings import logger
-from src.core.db.models import File, Sheet, ColumnMetadata, Cell
+from src.core.db.models import File, Sheet
 from src.core.db.database import async_session_maker
 from src.core.excel.parser import ExcelParser
 from src.core.excel.schemas import ParsedFile
 from src.core.excel.normalize import ExcelNormalizer
+from src.core.excel.comment_extractor import extract_comments
 from src.services.excel.repository import ExcelRepository
 from src.services.rag.rag_service import rag_service
 
@@ -26,12 +27,15 @@ class ExcelIngestionService:
 
         logger.info("Starting ingestion for file: {}", file_path)
 
+        # 1. Парсим Excel
         parser = ExcelParser(file_path)
         parsed: ParsedFile = parser.parse()
         logger.info("Parsed {} sheets from {}", len(parsed.sheets), file_path.name)
 
+        # 2. Нормализуем заголовки
         self._normalize_parsed(parsed)
 
+        # 3. Сохраняем в БД (включая нормализованные fact_prices)
         if self._session:
             file_record = await self._save_with_session(parsed)
         else:
@@ -39,8 +43,29 @@ class ExcelIngestionService:
                 repo = ExcelRepository(session)
                 file_record = await repo.save_parsed_file(parsed)
 
-        # Индексируем файл в векторную БД + BM25
-        # Ошибка индексации не должна блокировать загрузку файла
+        # 4. Извлекаем и сохраняем Excel-комментарии
+        try:
+            comments = extract_comments(file_path)
+            if comments:
+                async with async_session_maker() as session:
+                    repo = ExcelRepository(session)
+                    # Комментарии не привязаны к sheet_name напрямую,
+                    # сохраняем все к первому листу (или распределяем по sheet_index)
+                    # В текущей реализации комментарии не имеют sheet_name,
+                    # поэтому сохраняем их все к первому листу файла
+                    sheet_result = await session.execute(
+                        select(Sheet).where(
+                            Sheet.file_id == file_record.id,
+                            Sheet.sheet_index == 0,  # первый лист
+                        )
+                    )
+                    sheet_record = sheet_result.scalar_one_or_none()
+                    if sheet_record:
+                        await repo.save_comments(sheet_record.id, comments)
+        except Exception as exc:
+            logger.warning("Comment extraction failed (non-fatal): {}", exc)
+
+        # 5. Индексируем файл в векторную БД + BM25
         try:
             logger.info("Indexing file {} in vector database...", file_record.id)
             await rag_service.build_index_for_file(file_record.id, session=self._session)
@@ -70,7 +95,6 @@ class ExcelIngestionService:
                 sample_values = ExcelNormalizer.extract_sample_values(sheet.data, header.col_name)
                 col_type = ExcelNormalizer.infer_column_type(header, sample_values)
                 logger.debug("Column '{}' → type={}, samples={}", header.col_name, col_type, sample_values[:3])
-
 
     async def get_file(self, file_id: int) -> Optional[File]:
         async with async_session_maker() as session:
