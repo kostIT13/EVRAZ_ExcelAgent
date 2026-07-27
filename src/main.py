@@ -12,11 +12,9 @@ from src.api.trace_router import router as trace_router
 async def lifespan(app: FastAPI):
     logger.info("Starting EVRAZ RAG service...")
 
-    # Загружаем BM25 индекс с диска (если есть)
     rag_service.load_bm25()
     logger.info("BM25 index loaded ({} chunks)", rag_service._bm25.size if rag_service._bm25 else 0)
 
-    # Проверка подключения к БД
     try:
         async with engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
@@ -25,8 +23,7 @@ async def lifespan(app: FastAPI):
         logger.error(f"Database connection error: {e}")
 
     yield
-
-    # Сохраняем BM25 индекс перед выключением
+    
     rag_service.persist_bm25()
     await engine.dispose()
     logger.info("Engine disposed, shutdown complete")
