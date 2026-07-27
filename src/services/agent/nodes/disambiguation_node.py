@@ -1,17 +1,6 @@
-"""Disambiguation Node — узел разрешения неоднозначностей в графе LangGraph.
-
-Если вопрос пользователя содержит неоднозначные термины (например, "цена меди" —
-это среднерыночная, конкретный поставщик или итог аукциона?), узел задаёт
-уточняющий вопрос, а не гадает.
-
-Встраивается между Classifier и Planner.
-"""
-
 from __future__ import annotations
-
 import json
 from typing import Any, Dict, List, Optional
-
 from src.core.logging_settings import logger
 from src.services.agent.graph_state import GraphState, QueryType, NODE_DISAMBIGUATION
 from src.services.llm.llm_client import LLMClient
@@ -56,7 +45,6 @@ DISAMBIGUATION_SYSTEM_PROMPT = """Ты — узел разрешения нео�
 Верни ТОЛЬКО JSON без дополнительного текста.
 """
 
-# Доступные источники цены для подсказок
 AVAILABLE_PRICE_SOURCES = [
     "среднерыночная",
     "аукцион_старт (стартовая цена аукциона)",
@@ -70,15 +58,6 @@ async def disambiguation_node(
     llm: Optional[LLMClient] = None,
     **kwargs: Any,
 ) -> GraphState:
-    """Узел Disambiguation: проверяет вопрос на неоднозначность.
-
-    Args:
-        state: Состояние с заполненными question, query_type, entities.
-        llm: LLMClient.
-
-    Returns:
-        Обновлённое состояние с disambiguation_result.
-    """
     llm = llm or LLMClient()
     request_id = state.get("request_id", "?")[:8]
     question = state.get("question", "")
@@ -91,7 +70,6 @@ async def disambiguation_node(
         question[:80],
     )
 
-    # Формируем промпт
     user_message = f"""Вопрос пользователя: {question}
 
 Тип запроса: {query_type.value if query_type else 'unknown'}
@@ -115,7 +93,6 @@ async def disambiguation_node(
             max_tokens=1024,
         )
 
-        # Парсим JSON
         cleaned = raw_response.strip()
         if cleaned.startswith("```json"):
             cleaned = cleaned[7:]
@@ -133,7 +110,6 @@ async def disambiguation_node(
         options = result.get("options", [])
         suggested_resolution = result.get("suggested_resolution")
 
-        # Сохраняем результат disambiguation в state
         state["disambiguation_needed"] = needs_disambiguation
         state["disambiguation_info"] = {
             "ambiguity_type": ambiguity_type,
@@ -142,19 +118,16 @@ async def disambiguation_node(
             "suggested_resolution": suggested_resolution,
         }
 
-        # Если есть suggested_resolution и неоднозначность не критична —
-        # автоматически разрешаем
         if needs_disambiguation and suggested_resolution:
             logger.info(
                 "Disambiguation Node [{}]: auto-resolving with '{}'",
                 request_id,
                 suggested_resolution,
             )
-            # Добавляем suggested_resolution в entities для контекста
             if suggested_resolution not in entities:
                 entities.append(suggested_resolution)
                 state["entities"] = entities
-            state["disambiguation_needed"] = False  # auto-resolved
+            state["disambiguation_needed"] = False  
 
         logger.info(
             "Disambiguation Node [{}]: needs={}, type={}, auto_resolved={}",
@@ -173,7 +146,6 @@ async def disambiguation_node(
         state["disambiguation_needed"] = False
         state["disambiguation_info"] = {}
 
-    # Trace
     state["trace"] = state.get("trace", {})
     state["trace"][NODE_DISAMBIGUATION] = {
         "needs_disambiguation": state.get("disambiguation_needed", False),

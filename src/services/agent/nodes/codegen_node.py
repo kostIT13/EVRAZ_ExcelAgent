@@ -1,13 +1,3 @@
-"""CodeGen Node — узел генерации SQL в графе LangGraph.
-
-Генерирует SQL-запрос на основе плана, схемы и RAG-контекста.
-Выполняет валидацию SQL без выполнения.
-
-Поддерживает две схемы:
-1. Новая нормализованная: fact_prices (период | наименование | источник_цены | значение)
-2. Старая generic: sheets → columns → cells (для обратной совместимости)
-"""
-
 from __future__ import annotations
 
 import json
@@ -18,9 +8,6 @@ from src.core.logging_settings import logger
 from src.services.agent.graph_state import GraphState, NODE_CODEGEN
 from src.services.llm.llm_client import LLMClient
 
-# ---------------------------------------------------------------------------
-# Few-shot examples для text-to-SQL
-# ---------------------------------------------------------------------------
 
 FEW_SHOT_EXAMPLES = [
     {
@@ -169,7 +156,6 @@ CODEGEN_SYSTEM_PROMPT = """Ты — генератор SQL-запросов дл
 Верни ТОЛЬКО SQL-запрос без пояснений. Без markdown-обёртки ```sql.
 """
 
-# Запрещённые ключевые слова (защита от модификации данных)
 FORBIDDEN_KEYWORDS = [
     "INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "CREATE",
     "TRUNCATE", "GRANT", "REVOKE", "EXECUTE", "EXEC",
@@ -178,32 +164,20 @@ FORBIDDEN_KEYWORDS = [
 
 
 def validate_sql(sql: str) -> List[str]:
-    """Валидация SQL-запроса без выполнения.
-
-    Args:
-        sql: SQL-запрос для проверки.
-
-    Returns:
-        Список ошибок. Пустой список = запрос валиден.
-    """
     errors: List[str] = []
     sql_upper = sql.strip().upper()
 
-    # 1. Должен начинаться с SELECT
     if not sql_upper.startswith("SELECT"):
         errors.append("Запрос должен начинаться с SELECT (read-only)")
 
-    # 2. Проверка на запрещённые ключевые слова
     for keyword in FORBIDDEN_KEYWORDS:
         pattern = r'\b' + re.escape(keyword) + r'\b'
         if re.search(pattern, sql_upper):
             errors.append(f"Запрос содержит запрещённое ключевое слово: {keyword}")
 
-    # 3. Должен содержать FROM
     if "FROM" not in sql_upper:
         errors.append("Запрос должен содержать FROM")
 
-    # 4. Базовая проверка баланса скобок
     if sql.count("(") != sql.count(")"):
         errors.append("Несбалансированные круглые скобки")
 
@@ -215,17 +189,6 @@ async def codegen_node(
     llm: Optional[LLMClient] = None,
     **kwargs: Any,
 ) -> GraphState:
-    """Узел CodeGen: генерирует SQL-запрос на основе плана и RAG-контекста.
-
-    Args:
-        state: Состояние с заполненными question, plan, query_type,
-               entities, rag_context, schema.
-        llm: LLMClient.
-        **kwargs: Дополнительные аргументы (config от LangGraph).
-
-    Returns:
-        Обновлённое состояние с sql_query и validation_errors.
-    """
     llm = llm or LLMClient()
     request_id = state.get("request_id", "?")[:8]
     question = state.get("question", "")
@@ -241,7 +204,6 @@ async def codegen_node(
         query_type.value if query_type else "?",
     )
 
-    # 1. Формируем промпт с планом, схемой и RAG-контекстом
     schema_json = json.dumps(schema, ensure_ascii=False, indent=2)
     rag_section = (
         f"\nRAG-контекст (релевантные данные):\n{rag_context[:20000]}"
@@ -249,7 +211,6 @@ async def codegen_node(
         else ""
     )
 
-    # Форматируем few-shot примеры
     few_shot_text = "\n\n".join(
         f"Вопрос: {ex['question']}\nSQL: {ex['sql']}"
         for ex in FEW_SHOT_EXAMPLES
@@ -290,7 +251,6 @@ async def codegen_node(
         {"role": "user", "content": user_message},
     ]
 
-    # 2. Вызываем LLM
     try:
         raw_sql = await llm.chat(
             messages=messages,
@@ -299,7 +259,6 @@ async def codegen_node(
             max_tokens=2048,
         )
 
-        # Очищаем SQL от markdown-обёртки
         sql = raw_sql.strip()
         if sql.startswith("```sql"):
             sql = sql[6:]
@@ -325,7 +284,6 @@ async def codegen_node(
         state["trace"][NODE_CODEGEN] = {"error": str(exc)}
         return state
 
-    # 3. Валидируем SQL
     if state["sql_query"]:
         state["validation_errors"] = validate_sql(state["sql_query"])
         logger.info(
@@ -336,7 +294,6 @@ async def codegen_node(
     else:
         state["validation_errors"] = ["SQL-запрос пуст."]
 
-    # 4. Trace
     state["trace"] = state.get("trace", {})
     state["trace"][NODE_CODEGEN] = {
         "sql_query": state["sql_query"],

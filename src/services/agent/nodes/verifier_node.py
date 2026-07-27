@@ -1,16 +1,6 @@
-"""Verifier Node — узел верификации в графе LangGraph.
-
-Проверяет SQL, а не текст ответа:
-1. Semantic-проверка SQL: соответствует ли он query_type/entities (LLM-critic)
-2. Sanity-checks на результат: пустой result, все NULL, аномальный размер набора
-3. Детерминированное форматирование ответа из sql_result (без LLM-пересказа)
-"""
-
 from __future__ import annotations
-
 import json
 from typing import Any, Dict, List, Optional
-
 from src.core.logging_settings import logger
 from src.services.agent.graph_state import GraphState, NODE_VERIFIER
 from src.services.llm.llm_client import LLMClient
@@ -51,29 +41,21 @@ VERIFIER_SYSTEM_PROMPT = """Ты — верификатор SQL-запросов
 Верни ТОЛЬКО JSON без дополнительного текста.
 """
 
-# Максимальное количество retry
 MAX_RETRY_COUNT = 3
 
-# Пороги для sanity checks
-MAX_ROWS_WARNING = 1000  # если больше этого числа строк — возможно, не хватает фильтра
+MAX_ROWS_WARNING = 1000
 MIN_CONFIDENCE_PASS = 0.5
 
 
 def _format_result_deterministically(sql_result: List[Dict[str, Any]], max_rows: int = 10) -> str:
-    """Детерминированно форматирует sql_result в читаемый ответ.
-
-    Без LLM — чисто шаблонное форматирование.
-    """
     if not sql_result:
         return "Данные не найдены."
 
     rows = sql_result[:max_rows]
     total = len(sql_result)
 
-    # Определяем колонки
     columns = list(rows[0].keys()) if rows else []
 
-    # Форматируем как таблицу
     lines = []
     for row in rows:
         parts = []
@@ -81,7 +63,6 @@ def _format_result_deterministically(sql_result: List[Dict[str, Any]], max_rows:
             val = row.get(col)
             if val is None:
                 continue
-            # Пытаемся красиво отформатировать числа
             if isinstance(val, float):
                 if val == int(val):
                     val_str = f"{int(val):,}".replace(",", " ")
@@ -102,18 +83,15 @@ def _format_result_deterministically(sql_result: List[Dict[str, Any]], max_rows:
 
 
 def _sanity_check_result(sql_result: List[Dict[str, Any]]) -> List[str]:
-    """Sanity checks на результат SQL."""
     issues: List[str] = []
 
     if not sql_result:
         issues.append("empty_result")
         return issues
 
-    # Проверка на аномальный размер
     if len(sql_result) > MAX_ROWS_WARNING:
         issues.append(f"large_result:{len(sql_result)}")
 
-    # Проверка на NULL-значения
     if sql_result:
         first_row = sql_result[0]
         all_nulls = all(v is None for v in first_row.values())
@@ -128,15 +106,6 @@ async def verifier_node(
     llm: Optional[LLMClient] = None,
     **kwargs: Any,
 ) -> GraphState:
-    """Узел Verifier: проверяет SQL и результат.
-
-    Args:
-        state: Состояние с заполненными question, sql_query, sql_result.
-        llm: LLMClient.
-
-    Returns:
-        Обновлённое состояние с answer, confidence, needs_retry.
-    """
     llm = llm or LLMClient()
     request_id = state.get("request_id", "?")[:8]
     question = state.get("question", "")
@@ -153,7 +122,6 @@ async def verifier_node(
         retry_count,
     )
 
-    # 1. Если SQL-ошибка — сразу retry
     if sql_error:
         state["answer"] = f"Ошибка при выполнении запроса: {sql_error}"
         state["confidence"] = 0.0
@@ -170,7 +138,6 @@ async def verifier_node(
         }
         return state
 
-    # 2. Sanity checks на результат
     sanity_issues = _sanity_check_result(sql_result)
     if "empty_result" in sanity_issues:
         state["answer"] = "Запрос не вернул данных."
@@ -189,7 +156,6 @@ async def verifier_node(
         }
         return state
 
-    # 3. Semantic-проверка SQL через LLM-critic
     try:
         user_message = f"""Вопрос пользователя: {question}
 
@@ -216,7 +182,6 @@ SQL-запрос:
             max_tokens=1024,
         )
 
-        # Парсим JSON
         cleaned = raw_response.strip()
         if cleaned.startswith("```json"):
             cleaned = cleaned[7:]
@@ -234,19 +199,16 @@ SQL-запрос:
         state["needs_retry"] = result.get("needs_retry", not is_correct)
         state["retry_reason"] = result.get("retry_reason", "")
 
-        # 4. Детерминированное форматирование ответа
         state["answer"] = _format_result_deterministically(sql_result)
 
-        # 5. Итоговая confidence: комбинируем LLM-оценку и sanity checks
         confidence = llm_confidence
         if "large_result" in sanity_issues:
-            confidence *= 0.8  # штраф за аномально большой результат
+            confidence *= 0.8  
         if "all_null_values" in sanity_issues:
-            confidence *= 0.5  # серьёзный штраф за NULL-значения
+            confidence *= 0.5  
 
         state["confidence"] = max(0.0, min(1.0, confidence))
 
-        # Инкрементируем retry_count только если нужен retry
         if state["needs_retry"]:
             state["retry_count"] = retry_count + 1
         else:
@@ -277,7 +239,6 @@ SQL-запрос:
             request_id,
             exc,
         )
-        # Fallback: детерминированное форматирование
         state["answer"] = _format_result_deterministically(sql_result)
         state["confidence"] = 0.5
         state["needs_retry"] = False

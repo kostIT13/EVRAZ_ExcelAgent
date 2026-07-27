@@ -1,16 +1,8 @@
-"""LangGraph граф агента EVRAZ.
-
-Строит StateGraph со всеми узлами и conditional edges.
-Предоставляет точку входа LangGraphAgent для использования из pipeline.
-"""
-
 from __future__ import annotations
-
 import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
-
 from langgraph.graph import END, StateGraph
 
 from src.core.logging_settings import logger
@@ -47,35 +39,16 @@ from src.services.llm.llm_client import LLMClient
 from src.services.rag.query_cache import query_cache_service
 
 
-# ---------------------------------------------------------------------------
-# Failed Node
-# ---------------------------------------------------------------------------
-
 async def failed_node(state: GraphState, **kwargs: Any) -> GraphState:
-    """Узел-заглушка для ошибочных состояний.
-
-    Просто логирует ошибку и завершает граф.
-    """
     request_id = state.get("request_id", "?")[:8]
     logger.error("Failed Node [{}]: graph reached failed state", request_id)
     state["error"] = state.get("error") or "Граф достиг ошибочного состояния"
     return state
 
 
-# ---------------------------------------------------------------------------
-# Сборка графа
-# ---------------------------------------------------------------------------
-
 def build_agent_graph() -> StateGraph:
-    """Собрать и скомпилировать граф агента.
-
-    Returns:
-        Скомпилированный граф (CompiledStateGraph).
-    """
-    # 1. Создаём граф с состоянием GraphState
     workflow = StateGraph(GraphState)
 
-    # 2. Добавляем узлы
     workflow.add_node(NODE_RAG, rag_node)
     workflow.add_node(NODE_CLASSIFIER, classifier_node)
     workflow.add_node(NODE_DISAMBIGUATION, disambiguation_node)
@@ -86,11 +59,8 @@ def build_agent_graph() -> StateGraph:
     workflow.add_node(NODE_ANSWER, answer_node)
     workflow.add_node(NODE_FAILED, failed_node)
 
-    # 3. Добавляем рёбра
-    # Старт → RAG
     workflow.set_entry_point(NODE_RAG)
 
-    # RAG → Classifier (условно)
     workflow.add_conditional_edges(
         NODE_RAG,
         route_after_rag,
@@ -100,7 +70,6 @@ def build_agent_graph() -> StateGraph:
         },
     )
 
-    # Classifier → Disambiguation (условно)
     workflow.add_conditional_edges(
         NODE_CLASSIFIER,
         route_after_classifier,
@@ -111,7 +80,6 @@ def build_agent_graph() -> StateGraph:
         },
     )
 
-    # Disambiguation → Planner | Failed
     workflow.add_conditional_edges(
         NODE_DISAMBIGUATION,
         route_after_disambiguation,
@@ -121,7 +89,6 @@ def build_agent_graph() -> StateGraph:
         },
     )
 
-    # Planner → CodeGen (безусловно)
     workflow.add_conditional_edges(
         NODE_PLANNER,
         route_after_planner,
@@ -131,7 +98,6 @@ def build_agent_graph() -> StateGraph:
         },
     )
 
-    # CodeGen → Executor | CodeGen (retry) | Failed
     workflow.add_conditional_edges(
         NODE_CODEGEN,
         route_after_codegen,
@@ -142,7 +108,6 @@ def build_agent_graph() -> StateGraph:
         },
     )
 
-    # Executor → Verifier | CodeGen (retry) | Failed
     workflow.add_conditional_edges(
         NODE_EXECUTOR,
         route_after_executor,
@@ -153,7 +118,6 @@ def build_agent_graph() -> StateGraph:
         },
     )
 
-    # Verifier → Answer | CodeGen (retry) | Failed
     workflow.add_conditional_edges(
         NODE_VERIFIER,
         route_after_verifier,
@@ -164,26 +128,18 @@ def build_agent_graph() -> StateGraph:
         },
     )
 
-    # Answer → END
     workflow.add_edge(NODE_ANSWER, END)
 
-    # Failed → END
     workflow.add_edge(NODE_FAILED, END)
 
-    # 4. Компилируем
     graph = workflow.compile()
 
     logger.info("LangGraph agent graph compiled successfully")
     return graph
 
 
-# ---------------------------------------------------------------------------
-# LangGraphAgent
-# ---------------------------------------------------------------------------
-
 @dataclass
 class AgentResult:
-    """Результат работы агента (совместим со старым AgentResult)."""
     answer: str
     confidence: float
     request_id: str
@@ -194,9 +150,9 @@ class AgentResult:
     sql_query: str
     sql_result: List[Dict[str, Any]]
     retry_count: int
-    status: str  # "success", "low_confidence", "failed"
-    self_corrected: bool = False  # был ли применён self-correction
-    from_cache: bool = False  # был ли ответ из кэша
+    status: str  
+    self_corrected: bool = False  
+    from_cache: bool = False  
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -216,12 +172,6 @@ class AgentResult:
 
 
 class LangGraphAgent:
-    """Агент на базе LangGraph.
-
-    Использует StateGraph с узлами:
-    RAG → Classifier → Disambiguation → Planner → CodeGen → Executor → Verifier → Answer
-    """
-
     def __init__(self, llm: Optional[LLMClient] = None) -> None:
         self._llm = llm or LLMClient()
         self._graph = build_agent_graph()
@@ -232,16 +182,6 @@ class LangGraphAgent:
         top_k: int = 30,
         conversation_history: Optional[List[Dict[str, str]]] = None,
     ) -> AgentResult:
-        """Запустить агента для ответа на вопрос.
-
-        Args:
-            question: Вопрос пользователя.
-            top_k: Количество чанков для RAG-поиска.
-            conversation_history: История предыдущих попыток для self-correction.
-
-        Returns:
-            AgentResult с ответом и полным trace.
-        """
         request_id = str(uuid.uuid4())
         start_time = time.monotonic()
         is_retry = bool(conversation_history)
@@ -253,7 +193,6 @@ class LangGraphAgent:
             is_retry,
         )
 
-        # 0. Проверяем query cache (через asyncio.to_thread, чтобы избежать greenlet-конфликта)
         try:
             cached = await query_cache_service.lookup(question)
         except Exception as exc:
@@ -281,7 +220,6 @@ class LangGraphAgent:
                 from_cache=True,
             )
 
-        # 1. Начальное состояние
         initial_state: GraphState = {
             "question": question,
             "request_id": request_id,
@@ -309,13 +247,10 @@ class LangGraphAgent:
             "error": None,
         }
 
-        # Если есть история self-correction — добавляем её в trace для контекста
         if conversation_history:
             initial_state["trace"]["conversation_history"] = conversation_history
 
-        # 2. Запускаем граф
         try:
-            # Передаём llm через config
             config = {"configurable": {"llm": self._llm}}
             final_state = await self._graph.ainvoke(initial_state, config=config)
         except Exception as exc:
@@ -331,7 +266,6 @@ class LangGraphAgent:
                 "Пожалуйста, попробуйте позже."
             )
 
-        # 3. Формируем результат
         latency_ms = int((time.monotonic() - start_time) * 1000)
         confidence = final_state.get("confidence", 0.0)
         has_error = final_state.get("error") is not None
@@ -345,7 +279,6 @@ class LangGraphAgent:
         else:
             status = "low_confidence"
 
-        # Если ответ пустой — fallback
         answer = final_state.get("answer", "")
         if not answer:
             if final_state.get("sql_result"):
@@ -359,7 +292,6 @@ class LangGraphAgent:
                     "Попробуйте переформулировать запрос."
                 )
 
-        # Сохраняем в кэш (если успешно)
         sql_query = final_state.get("sql_query", "")
         sql_result = final_state.get("sql_result", [])
         query_type = (

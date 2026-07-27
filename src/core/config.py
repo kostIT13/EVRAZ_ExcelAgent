@@ -13,7 +13,6 @@ class Settings(BaseSettings):
     LLM_MODEL_CHEAP: str
 
     OLLAMA_BASE_URL: str
-    # Мультиязычная модель для лучшей работы с русской доменной лексикой
     OLLAMA_EMBED_MODEL: str = "jeffh/intfloat-multilingual-e5-large:q8_0"
     EMBED_DIMENSION: int = 1024
 

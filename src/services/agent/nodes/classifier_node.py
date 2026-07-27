@@ -1,15 +1,6 @@
-"""Classifier Node — узел классификации запроса в графе LangGraph.
-
-Определяет тип запроса (lookup/aggregate/cross_sheet/delta),
-извлекает сущности и находит релевантные листы.
-Использует RAG-контекст для более точной классификации.
-"""
-
 from __future__ import annotations
-
 import json
 from typing import Any, Dict, List, Optional
-
 from src.core.db.database import async_session_maker
 from src.core.db.models import Sheet
 from src.core.logging_settings import logger
@@ -48,7 +39,6 @@ CLASSIFIER_SYSTEM_PROMPT = """Ты — классификатор запросо
 
 
 async def get_all_sheets() -> List[Dict[str, Any]]:
-    """Получить список всех листов из БД."""
     async with async_session_maker() as session:
         from sqlalchemy import select
 
@@ -70,15 +60,6 @@ async def classifier_node(
     llm: Optional[LLMClient] = None,
     **kwargs: Any,
 ) -> GraphState:
-    """Узел Classifier: определяет тип запроса и релевантные листы.
-
-    Args:
-        state: Текущее состояние графа (должен содержать question и rag_context).
-        llm: LLMClient (создаётся по умолчанию).
-
-    Returns:
-        Обновлённое состояние с query_type, entities, relevant_sheets.
-    """
     llm = llm or LLMClient()
     request_id = state.get("request_id", "?")[:8]
     question = state.get("question", "")
@@ -90,7 +71,6 @@ async def classifier_node(
         question[:80],
     )
 
-    # 1. Получаем список листов
     sheets = await get_all_sheets()
     logger.info(
         "Classifier Node [{}]: found {} sheets",
@@ -98,7 +78,6 @@ async def classifier_node(
         len(sheets),
     )
 
-    # 2. Формируем промпт с RAG-контекстом
     sheets_json = json.dumps(sheets, ensure_ascii=False, indent=2)
     rag_section = (
         f"\nRAG-контекст (релевантные данные):\n{rag_context[:20000]}"
@@ -117,7 +96,6 @@ async def classifier_node(
         {"role": "user", "content": user_message},
     ]
 
-    # 3. Вызываем LLM
     try:
         raw_response = await llm.chat(
             messages=messages,
@@ -126,7 +104,6 @@ async def classifier_node(
             max_tokens=1024,
         )
 
-        # Парсим JSON
         cleaned = raw_response.strip()
         if cleaned.startswith("```json"):
             cleaned = cleaned[7:]
@@ -138,7 +115,6 @@ async def classifier_node(
 
         result = json.loads(cleaned)
 
-        # Валидируем
         query_type_str = result.get("query_type", "unknown")
         if query_type_str not in ("lookup", "aggregate", "cross_sheet", "delta", "unknown"):
             query_type_str = "unknown"
@@ -146,7 +122,6 @@ async def classifier_node(
         state["query_type"] = QueryType(query_type_str)
         state["entities"] = result.get("entities", [])
 
-        # Маппим ID листов
         sheet_map = {s["id"]: s for s in sheets}
         relevant_ids = result.get("relevant_sheet_ids", [])
         state["relevant_sheets"] = [
@@ -171,7 +146,6 @@ async def classifier_node(
         state["entities"] = []
         state["relevant_sheets"] = []
 
-    # 4. Trace
     state["trace"] = state.get("trace", {})
     state["trace"][NODE_CLASSIFIER] = {
         "query_type": state["query_type"].value,

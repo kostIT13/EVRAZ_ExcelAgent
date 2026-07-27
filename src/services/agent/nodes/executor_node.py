@@ -1,24 +1,13 @@
-"""Executor Node — узел выполнения SQL в графе LangGraph.
-
-Безопасно выполняет SQL-запрос через асинхронную сессию SQLAlchemy
-в read-only режиме с таймаутом.
-"""
-
 from __future__ import annotations
-
 from typing import Any, Dict, List, Optional
-
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from src.core.db.database import async_session_maker
 from src.core.logging_settings import logger
 from src.services.agent.graph_state import GraphState, NODE_EXECUTOR
 
-# Максимальное количество строк в результате
 MAX_RESULT_ROWS = 100
 
-# Максимальное время выполнения запроса (сек)
 QUERY_TIMEOUT_SECONDS = 30
 
 
@@ -27,16 +16,6 @@ async def executor_node(
     session: Optional[AsyncSession] = None,
     **kwargs: Any,
 ) -> GraphState:
-    """Узел Executor: выполняет SQL-запрос и возвращает результат.
-
-    Args:
-        state: Состояние с заполненным sql_query.
-        session: Опциональная асинхронная сессия (для тестов).
-        **kwargs: Дополнительные аргументы (config от LangGraph).
-
-    Returns:
-        Обновлённое состояние с sql_result или sql_error.
-    """
     request_id = state.get("request_id", "?")[:8]
     sql_query = state.get("sql_query", "")
     validation_errors = state.get("validation_errors", [])
@@ -47,7 +26,6 @@ async def executor_node(
         len(sql_query),
     )
 
-    # 1. Проверяем, есть ли что выполнять
     if not sql_query:
         state["sql_error"] = "Нет SQL-запроса для выполнения"
         state["sql_result"] = []
@@ -64,12 +42,9 @@ async def executor_node(
         state["trace"][NODE_EXECUTOR] = {"error": state["sql_error"]}
         return state
 
-    # 2. Выполняем запрос
     try:
         async with (session or async_session_maker()) as s:
-            # Явно начинаем транзакцию, чтобы SET LOCAL сработал
             async with s.begin():
-                # Таймаут
                 await s.execute(
                     text(f"SET LOCAL statement_timeout = '{QUERY_TIMEOUT_SECONDS}s'")
                 )
@@ -105,7 +80,6 @@ async def executor_node(
         state["sql_error"] = error_msg
         state["sql_result"] = []
 
-    # 3. Trace
     state["trace"] = state.get("trace", {})
     state["trace"][NODE_EXECUTOR] = {
         "sql_query": sql_query,

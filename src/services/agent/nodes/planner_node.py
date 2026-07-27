@@ -1,14 +1,6 @@
-"""Planner Node — узел планирования в графе LangGraph.
-
-На основе вопроса, RAG-контекста и схемы релевантных листов
-генерирует текстовый план действий для CodeGen.
-"""
-
 from __future__ import annotations
-
 import json
 from typing import Any, Dict, List, Optional
-
 from src.core.db.database import async_session_maker
 from src.core.db.models import ColumnMetadata, Sheet
 from src.core.logging_settings import logger
@@ -47,12 +39,6 @@ PLANNER_SYSTEM_PROMPT = """Ты — планировщик запросов к �
 
 
 async def get_sheet_schema(sheet_ids: List[int]) -> List[Dict[str, Any]]:
-    """Получить схему колонок для указанных листов.
-
-    Возвращает две секции для каждого листа:
-    1. generic_schema — колонки из column_metadata (исходная структура Excel)
-    2. fact_prices_schema — нормализованная факт-таблица с примерами данных
-    """
     if not sheet_ids:
         return []
 
@@ -87,7 +73,6 @@ async def get_sheet_schema(sheet_ids: List[int]) -> List[Dict[str, Any]]:
                 if col.sheet_id == sid
             ]
 
-            # Получаем sample-данные из fact_prices для этого листа
             from src.core.db.models import FactPrice
             fact_result = await session.execute(
                 select(FactPrice)
@@ -96,7 +81,6 @@ async def get_sheet_schema(sheet_ids: List[int]) -> List[Dict[str, Any]]:
             )
             fact_rows = fact_result.scalars().all()
 
-            # Группируем fact_prices по item_name_normalized для компактности
             fact_samples = []
             seen_items = set()
             for fp in fact_rows:
@@ -137,16 +121,6 @@ async def planner_node(
     llm: Optional[LLMClient] = None,
     **kwargs: Any,
 ) -> GraphState:
-    """Узел Planner: генерирует текстовый план действий.
-
-    Args:
-        state: Состояние с заполненными question, query_type, entities,
-               relevant_sheets, rag_context.
-        llm: LLMClient.
-
-    Returns:
-        Обновлённое состояние с plan.
-    """
     llm = llm or LLMClient()
     request_id = state.get("request_id", "?")[:8]
     question = state.get("question", "")
@@ -162,7 +136,6 @@ async def planner_node(
         [s.get("name", str(s)) for s in relevant_sheets],
     )
 
-    # 1. Получаем схему
     sheet_ids = [s["id"] for s in relevant_sheets]
     schema = await get_sheet_schema(sheet_ids)
 
@@ -177,10 +150,8 @@ async def planner_node(
         state["trace"][NODE_PLANNER] = {"error": "no_schema", "sheet_ids": sheet_ids}
         return state
 
-    # 2. Сохраняем схему в state для CodeGen (напрямую, не через trace)
     state["schema"] = schema
 
-    # 3. Формируем промпт с RAG-контекстом
     schema_json = json.dumps(schema, ensure_ascii=False, indent=2)
     rag_section = (
         f"\nRAG-контекст (релевантные данные):\n{rag_context[:20000]}"
@@ -202,7 +173,6 @@ async def planner_node(
         {"role": "user", "content": user_message},
     ]
 
-    # 3. Вызываем LLM
     try:
         plan = await llm.chat(
             messages=messages,
@@ -220,7 +190,6 @@ async def planner_node(
         logger.error("Planner Node [{}]: LLM failed: {}", request_id, exc)
         state["plan"] = f"Ошибка при генерации плана: {exc}"
 
-    # 4. Trace
     state["trace"] = state.get("trace", {})
     state["trace"][NODE_PLANNER] = {
         "plan": state["plan"],

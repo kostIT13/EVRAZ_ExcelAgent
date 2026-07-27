@@ -1,13 +1,5 @@
-"""Conditional edges (маршрутизация) для графа LangGraph.
-
-Определяет, в какой узел переходить после каждого шага,
-в зависимости от текущего состояния.
-"""
-
 from __future__ import annotations
-
 from typing import Literal
-
 from src.core.logging_settings import logger
 from src.services.agent.graph_state import (
     GraphState,
@@ -22,14 +14,10 @@ from src.services.agent.graph_state import (
     NODE_FAILED,
 )
 
-# Максимальное количество retry
 MAX_RETRY_COUNT = 3
 
 
 def route_after_rag(state: GraphState) -> Literal["classifier", "failed"]:
-    """После RAG всегда идём в Classifier.
-    Если RAG упал с ошибкой — всё равно продолжаем (Classifier может работать без контекста).
-    """
     rag_error = state.get("rag_error")
     if rag_error:
         logger.warning(
@@ -40,32 +28,18 @@ def route_after_rag(state: GraphState) -> Literal["classifier", "failed"]:
 
 
 def route_after_classifier(state: GraphState) -> Literal["disambiguation", "planner", "failed"]:
-    """После Classifier:
-    - Если вопрос неоднозначен → Disambiguation
-    - Иначе → Planner
-    """
-    # Пока всегда идём в Disambiguation для проверки
     return NODE_DISAMBIGUATION
 
 
 def route_after_disambiguation(state: GraphState) -> Literal["planner", "failed"]:
-    """После Disambiguation всегда идём в Planner.
-    Если disambiguation выявила критическую неоднозначность — она уже обработана в узле.
-    """
     return NODE_PLANNER
 
 
 def route_after_planner(state: GraphState) -> Literal["codegen", "failed"]:
-    """После Planner всегда идём в CodeGen."""
     return NODE_CODEGEN
 
 
 def route_after_codegen(state: GraphState) -> Literal["executor", "codegen", "failed"]:
-    """После CodeGen:
-    - Если валидация пройдена → Executor
-    - Если ошибки валидации и retry < лимита → CodeGen (retry)
-    - Если превышен лимит retry → Executor (пробуем выполнить, даже с ошибками)
-    """
     validation_errors = state.get("validation_errors", [])
     sql_query = state.get("sql_query", "")
     retry_count = state.get("retry_count", 0)
@@ -107,11 +81,6 @@ def route_after_codegen(state: GraphState) -> Literal["executor", "codegen", "fa
 
 
 def route_after_executor(state: GraphState) -> Literal["verifier", "codegen", "failed"]:
-    """После Executor:
-    - Если SQL успешен → Verifier
-    - Если SQL ошибка → CodeGen (retry)
-    - Если превышен лимит retry → Failed
-    """
     sql_error = state.get("sql_error")
     retry_count = state.get("retry_count", 0)
 
@@ -135,11 +104,6 @@ def route_after_executor(state: GraphState) -> Literal["verifier", "codegen", "f
 
 
 def route_after_verifier(state: GraphState) -> Literal["answer", "codegen", "failed"]:
-    """После Verifier:
-    - Если ответ корректен → Answer
-    - Если нужен retry и лимит не превышен → CodeGen
-    - Если превышен лимит retry → Answer (отдаём что есть)
-    """
     needs_retry = state.get("needs_retry", False)
     retry_count = state.get("retry_count", 0)
 
