@@ -1,25 +1,19 @@
 from __future__ import annotations
-
 import hashlib
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-
 from openpyxl import load_workbook
 from openpyxl.worksheet.worksheet import Worksheet
-
 from src.core.excel.schemas import ParsedCell, ParsedFile, ParsedHeader, ParsedSheet
 from src.core.logging_settings import logger
 
 
-# Константы для очистки имён колонок
 _PHONE_PATTERN = re.compile(
     r'[\s]*[\(]?[\s]*\d{1,4}[\s\)\-]*\d{1,4}[\s\)\-]*\d{1,4}[\s\)\-]*\d{2,4}[\s\)\-]*\d{2,4}[\s\)\-]*',
 )
 _PAREN_PHONE_PATTERN = re.compile(r'\([^)]*\d{3,}[^)]*\)')
-# Удаляем скобки с именем/контактными данными (например, "(Алла)", "(Иван)")
 _PAREN_NAME_PATTERN = re.compile(r'\(\s*[А-Яа-яЁё]+\s*\)')
-# Удаляем одиночные звёздочки и лишние разделители
 _STAR_PATTERN = re.compile(r'\*+')
 _EXTRA_SPACE = re.compile(r'\s{2,}')
 
@@ -45,7 +39,6 @@ class ExcelParser:
 
             headers = self._parse_headers(ws, header_rows)
 
-            # Отсекаем пустые колонки (где все значения None)
             headers = self._filter_empty_columns(ws, headers, header_rows)
 
             data = self._parse_data(ws, headers, header_rows)
@@ -122,7 +115,6 @@ class ExcelParser:
         headers: List[ParsedHeader],
         header_rows: int,
     ) -> List[ParsedHeader]:
-        """Удаляет колонки, в которых нет ни одного значения (кроме заголовков)."""
         if not headers:
             return headers
 
@@ -170,7 +162,6 @@ class ExcelParser:
 
             full_name = " > ".join(l for l in levels if l) if any(l for l in levels if l) else f"col_{col}"
 
-            # Очищаем full_name от телефонов и лишних данных
             full_name = self._clean_header_name(full_name)
 
             col_name = self._normalize_column_name(full_name)
@@ -185,18 +176,11 @@ class ExcelParser:
         return headers
 
     def _clean_header_name(self, name: str) -> str:
-        """Очищает имя колонки от телефонов, номеров и лишних спецсимволов."""
-        # Удаляем телефонные номера в скобках: (921)341-19-36
         name = _PAREN_PHONE_PATTERN.sub('', name)
-        # Удаляем оставшиеся телефонные паттерны
         name = _PHONE_PATTERN.sub('', name)
-        # Удаляем скобки с именами: (Алла), (Иван)
         name = _PAREN_NAME_PATTERN.sub('', name)
-        # Удаляем звёздочки
         name = _STAR_PATTERN.sub('', name)
-        # Удаляем лишние пробелы
         name = _EXTRA_SPACE.sub(' ', name)
-        # Удаляем обрамляющие пробелы и знаки препинания
         name = name.strip(' ,;:.-*()')
         return name
 
@@ -210,7 +194,7 @@ class ExcelParser:
             has_any_value = False
 
             for col_idx, header in enumerate(headers):
-                col = header.col_index  # используем оригинальный col_index
+                col = header.col_index 
                 cell_value = ws.cell(row=row, column=col).value
 
                 if cell_value is not None:
@@ -248,15 +232,10 @@ class ExcelParser:
         return cells
 
     def _normalize_column_name(self, name: str) -> str:
-        # Убираем специальные символы
         name = re.sub(r'[^\w\s]', '', name)
-        # Заменяем пробелы на _
         name = re.sub(r'\s+', '_', name)
-        # Приводим к нижнему регистру
         name = name.lower()
-        # Убираем множественные _
         name = re.sub(r'_+', '_', name)
-        # Убираем _ в начале и конце
         name = name.strip('_')
         return name or "unknown"
 
