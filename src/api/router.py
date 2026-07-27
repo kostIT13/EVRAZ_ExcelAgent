@@ -74,7 +74,6 @@ async def upload_file(
         logger.error("Upload failed: {}", e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
     finally:
-        # Удаляем временный файл
         if tmp_path.exists():
             tmp_path.unlink()
 
@@ -228,11 +227,6 @@ async def reindex_file(
     file_id: int,
     session: AsyncSession = Depends(get_db),
 ):
-    """Rebuild vector embeddings and BM25 index for a file.
-
-    Useful after data changes or if indexing failed during upload.
-    """
-    # Проверяем, что файл существует
     file_result = await session.execute(
         select(DBFile).where(DBFile.id == file_id)
     )

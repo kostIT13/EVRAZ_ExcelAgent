@@ -1,8 +1,3 @@
-"""
-API router for traceability endpoint.
-Позволяет посмотреть полный "след" запроса: вопрос → план → SQL → результат.
-"""
-
 from __future__ import annotations
 from typing import List
 
@@ -22,7 +17,6 @@ async def list_traces(
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
 ) -> List[dict]:
-    """Получить список последних запросов (для истории trace)."""
     logger.info("List traces: limit={}, offset={}", limit, offset)
 
     async with async_session_maker() as session:
@@ -48,7 +42,6 @@ async def list_traces(
 
 @router.get("/{request_id}", response_model=TraceResponse)
 async def get_trace(request_id: str) -> TraceResponse:
-    """Получить полный trace запроса по request_id."""
     logger.info("Trace request: request_id='{}'", request_id)
 
     async with async_session_maker() as session:
@@ -68,13 +61,11 @@ async def get_trace(request_id: str) -> TraceResponse:
 
         steps = []
 
-        # Шаг 1: вопрос
         steps.append(TraceStepInfo(
             step="question",
             data={"question": log.question},
         ))
 
-        # Шаги агента (если это был agent-запрос)
         agent_trace = trace_data.get("agent_trace", {})
         if agent_trace:
             for step_name in ["classifier", "planner", "codegen", "executor", "verifier"]:
@@ -82,7 +73,6 @@ async def get_trace(request_id: str) -> TraceResponse:
                 if step_data:
                     steps.append(TraceStepInfo(step=step_name, data=step_data))
         else:
-            # Если это был RAG-запрос
             steps.append(TraceStepInfo(
                 step="retrieval",
                 data={
@@ -95,7 +85,6 @@ async def get_trace(request_id: str) -> TraceResponse:
                 data=trace_data.get("verification", {}),
             ))
 
-        # Финальный ответ
         steps.append(TraceStepInfo(
             step="answer",
             data={

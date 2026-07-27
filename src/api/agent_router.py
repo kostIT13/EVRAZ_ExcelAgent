@@ -9,24 +9,11 @@ router = APIRouter(prefix="/ask", tags=["rag"])
 
 
 def _history_to_dicts(history):
-    """Преобразовать список ConversationTurn в список dict для JSON-сериализации."""
     return [{"role": t.role, "content": t.content} for t in history]
 
 
 @router.post("", response_model=AskResponse)
 async def ask_question(request: AskRequest) -> AskResponse:
-    """Ask a question about the uploaded Excel data.
-
-    Режимы:
-    - auto: агент сам выбирает RAG или Agent
-    - rag: только RAG (гибридный поиск + LLM)
-    - agent: только Agent (Classifier → Planner → CodeGen → Executor → Verifier)
-
-    Self-correction:
-    - conversation_history содержит предыдущие попытки (user question + assistant answer)
-    - При повторном запросе агент учитывает предыдущую ошибку и пытается найти другой подход
-    """
-    # Преобразуем Pydantic модели в простые dict для JSON-сериализации
     history_dicts = _history_to_dicts(request.conversation_history)
     is_retry = len(history_dicts) > 0
 
@@ -39,7 +26,6 @@ async def ask_question(request: AskRequest) -> AskResponse:
     )
 
     try:
-        # Режим: только RAG
         if request.mode == "rag":
             result = await pipeline.run(
                 question=request.question,
@@ -65,14 +51,12 @@ async def ask_question(request: AskRequest) -> AskResponse:
                 mode_used="rag",
             )
 
-        # Режим: Agent или Auto
         agent_result = await pipeline.run_agent(
             question=request.question,
             top_k=request.top_k,
             conversation_history=history_dicts,
         )
 
-        # Для auto: если агент не справился — fallback на RAG
         if request.mode == "auto" and agent_result.status == "failed":
             logger.info(
                 "Auto mode: agent failed, falling back to RAG for '{}'",
@@ -102,11 +86,10 @@ async def ask_question(request: AskRequest) -> AskResponse:
                 mode_used="rag_fallback",
             )
 
-        # Успешный ответ агента
         return AskResponse(
             answer=agent_result.answer,
             confidence=agent_result.confidence,
-            sources=[],  # у агента нет retrieved_chunks в старом формате
+            sources=[],  
             request_id=agent_result.request_id,
             latency_ms=agent_result.latency_ms,
             mode_used="agent",
