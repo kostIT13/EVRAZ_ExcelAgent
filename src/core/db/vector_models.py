@@ -1,12 +1,9 @@
 from __future__ import annotations
-
 from datetime import datetime
 from typing import List, Optional, TYPE_CHECKING
-
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-
 from src.core.db.base import Base
 
 if TYPE_CHECKING:
@@ -14,7 +11,6 @@ if TYPE_CHECKING:
 
 
 class SheetEmbedding(Base):
-    """Эмбеддинг для целого листа (общее текстовое представление)."""
 
     __tablename__ = "sheet_embeddings"
 
@@ -31,12 +27,6 @@ class SheetEmbedding(Base):
 
 
 class ChunkEmbedding(Base):
-    """Эмбеддинг для отдельного чанка (строки данных) внутри листа.
-
-    Позволяет dense-поиску находить конкретные строки с продуктами,
-    а не только целые листы.
-    """
-
     __tablename__ = "chunk_embeddings"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)

@@ -127,13 +127,6 @@ class Cell(Base):
 
 
 class FactPrice(Base):
-    """Нормализованная факт-таблица цен на металлы.
-
-    Превращает generic cells-grid в tidy/long-формат:
-    период | наименование_лома | источник_цены | значение
-
-    Источники цены: поставщик, среднерыночная, аукцион_старт, аукцион_победитель
-    """
     __tablename__ = "fact_prices"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
@@ -160,11 +153,6 @@ class FactPrice(Base):
 
 
 class EntityDictionary(Base):
-    """Справочник сущностей (канонические названия лома + алиасы).
-
-    Резолвит 'Лом меди кусок' из разных месяцев в одну сущность,
-    даже если в тексте есть опечатки/пробелы.
-    """
     __tablename__ = "entity_dictionary"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
@@ -185,11 +173,6 @@ class EntityDictionary(Base):
 
 
 class ExcelComment(Base):
-    """Excel-комментарии (xl/comments*.xml), извлечённые при парсинге.
-
-    Комментарии содержат важный неструктурированный контекст (пояснения к ценам),
-    который теряется при парсинге через openpyxl с data_only=True.
-    """
     __tablename__ = "excel_comments"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
@@ -210,11 +193,6 @@ class ExcelComment(Base):
 
 
 class QueryCache(Base):
-    """Кэш вопрос→SQL для near-duplicate запросов.
-
-    Расширенная версия: хранит вопрос, SQL, результат и метаданные.
-    Позволяет отвечать на повторяющиеся вопросы мгновенно.
-    """
     __tablename__ = "query_cache"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
@@ -236,11 +214,6 @@ class QueryCache(Base):
 
 
 class GoldenDataset(Base):
-    """Golden dataset для регрессионного тестирования.
-
-    Хранит эталонные вопросы с правильными SQL/ответами.
-    Позволяет объективно оценивать качество системы.
-    """
     __tablename__ = "golden_dataset"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
