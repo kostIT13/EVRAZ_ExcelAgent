@@ -2,7 +2,6 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Добавляем компилятор и зависимости
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     python3-dev \
