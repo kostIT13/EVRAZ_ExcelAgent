@@ -103,13 +103,8 @@ class EntityResolver:
             return None, normalized
 
         # 2. Ищем в БД
-        # ВАЖНО: используем session напрямую без async with,
-        # чтобы не закрыть переданную извне сессию (SQLAlchemy 2.0 asyncio
-        # закрывает сессию при выходе из async with).
-        if session is not None:
-            s = session
-        else:
-            s = async_session_maker()
+        own_session = session is None
+        s = session or async_session_maker()
         try:
             entity = await self._find_entity(s, normalized)
             if entity is not None:
@@ -121,7 +116,7 @@ class EntityResolver:
             return None, normalized
         finally:
             # Закрываем только если создали свою сессию
-            if session is None:
+            if own_session:
                 await s.close()
 
     async def resolve_batch(
@@ -161,12 +156,8 @@ class EntityResolver:
         """
         normalized_canonical = normalize_name(canonical_name)
 
-        # ВАЖНО: используем session напрямую без async with,
-        # чтобы не закрыть переданную извне сессию.
-        if session is not None:
-            s = session
-        else:
-            s = async_session_maker()
+        own_session = session is None
+        s = session or async_session_maker()
         try:
             # Проверяем, не существует ли уже
             existing = await s.execute(
@@ -213,7 +204,7 @@ class EntityResolver:
             )
             return entity
         finally:
-            if session is None:
+            if own_session:
                 await s.close()
 
     async def suggest_entities(
@@ -230,12 +221,8 @@ class EntityResolver:
         """
         suggestions: Dict[str, List[Dict[str, Any]]] = {}
 
-        # ВАЖНО: используем session напрямую без async with,
-        # чтобы не закрыть переданную извне сессию.
-        if session is not None:
-            s = session
-        else:
-            s = async_session_maker()
+        own_session = session is None
+        s = session or async_session_maker()
         try:
             # Получаем все сущности
             result = await s.execute(select(EntityDictionary))
@@ -300,7 +287,7 @@ class EntityResolver:
 
             return suggestions
         finally:
-            if session is None:
+            if own_session:
                 await s.close()
 
     async def _find_entity(
@@ -352,10 +339,8 @@ class EntityResolver:
         session: Optional[AsyncSession] = None,
     ) -> str:
         """Получает каноническое имя по ID сущности."""
-        if session is not None:
-            s = session
-        else:
-            s = async_session_maker()
+        own_session = session is None
+        s = session or async_session_maker()
         try:
             result = await s.execute(
                 select(EntityDictionary).where(EntityDictionary.id == entity_id)
@@ -363,7 +348,7 @@ class EntityResolver:
             entity = result.scalar_one_or_none()
             return entity.canonical_name if entity else "unknown"
         finally:
-            if session is None:
+            if own_session:
                 await s.close()
 
 

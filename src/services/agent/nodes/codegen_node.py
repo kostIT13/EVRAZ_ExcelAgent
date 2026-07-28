@@ -88,7 +88,7 @@ LIMIT 1""",
     },
     {
         "question": "О скольки месяцах у тебя есть информация?",
-        "sql": """SELECT COUNT(*) AS количество_месяцев
+        "sql": """SELECT COUNT(DISTINCT period) AS количество_месяцев
 FROM sheets
 WHERE period IS NOT NULL""",
     },

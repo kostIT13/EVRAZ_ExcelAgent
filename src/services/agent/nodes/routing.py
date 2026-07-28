@@ -28,10 +28,17 @@ def route_after_rag(state: GraphState) -> Literal["classifier", "failed"]:
 
 
 def route_after_classifier(state: GraphState) -> Literal["disambiguation", "planner", "failed"]:
+    query_type = state.get("query_type")
+    if query_type is None:
+        logger.warning("Routing: classifier returned no query_type → failed")
+        return NODE_FAILED
     return NODE_DISAMBIGUATION
 
 
 def route_after_disambiguation(state: GraphState) -> Literal["planner", "failed"]:
+    disambiguation_needed = state.get("disambiguation_needed", False)
+    if disambiguation_needed:
+        logger.info("Routing: disambiguation needed, but continuing to planner with auto-resolution")
     return NODE_PLANNER
 
 

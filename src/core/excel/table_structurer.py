@@ -181,6 +181,13 @@ class TableStructurer:
         if col_index <= 4:
             return False
 
+        # Проверяем, что колонка не является служебной (номер строки, примечание и т.д.)
+        full_name_lower = (header.full_name or "").lower()
+        skip_keywords = ["примечание", "комментарий", "номер", "№", "п/п"]
+        for keyword in skip_keywords:
+            if keyword.lower() in full_name_lower:
+                return False
+
         return True
 
     def _get_price_value(self, row_data: Dict[str, Any], col_name: str) -> Optional[float]:

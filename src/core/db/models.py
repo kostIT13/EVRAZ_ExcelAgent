@@ -238,7 +238,7 @@ class QueryLog(Base):
     __tablename__ = "query_logs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    request_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True, server_default=text("gen_random_uuid()"))
+    request_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True, server_default=text("gen_random_uuid()::text"))
     user_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
     question: Mapped[str] = mapped_column(Text, nullable=False)
     plan: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

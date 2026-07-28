@@ -61,7 +61,7 @@ class QueryCacheService:
 
             if record is not None:
                 # Обновляем счётчик и время последнего использования
-                record.hit_count = QueryCache.hit_count + 1
+                record.hit_count = (record.hit_count or 0) + 1
                 await s.commit()
 
                 logger.info(
@@ -106,19 +106,14 @@ class QueryCacheService:
             existing = await s.execute(
                 select(QueryCache).where(QueryCache.question_hash == question_hash)
             )
-            if existing.scalar_one_or_none() is not None:
+            existing_record = existing.scalar_one_or_none()
+            if existing_record is not None:
                 # Обновляем существующую запись
-                await s.execute(
-                    QueryCache.__table__.update()
-                    .where(QueryCache.question_hash == question_hash)
-                    .values(
-                        sql_query=sql_query,
-                        result=result,
-                        query_type=query_type or "unknown",
-                        entities=entities,
-                        hit_count=QueryCache.hit_count + 1,
-                    )
-                )
+                existing_record.sql_query = sql_query
+                existing_record.result = result
+                existing_record.query_type = query_type or "unknown"
+                existing_record.entities = entities
+                existing_record.hit_count = (existing_record.hit_count or 0) + 1
                 await s.commit()
                 logger.debug("Query cache UPDATED: '{}'", question[:60])
                 return

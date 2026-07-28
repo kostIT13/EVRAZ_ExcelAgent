@@ -151,5 +151,6 @@ export default {
   getSheetCells,
   reindexFile,
   askQuestion,
+  listTraces,
   getTrace,
 };

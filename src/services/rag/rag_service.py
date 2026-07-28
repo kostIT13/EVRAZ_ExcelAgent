@@ -5,6 +5,7 @@ Provides a high-level API for the generation pipeline and file indexing.
 
 from __future__ import annotations
 
+import pickle
 from pathlib import Path
 from typing import List, Optional
 
@@ -61,7 +62,10 @@ class RagService:
         chunks = make_chunks(text, strategy="adaptive")
         logger.info("Sheet {}: split into {} chunks", sheet_id, len(chunks))
 
-        async with session or async_session_maker() as s:
+        # Определяем, нужно ли создавать свою сессию или использовать переданную
+        own_session = session is None
+        s = session or async_session_maker()
+        try:
             # --- Dense: удаляем старые чанки и создаём новые ---
             await s.execute(
                 delete(ChunkEmbedding).where(ChunkEmbedding.sheet_id == sheet_id)
@@ -96,7 +100,11 @@ class RagService:
                     model_name=settings.OLLAMA_EMBED_MODEL,
                 ))
 
-            await s.commit()
+            if own_session:
+                await s.commit()
+        finally:
+            if own_session:
+                await s.close()
 
         # --- Sparse: update BM25 index ---
         self._lazy_init_bm25()
@@ -115,7 +123,9 @@ class RagService:
         session: Optional[AsyncSession] = None,
     ) -> None:
         """Embed and store a column's text representation."""
-        async with session or async_session_maker() as s:
+        own_session = session is None
+        s = session or async_session_maker()
+        try:
             # Проверяем существующую запись
             existing = await s.execute(
                 select(ColumnEmbedding).where(ColumnEmbedding.column_id == column_id)
@@ -141,9 +151,20 @@ class RagService:
                 s.add(embedding)
                 logger.debug("Created embedding for column {}", column_id)
             
-            await s.commit()
+            if own_session:
+                await s.commit()
+        finally:
+            if own_session:
+                await s.close()
 
-        logger.info("Column {} indexed (dense)", column_id)
+        # --- Sparse: update BM25 index ---
+        self._lazy_init_bm25()
+        if self._bm25 is not None:
+            self._bm25.add_chunks([text], metadata=[{"source_type": "column", "source_id": column_id}])
+            self._bm25.build()
+            self._bm25_dirty = True
+
+        logger.info("Column {} indexed (dense + BM25)", column_id)
 
     async def build_index_for_file(
         self,
@@ -235,6 +256,9 @@ class RagService:
                 model_name=settings.OLLAMA_EMBED_MODEL,
             )
             session.add(chunk_emb)
+
+        # Коммитим добавленные чанки (сессия внешняя, но commit необходим)
+        await session.commit()
 
         # Также добавляем в BM25
         self._lazy_init_bm25()
@@ -338,9 +362,14 @@ class RagService:
         session: Optional[AsyncSession] = None,
     ) -> None:
         """Rebuild the full BM25 index from all chunk embeddings in the DB."""
-        async with session or async_session_maker() as s:
+        own_session = session is None
+        s = session or async_session_maker()
+        try:
             result = await s.execute(select(ChunkEmbedding))
             records = result.scalars().all()
+        finally:
+            if own_session:
+                await s.close()
 
         chunks = [r.source_text for r in records if r.source_text]
         if chunks:
@@ -422,11 +451,19 @@ class RagService:
         """Load BM25 index from disk if available."""
         if self._bm25_path.exists():
             self._bm25 = BM25Index()
-            self._bm25.load(self._bm25_path)
-            self._bm25_dirty = False
-            logger.info(
-                "BM25 index loaded from disk ({} chunks)", self._bm25.size
-            )
+            try:
+                self._bm25.load(self._bm25_path)
+                self._bm25_dirty = False
+                logger.info(
+                    "BM25 index loaded from disk ({} chunks)", self._bm25.size
+                )
+            except (EOFError, pickle.UnpicklingError, ValueError) as exc:
+                logger.warning(
+                    "BM25 index file corrupted ({}), rebuilding from scratch", exc
+                )
+                self._bm25_path.unlink(missing_ok=True)
+                self._bm25 = BM25Index([])
+                self._bm25_dirty = True
 
     # ------------------------------------------------------------------
     # Internal helpers
