@@ -1,22 +1,13 @@
 import tempfile
 from pathlib import Path
 from typing import List
-
 from fastapi import APIRouter, Depends, UploadFile, HTTPException, Query
 from fastapi import File as FastAPIFile
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from src.core.db.database import get_db
 from src.core.logging_settings import logger
 from src.services.excel.ingestion_service import ExcelIngestionService
 from src.services.rag.rag_service import rag_service
-from src.services.db_tables.service import (
-    FileService,
-    SheetService,
-    ColumnService,
-    CellService,
-)
-
 from src.api.schemas import (
     FileResponse,
     FileListResponse,
@@ -27,6 +18,14 @@ from src.api.schemas import (
     CellResponse,
     UploadResponse,
 )
+from src.api.dependencies import (
+    CellServiceDependency,
+    FileServiceDependency,
+    SheetServiceDependency,
+    ColumnServiceDependency,
+    ExcelIngestionServiceDependency,
+)
+
 
 router = APIRouter(prefix="/files", tags=["files"])
 
@@ -36,8 +35,8 @@ MAX_FILE_SIZE = 50 * 1024 * 1024
 
 @router.post("/upload", response_model=UploadResponse, status_code=201)
 async def upload_file(
-    file: UploadFile = FastAPIFile(...),
-    session: AsyncSession = Depends(get_db),
+    service: ExcelIngestionServiceDependency,
+    file: UploadFile = FastAPIFile(...)
 ):
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in ALLOWED_EXTENSIONS:
@@ -58,7 +57,6 @@ async def upload_file(
         tmp_path = Path(tmp.name)
 
     try:
-        service = ExcelIngestionService(session)
         file_record = await service.process_file(tmp_path)
         logger.info("File uploaded successfully: id={}, filename={}", file_record.id, file_record.filename)
         return UploadResponse(
@@ -79,12 +77,11 @@ async def upload_file(
 
 @router.get("", response_model=FileListResponse)
 async def list_files(
+    service: FileServiceDependency,
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
     status: str = Query(None, description="Filter by status: uploaded / processed / error"),
-    session: AsyncSession = Depends(get_db),
 ):
-    service = FileService(session)
     files, total = await service.list_all(status=status, skip=skip, limit=limit)
 
     return FileListResponse(
@@ -96,9 +93,8 @@ async def list_files(
 @router.get("/{file_id}", response_model=FileDetailResponse)
 async def get_file(
     file_id: int,
-    session: AsyncSession = Depends(get_db),
+    service: FileServiceDependency,
 ):
-    service = FileService(session)
     file_record = await service.get_by_id(file_id)
     return FileDetailResponse.model_validate(file_record)
 
@@ -106,18 +102,16 @@ async def get_file(
 @router.delete("/{file_id}", status_code=204)
 async def delete_file(
     file_id: int,
-    session: AsyncSession = Depends(get_db),
+    service: FileServiceDependency
 ):
-    service = FileService(session)
     await service.delete(file_id)
 
 
 @router.get("/{file_id}/sheets", response_model=List[SheetResponse])
 async def get_file_sheets(
     file_id: int,
-    session: AsyncSession = Depends(get_db),
+    service: SheetServiceDependency
 ):
-    service = SheetService(session)
     sheets = await service.list_by_file(file_id)
     return [SheetResponse.model_validate(s) for s in sheets]
 
@@ -126,9 +120,8 @@ async def get_file_sheets(
 async def get_sheet_detail(
     file_id: int,
     sheet_id: int,
-    session: AsyncSession = Depends(get_db),
+    service: SheetServiceDependency
 ):
-    service = SheetService(session)
     sheet = await service.get_detail(file_id, sheet_id)
     return SheetDetailResponse.model_validate(sheet)
 
@@ -137,9 +130,8 @@ async def get_sheet_detail(
 async def get_sheet_columns(
     file_id: int,
     sheet_id: int,
-    session: AsyncSession = Depends(get_db),
+    service: ColumnServiceDependency
 ):
-    service = ColumnService(session)
     columns = await service.list_by_sheet(file_id, sheet_id)
     return [ColumnResponse.model_validate(c) for c in columns]
 
@@ -148,11 +140,10 @@ async def get_sheet_columns(
 async def get_sheet_cells(
     file_id: int,
     sheet_id: int,
+    service: CellServiceDependency,
     skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=10000),
-    session: AsyncSession = Depends(get_db),
+    limit: int = Query(100, ge=1, le=10000)
 ):
-    service = CellService(session)
     cells = await service.list_by_sheet(file_id, sheet_id, skip=skip, limit=limit)
     return [CellResponse.model_validate(c) for c in cells]
 
@@ -160,11 +151,10 @@ async def get_sheet_cells(
 @router.post("/{file_id}/reindex", status_code=200)
 async def reindex_file(
     file_id: int,
+    service: FileServiceDependency,
     session: AsyncSession = Depends(get_db),
 ):
-    # Verify file exists via service
-    file_service = FileService(session)
-    await file_service.get_by_id(file_id)
+    await service.get_by_id(file_id)
 
     logger.info("Reindexing file id={}", file_id)
     await rag_service.build_index_for_file(file_id, session=session)

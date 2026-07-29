@@ -1,11 +1,10 @@
 from __future__ import annotations
 from typing import List
-
-from fastapi import APIRouter, HTTPException, Query
-
+from fastapi import APIRouter, Query
 from src.api.schemas import TraceResponse, TraceStepInfo
 from src.core.logging_settings import logger
-from src.services.db_tables.service import TraceService
+from src.services.db_tables.query_log_service.service import TraceService
+
 
 router = APIRouter(prefix="/trace", tags=["traceability"])
 
@@ -17,7 +16,8 @@ async def list_traces(
 ) -> List[dict]:
     logger.info("List traces: limit={}, offset={}", limit, offset)
 
-    logs = await TraceService.list_all(skip=offset, limit=limit)
+    service = TraceService()
+    logs = await service.list_all(skip=offset, limit=limit)
 
     return [
         {
@@ -35,7 +35,8 @@ async def list_traces(
 async def get_trace(request_id: str) -> TraceResponse:
     logger.info("Trace request: request_id='{}'", request_id)
 
-    log = await TraceService.get_by_request_id(request_id)
+    service = TraceService()
+    log = await service.get_by_request_id(request_id)
 
     trace_data = log.trace or {}
     result_data = log.result or {}

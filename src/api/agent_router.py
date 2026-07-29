@@ -18,7 +18,6 @@ def _history_to_dicts(history):
 
 
 def _sources_from_chunks(chunks: List[HybridSearchResult]) -> List[SourceInfo]:
-    """Convert HybridSearchResult list to SourceInfo list."""
     return [
         SourceInfo(
             chunk=s.chunk[:200],
@@ -32,7 +31,6 @@ def _sources_from_chunks(chunks: List[HybridSearchResult]) -> List[SourceInfo]:
 
 
 def _build_rag_response(result: GenerationResult, mode_used: str) -> AskResponse:
-    """Build AskResponse from a RAG pipeline result."""
     return AskResponse(
         answer=result.answer,
         confidence=result.verification.confidence,
@@ -44,7 +42,6 @@ def _build_rag_response(result: GenerationResult, mode_used: str) -> AskResponse
 
 
 def _build_agent_response(result: AgentResult) -> AskResponse:
-    """Build AskResponse from an agent result."""
     return AskResponse(
         answer=result.answer,
         confidence=result.confidence,
