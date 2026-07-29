@@ -8,9 +8,10 @@ from src.core.excel.schemas import ParsedFile
 from src.core.excel.table_structurer import FactPriceRow, TableStructurer
 from src.core.excel.comment_extractor import ParsedComment
 from src.services.rag.entity_resolver import EntityResolver, normalize_name
+from src.services.excel.base import ExcelRepository
 
 
-class ExcelRepository:
+class SQLAlchemyExcelRepository(ExcelRepository):
     def __init__(self, session: AsyncSession):
         self.session = session
         self._entity_resolver = EntityResolver()
@@ -26,7 +27,6 @@ class ExcelRepository:
         await self.session.flush()
 
         for sheet in parsed.sheets:
-            # Определяем период из названия листа
             period = TableStructurer(sheet).period
 
             sheet_record = Sheet(
@@ -41,7 +41,6 @@ class ExcelRepository:
             self.session.add(sheet_record)
             await self.session.flush()
 
-            # Сохраняем колонки
             for header in sheet.headers:
                 col_record = ColumnMetadata(
                     sheet_id=sheet_record.id,
@@ -53,7 +52,6 @@ class ExcelRepository:
                 self.session.add(col_record)
             await self.session.flush()
 
-            # Сохраняем ячейки (original cells grid — для обратной совместимости)
             for row_idx, row_data in enumerate(sheet.data):
                 for col_name, value in row_data.items():
                     if value is not None and value != "":
@@ -69,7 +67,6 @@ class ExcelRepository:
                             )
                             self.session.add(cell_record)
 
-            # Сохраняем нормализованные факт-записи (FactPrice)
             await self._save_fact_prices(sheet_record, sheet)
 
         await self.session.commit()
@@ -87,7 +84,6 @@ class ExcelRepository:
         sheet_id: int,
         comments: List[ParsedComment],
     ) -> None:
-        """Сохраняет Excel-комментарии для листа."""
         for comment in comments:
             record = ExcelComment(
                 sheet_id=sheet_id,
@@ -108,15 +104,13 @@ class ExcelRepository:
         sheet_record: Sheet,
         parsed_sheet: Any,
     ) -> None:
-        """Структурирует лист в факт-таблицу и сохраняет."""
         structurer = TableStructurer(parsed_sheet)
         fact_rows: List[FactPriceRow] = structurer.structure()
 
         if not fact_rows:
             logger.debug("No fact rows for sheet '{}'", parsed_sheet.sheet_name)
             return
-
-        # Собираем уникальные названия для entity resolution
+        
         unique_names = list(set(r.item_name_raw for r in fact_rows))
         resolved = await self._entity_resolver.resolve_batch(unique_names, session=self.session)
 

@@ -9,16 +9,16 @@ from src.core.excel.parser import ExcelParser
 from src.core.excel.schemas import ParsedFile
 from src.core.excel.normalize import ExcelNormalizer
 from src.core.excel.comment_extractor import extract_comments
-from src.services.excel.repository import ExcelRepository
+from src.services.excel.repository import SQLAlchemyExcelRepository
 from src.services.rag.rag_service import rag_service
 
 
 class ExcelIngestionService:
     def __init__(self, session: Optional[AsyncSession] = None):
         self._session = session
+        self.repository = SQLAlchemyExcelRepository(session)
 
     async def _run_with_session(self, action, *, commit: bool = True):
-        """Execute an async action with a session, creating one if needed."""
         if self._session:
             return await action(self._session)
         async with async_session_maker() as session:
@@ -45,8 +45,7 @@ class ExcelIngestionService:
 
         # 3. Сохраняем в БД (включая нормализованные fact_prices)
         async def _save(session):
-            repo = ExcelRepository(session)
-            return await repo.save_parsed_file(parsed)
+            return await self.repository.save_parsed_file(parsed)
 
         file_record = await self._run_with_session(_save)
 
@@ -55,7 +54,6 @@ class ExcelIngestionService:
             comments = extract_comments(file_path)
             if comments:
                 async with async_session_maker() as session:
-                    repo = ExcelRepository(session)
                     sheet_result = await session.execute(
                         select(Sheet).where(
                             Sheet.file_id == file_record.id,
@@ -64,11 +62,10 @@ class ExcelIngestionService:
                     )
                     sheet_record = sheet_result.scalar_one_or_none()
                     if sheet_record:
-                        await repo.save_comments(sheet_record.id, comments)
+                        await self.repository.save_comments(sheet_record.id, comments)
         except Exception as exc:
             logger.warning("Comment extraction failed (non-fatal): {}", exc)
 
-        # 5. Индексируем файл в векторную БД + BM25
         try:
             logger.info("Indexing file {} in vector database...", file_record.id)
             await rag_service.build_index_for_file(file_record.id, session=self._session)
