@@ -69,7 +69,10 @@
   padding: 0;
 }
 
-html { font-size: 15px; }
+html {
+  font-size: 15px;
+  scroll-behavior: smooth;
+}
 
 body {
   font-family: var(--font);
@@ -82,6 +85,56 @@ body {
   position: relative;
 }
 
+/* ---------- Global Smooth Scroll ---------- */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Плавный скролл для всех прокручиваемых контейнеров */
+.scrollable,
+.main,
+.page,
+.panel,
+.chat-messages,
+.file-list,
+.details-content,
+.trace-result,
+.dashboard,
+.trace-history__list,
+.modal__body,
+#pageTraceHistoryList,
+#pageTraceResult,
+#filesDetailContent {
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Кастомный скроллбар (улучшенный) */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(200, 168, 78, 0.15);
+  border-radius: 3px;
+  transition: background 0.2s ease;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(200, 168, 78, 0.35);
+}
 /* ---------- Animated Background ---------- */
 .bg-particles {
   position: fixed;

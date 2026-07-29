@@ -177,6 +177,41 @@ function scrollToBottom(el) {
   });
 }
 
+/**
+ * Плавный скролл страницы к указанному элементу
+ * @param {HTMLElement|string} target - элемент или CSS-селектор
+ * @param {Object} options - { offset, behavior, block }
+ */
+function scrollToElement(target, options = {}) {
+  const el = typeof target === 'string' ? document.querySelector(target) : target;
+  if (!el) return;
+
+  const {
+    offset = 0,
+    behavior = 'smooth',
+    block = 'start',
+  } = options;
+
+  const top = el.getBoundingClientRect().top + window.scrollY - offset;
+  window.scrollTo({ top, behavior });
+
+  // Для контейнеров с overflow: auto
+  const scrollableParent = el.closest('.scrollable, .chat-messages, .file-list, .dashboard, .trace-result, .details-content');
+  if (scrollableParent) {
+    const parentTop = el.getBoundingClientRect().top - scrollableParent.getBoundingClientRect().top + scrollableParent.scrollTop - offset;
+    scrollableParent.scrollTo({ top: parentTop, behavior });
+  }
+}
+
+/**
+ * Плавный скролл в конец прокручиваемого контейнера
+ * @param {HTMLElement} el - контейнер
+ */
+function scrollToBottomSmooth(el) {
+  if (!el) return;
+  el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+}
+
 function escapeHtml(str) {
   if (str === null || str === undefined) return '';
   const div = document.createElement('div');
@@ -396,6 +431,12 @@ function navigateTo(page) {
   Object.entries(dom.pages).forEach(([key, el]) => {
     el.classList.toggle('page--active', key === page);
   });
+
+  // Плавный скролл страницы вверх при переключении
+  const mainEl = document.querySelector('.main');
+  if (mainEl) {
+    mainEl.scrollTo({ top: 0, behavior: 'smooth' });
+  }
 
   // Загружаем данные для дашборда при переходе
   if (page === 'dashboard') {
