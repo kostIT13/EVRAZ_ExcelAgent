@@ -1,3 +1,4 @@
+import re
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from loguru import logger
@@ -154,7 +155,6 @@ class ExcelRepository:
         return result.scalar_one_or_none()
 
     def _normalize_name(self, name: str) -> str:
-        import re
         name = re.sub(r'[^\w\s]', '', name)
         name = re.sub(r'\s+', '_', name)
         name = name.lower().strip('_')

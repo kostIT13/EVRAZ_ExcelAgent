@@ -112,7 +112,20 @@ class LLMClient:
             return [0.0] * settings.EMBED_DIMENSION
 
     async def embed_batch(self, texts: List[str]) -> List[List[float]]:
-        return [await self.embed(t) for t in texts]
+        """Embed multiple texts in a single API call (batch)."""
+        if not texts:
+            return []
+        try:
+            resp = await self._embed.embeddings.create(
+                model=self._embed_model,
+                input=texts,
+            )
+            # Sort by index to preserve original order
+            sorted_data = sorted(resp.data, key=lambda x: x.index)
+            return [item.embedding for item in sorted_data]
+        except Exception as exc:
+            logger.error("Batch embedding failed: {}", exc)
+            return [[0.0] * settings.EMBED_DIMENSION for _ in texts]
 
     @staticmethod
     async def _call(

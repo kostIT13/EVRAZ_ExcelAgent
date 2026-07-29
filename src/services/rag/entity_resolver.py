@@ -12,14 +12,14 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-from sqlalchemy import select, or_
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.db.database import async_session_maker
 from src.core.db.models import EntityDictionary
 from src.core.logging_settings import logger
 from src.services.llm.llm_client import LLMClient
-from src.services.rag.embedder import Embedder
+from src.services.rag.embedder import Embedder, cosine_similarity
 
 
 # Порог для fuzzy matching
@@ -272,7 +272,6 @@ class EntityResolver:
                 scored = []
                 for entity in all_entities:
                     if entity.embedding:
-                        from src.services.rag.embedder import cosine_similarity
                         sim = cosine_similarity(name_embedding, entity.embedding)
                         if sim >= 0.7:
                             scored.append({

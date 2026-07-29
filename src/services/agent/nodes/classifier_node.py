@@ -1,6 +1,7 @@
 from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
+from sqlalchemy import select
 from src.core.db.database import async_session_maker
 from src.core.db.models import Sheet
 from src.core.logging_settings import logger
@@ -40,8 +41,6 @@ CLASSIFIER_SYSTEM_PROMPT = """Ты — классификатор запросо
 
 async def get_all_sheets() -> List[Dict[str, Any]]:
     async with async_session_maker() as session:
-        from sqlalchemy import select
-
         result = await session.execute(
             select(Sheet.id, Sheet.normalized_name, Sheet.description)
         )

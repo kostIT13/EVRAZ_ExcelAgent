@@ -1,8 +1,9 @@
 from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
+from sqlalchemy import select
 from src.core.db.database import async_session_maker
-from src.core.db.models import ColumnMetadata, Sheet
+from src.core.db.models import ColumnMetadata, Sheet, FactPrice
 from src.core.logging_settings import logger
 from src.services.agent.graph_state import (
     GraphState,
@@ -43,8 +44,6 @@ async def get_sheet_schema(sheet_ids: List[int]) -> List[Dict[str, Any]]:
         return []
 
     async with async_session_maker() as session:
-        from sqlalchemy import select
-
         sheets_result = await session.execute(
             select(Sheet).where(Sheet.id.in_(sheet_ids))
         )
@@ -73,7 +72,6 @@ async def get_sheet_schema(sheet_ids: List[int]) -> List[Dict[str, Any]]:
                 if col.sheet_id == sid
             ]
 
-            from src.core.db.models import FactPrice
             fact_result = await session.execute(
                 select(FactPrice)
                 .where(FactPrice.sheet_id == sid)

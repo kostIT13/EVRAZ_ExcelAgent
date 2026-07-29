@@ -1,15 +1,64 @@
 from __future__ import annotations
 
+from typing import List
+
 from fastapi import APIRouter, HTTPException
 from src.api.schemas import AskRequest, AskResponse, SourceInfo
 from src.core.logging_settings import logger
-from src.services.generation.pipeline import pipeline
+from src.services.generation.pipeline import pipeline, GenerationResult
+from src.services.agent.graph import AgentResult
+from src.services.rag.hybrid import HybridSearchResult
+
 
 router = APIRouter(prefix="/ask", tags=["rag"])
 
 
 def _history_to_dicts(history):
     return [{"role": t.role, "content": t.content} for t in history]
+
+
+def _sources_from_chunks(chunks: List[HybridSearchResult]) -> List[SourceInfo]:
+    """Convert HybridSearchResult list to SourceInfo list."""
+    return [
+        SourceInfo(
+            chunk=s.chunk[:200],
+            score=s.score,
+            source_type=s.source_type,
+            source_id=s.source_id,
+            rank=s.rank,
+        )
+        for s in chunks
+    ]
+
+
+def _build_rag_response(result: GenerationResult, mode_used: str) -> AskResponse:
+    """Build AskResponse from a RAG pipeline result."""
+    return AskResponse(
+        answer=result.answer,
+        confidence=result.verification.confidence,
+        sources=_sources_from_chunks(result.retrieved_chunks),
+        request_id=result.request_id,
+        latency_ms=result.latency_ms,
+        mode_used=mode_used,
+    )
+
+
+def _build_agent_response(result: AgentResult) -> AskResponse:
+    """Build AskResponse from an agent result."""
+    return AskResponse(
+        answer=result.answer,
+        confidence=result.confidence,
+        sources=[],
+        request_id=result.request_id,
+        latency_ms=result.latency_ms,
+        mode_used="agent",
+        query_type=result.query_type,
+        sql_query=result.sql_query,
+        sql_result_preview=result.sql_result[:10],
+        retry_count=result.retry_count,
+        status=result.status,
+        self_corrected=result.self_corrected,
+    )
 
 
 @router.post("", response_model=AskResponse)
@@ -32,24 +81,7 @@ async def ask_question(request: AskRequest) -> AskResponse:
                 top_k=request.top_k,
                 conversation_history=history_dicts,
             )
-
-            return AskResponse(
-                answer=result.answer,
-                confidence=result.verification.confidence,
-                sources=[
-                    SourceInfo(
-                        chunk=s.chunk[:200],
-                        score=s.score,
-                        source_type=s.source_type,
-                        source_id=s.source_id,
-                        rank=s.rank,
-                    )
-                    for s in result.retrieved_chunks
-                ],
-                request_id=result.request_id,
-                latency_ms=result.latency_ms,
-                mode_used="rag",
-            )
+            return _build_rag_response(result, mode_used="rag")
 
         agent_result = await pipeline.run_agent(
             question=request.question,
@@ -67,39 +99,9 @@ async def ask_question(request: AskRequest) -> AskResponse:
                 top_k=request.top_k,
                 conversation_history=history_dicts,
             )
+            return _build_rag_response(rag_result, mode_used="rag_fallback")
 
-            return AskResponse(
-                answer=rag_result.answer,
-                confidence=rag_result.verification.confidence,
-                sources=[
-                    SourceInfo(
-                        chunk=s.chunk[:200],
-                        score=s.score,
-                        source_type=s.source_type,
-                        source_id=s.source_id,
-                        rank=s.rank,
-                    )
-                    for s in rag_result.retrieved_chunks
-                ],
-                request_id=rag_result.request_id,
-                latency_ms=rag_result.latency_ms,
-                mode_used="rag_fallback",
-            )
-
-        return AskResponse(
-            answer=agent_result.answer,
-            confidence=agent_result.confidence,
-            sources=[],  
-            request_id=agent_result.request_id,
-            latency_ms=agent_result.latency_ms,
-            mode_used="agent",
-            query_type=agent_result.query_type,
-            sql_query=agent_result.sql_query,
-            sql_result_preview=agent_result.sql_result[:10],
-            retry_count=agent_result.retry_count,
-            status=agent_result.status,
-            self_corrected=agent_result.self_corrected,
-        )
+        return _build_agent_response(agent_result)
 
     except Exception as exc:
         logger.error("Ask request failed: {}", exc)

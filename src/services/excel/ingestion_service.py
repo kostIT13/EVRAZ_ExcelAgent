@@ -1,9 +1,7 @@
 from pathlib import Path
 from typing import Optional, List
-
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from src.core.logging_settings import logger
 from src.core.db.models import File, Sheet
 from src.core.db.database import async_session_maker
@@ -18,6 +16,16 @@ from src.services.rag.rag_service import rag_service
 class ExcelIngestionService:
     def __init__(self, session: Optional[AsyncSession] = None):
         self._session = session
+
+    async def _run_with_session(self, action, *, commit: bool = True):
+        """Execute an async action with a session, creating one if needed."""
+        if self._session:
+            return await action(self._session)
+        async with async_session_maker() as session:
+            result = await action(session)
+            if commit:
+                await session.commit()
+            return result
 
     async def process_file(self, file_path: Path) -> File:
         if not file_path.exists():
@@ -36,12 +44,11 @@ class ExcelIngestionService:
         self._normalize_parsed(parsed)
 
         # 3. Сохраняем в БД (включая нормализованные fact_prices)
-        if self._session:
-            file_record = await self._save_with_session(parsed)
-        else:
-            async with async_session_maker() as session:
-                repo = ExcelRepository(session)
-                file_record = await repo.save_parsed_file(parsed)
+        async def _save(session):
+            repo = ExcelRepository(session)
+            return await repo.save_parsed_file(parsed)
+
+        file_record = await self._run_with_session(_save)
 
         # 4. Извлекаем и сохраняем Excel-комментарии
         try:
@@ -49,14 +56,10 @@ class ExcelIngestionService:
             if comments:
                 async with async_session_maker() as session:
                     repo = ExcelRepository(session)
-                    # Комментарии не привязаны к sheet_name напрямую,
-                    # сохраняем все к первому листу (или распределяем по sheet_index)
-                    # В текущей реализации комментарии не имеют sheet_name,
-                    # поэтому сохраняем их все к первому листу файла
                     sheet_result = await session.execute(
                         select(Sheet).where(
                             Sheet.file_id == file_record.id,
-                            Sheet.sheet_index == 0,  # первый лист
+                            Sheet.sheet_index == 0,
                         )
                     )
                     sheet_record = sheet_result.scalar_one_or_none()
@@ -76,40 +79,35 @@ class ExcelIngestionService:
                 exc,
             )
 
-        logger.info(
-            "Ingestion complete: file_id={}, filename={}",
-            file_record.id,
-            file_record.filename,
-        )
+        logger.info("Ingestion complete: file_id={}, filename={}", file_record.id, file_record.filename)
         return file_record
-
-    async def _save_with_session(self, parsed: ParsedFile) -> File:
-        repo = ExcelRepository(self._session)
-        return await repo.save_parsed_file(parsed)
 
     def _normalize_parsed(self, parsed: ParsedFile) -> None:
         for sheet in parsed.sheets:
             sheet.headers = [ExcelNormalizer.normalize_header(h) for h in sheet.headers]
-
             for header in sheet.headers:
                 sample_values = ExcelNormalizer.extract_sample_values(sheet.data, header.col_name)
                 col_type = ExcelNormalizer.infer_column_type(header, sample_values)
                 logger.debug("Column '{}' → type={}, samples={}", header.col_name, col_type, sample_values[:3])
 
     async def get_file(self, file_id: int) -> Optional[File]:
-        async with async_session_maker() as session:
+        async def _get(session):
             result = await session.execute(select(File).where(File.id == file_id))
             return result.scalar_one_or_none()
 
+        return await self._run_with_session(_get, commit=False)
+
     async def list_files(self, skip: int = 0, limit: int = 100) -> List[File]:
-        async with async_session_maker() as session:
+        async def _list(session):
             result = await session.execute(
                 select(File).order_by(File.uploaded_at.desc()).offset(skip).limit(limit)
             )
             return list(result.scalars().all())
 
+        return await self._run_with_session(_list, commit=False)
+
     async def delete_file(self, file_id: int) -> bool:
-        async with async_session_maker() as session:
+        async def _delete(session):
             result = await session.execute(select(File).where(File.id == file_id))
             file_record = result.scalar_one_or_none()
             if not file_record:
@@ -118,3 +116,5 @@ class ExcelIngestionService:
             await session.commit()
             logger.info("Deleted file id={}", file_id)
             return True
+
+        return await self._run_with_session(_delete)

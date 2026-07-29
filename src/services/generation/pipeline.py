@@ -266,22 +266,17 @@ class GenerationPipeline:
         }
 
         async with session or async_session_maker() as s:
-            log = QueryLog(
+            s.add(QueryLog(
                 request_id=request_id,
                 question=question,
                 result={"answer": answer},
                 trace=trace,
                 latency_ms=latency_ms,
                 status="success" if verification.passed else "low_confidence",
-            )
-            s.add(log)
+            ))
             await s.commit()
 
-        logger.info(
-            "Pipeline [{}]: logged to DB (latency={}ms)",
-            request_id[:8],
-            latency_ms,
-        )
+        logger.info("Pipeline [{}]: logged to DB (latency={}ms)", request_id[:8], latency_ms)
 
     async def _log_agent_to_db(
         self,
@@ -298,15 +293,14 @@ class GenerationPipeline:
         }
 
         async with session or async_session_maker() as s:
-            log = QueryLog(
+            s.add(QueryLog(
                 request_id=result.request_id,
                 question=result.question,
                 result={"answer": result.answer},
                 trace=trace,
                 latency_ms=result.latency_ms,
                 status=result.status,
-            )
-            s.add(log)
+            ))
             await s.commit()
 
         logger.info(

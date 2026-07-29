@@ -178,7 +178,7 @@ class TableStructurer:
         return False
 
     def _is_price_column(self, header: ParsedHeader, col_index: int) -> bool:
-        if col_index <= 4:
+        if col_index <= COL_QUANTITY:
             return False
 
         # Проверяем, что колонка не является служебной (номер строки, примечание и т.д.)
