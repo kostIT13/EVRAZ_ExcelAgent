@@ -26,7 +26,7 @@ SELF_CORRECT_INSTRUCTION = """
 """
 
 
-def format_context(results: List[HybridSearchResult], max_chars: int = 48000) -> str:
+def format_context(results: List[HybridSearchResult], max_chars: int = 64000) -> str:
     parts: List[str] = []
     total = 0
 

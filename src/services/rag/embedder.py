@@ -11,24 +11,63 @@ from src.core.logging_settings import logger
 from src.services.llm.llm_client import LLMClient
 
 
+MAX_EMBED_CHARS = 18000
+
+
+def _truncate_text_for_embed(text: str, max_chars: int = MAX_EMBED_CHARS) -> str:
+    """Обрезает текст до безопасного лимита для модели эмбеддинга.
+    
+    Модель BAAI/bge-m3 имеет контекст 8192 токенов.
+    Обрезаем по границе абзаца или предложения, чтобы сохранить смысл.
+    """
+    if len(text) <= max_chars:
+        return text
+    # Пробуем обрезать по границе абзаца
+    truncated = text[:max_chars]
+    last_para = truncated.rfind("\n\n")
+    if last_para > max_chars // 2:
+        result = text[:last_para]
+        logger.warning("Text truncated for embedding from {} to {} chars (by paragraph)", len(text), len(result))
+        return result
+    # Пробуем обрезать по границе предложения
+    last_sentence = max(truncated.rfind(". "), truncated.rfind(".\n"))
+    if last_sentence > max_chars // 2:
+        result = text[:last_sentence + 1]
+        logger.warning("Text truncated for embedding from {} to {} chars (by sentence)", len(text), len(result))
+        return result
+    # Обрезаем по границе слова
+    last_space = truncated.rfind(" ")
+    if last_space > max_chars // 2:
+        result = text[:last_space]
+        logger.warning("Text truncated for embedding from {} to {} chars (by word)", len(text), len(result))
+        return result
+    logger.warning("Text truncated for embedding from {} to {} chars (hard cut)", len(text), len(truncated))
+    return truncated
+
+
 class Embedder:
     def __init__(self, llm: Optional[LLMClient] = None) -> None:
         self._llm = llm or LLMClient()
         self._dim: int = settings.EMBED_DIMENSION
 
     async def embed(self, text: str) -> List[float]:
-        cached = await self._load_from_cache(text)
+        # Обрезаем текст до безопасного лимита модели
+        safe_text = _truncate_text_for_embed(text)
+        
+        cached = await self._load_from_cache(safe_text)
         if cached is not None:
             return cached
 
-        vector = await self._llm.embed(text)
+        vector = await self._llm.embed(safe_text)
 
-        await self._save_to_cache(text, vector)
+        await self._save_to_cache(safe_text, vector)
 
         return vector
 
     async def embed_batch(self, texts: List[str]) -> List[List[float]]:
-        return [await self.embed(t) for t in texts]
+        # Обрезаем каждый текст перед эмбеддингом
+        safe_texts = [_truncate_text_for_embed(t) for t in texts]
+        return [await self.embed(t) for t in safe_texts]
 
     @staticmethod
     def _hash_query(query: str) -> str:

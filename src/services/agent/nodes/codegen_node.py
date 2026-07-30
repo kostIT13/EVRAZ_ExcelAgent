@@ -197,11 +197,16 @@ async def codegen_node(
     plan = state.get("plan", "")
     rag_context = state.get("rag_context", "")
     schema = state.get("schema", [])
+    retry_count = state.get("retry_count", 0)
+    retry_reason = state.get("retry_reason", "")
+    prev_sql = state.get("sql_query", "")
 
     logger.info(
-        "CodeGen Node [{}]: generating SQL for type={}",
+        "CodeGen Node [{}]: generating SQL for type={}, retry #{}, reason='{}'",
         request_id,
         query_type.value if query_type else "?",
+        retry_count,
+        retry_reason,
     )
 
     schema_json = json.dumps(schema, ensure_ascii=False, indent=2)
@@ -216,7 +221,24 @@ async def codegen_node(
         for ex in FEW_SHOT_EXAMPLES
     )
 
-    user_message = f"""Вопрос пользователя: {question}{rag_section}
+    # Секция с информацией о предыдущей неудачной попытке
+    retry_section = ""
+    if retry_count > 0 and prev_sql:
+        retry_section = f"""
+ПРЕДЫДУЩАЯ ПОПЫТКА (ретрай #{retry_count}):
+Причина ретрая: {retry_reason or 'не указана'}
+Предыдущий SQL (не нашёл данных):
+{prev_sql}
+
+ИСПРАВЬ предыдущий SQL с учётом причины ретрая. Возможные исправления:
+- Если причина 'empty_result' — попробуй убрать или смягчить условия WHERE (особенно price_source),
+  используй более короткие ILIKE-маски для item_name_normalized (без лишних цифр и символов),
+  или убери LIMIT чтобы увидеть все доступные данные
+- Если причина 'wrong_filter' — исправь условия фильтрации
+- Если причина 'wrong_table' — используй правильную таблицу
+"""
+
+    user_message = f"""Вопрос пользователя: {question}{rag_section}{retry_section}
 
 Тип запроса: {query_type.value if query_type else 'unknown'}
 Сущности: {', '.join(entities) if entities else 'не определены'}
@@ -241,6 +263,12 @@ async def codegen_node(
 2. Посмотреть точный формат item_name_normalized для правильного ILIKE-поиска
 3. Посмотреть точный формат period для правильной фильтрации
 4. Посмотреть какие price_source доступны
+
+КРИТИЧЕСКОЕ ПРАВИЛО ДЛЯ ILIKE:
+- Используй ТОЛЬКО те значения item_name_normalized, которые реально перечислены в fact_prices_samples
+- НЕ выдумывай свои ILIKE-маски — если в fact_prices_samples нет названия, не включай его в поиск
+- Если в fact_prices_samples есть "лом алюминия стружка", используй ILIKE '%лом алюминия стружка%' или ILIKE '%стружка%', но НЕ '%алюминия стружка%' если такого нет в samples
+- Для поиска по поставщику используй ILIKE с частью названия из price_source в fact_prices_samples
 
 Пример: если fact_prices_samples содержит item_name_normalized = "лом меди стружка", то ILIKE '%медь%' или ILIKE '%стружка%' сработает."""
 

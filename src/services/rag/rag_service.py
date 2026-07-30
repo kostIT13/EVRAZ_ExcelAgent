@@ -59,9 +59,12 @@ class RagService:
         s = session or async_session_maker()
         try:
             result = await action(s)
-            if own_session and commit:
+            if commit:
                 await s.commit()
             return result
+        except Exception:
+            await s.rollback()
+            raise
         finally:
             if own_session:
                 await s.close()
@@ -103,19 +106,28 @@ class RagService:
                     model_name=settings.OLLAMA_EMBED_MODEL,
                 ))
 
-            full_vector = await self._embedder.embed(text)
+            # Для full_vector используем компактное представление:
+            # только названия материалов (без цен), чтобы эмбеддинг листа был лёгким для поиска
+            # и не обрезался. Берём первые 18000 символов текста (безопасный лимит модели BAAI/bge-m3).
+            full_text = text[:18000]
+            # Обрезаем по границе последнего полного названия материала
+            last_material_end = full_text.rfind("\n\n")
+            if last_material_end > 100:
+                full_text = text[:last_material_end]
+            
+            full_vector = await self._embedder.embed(full_text)
             existing = await s.execute(
                 select(SheetEmbedding).where(SheetEmbedding.sheet_id == sheet_id)
             )
             existing_record = existing.scalar_one_or_none()
             if existing_record:
-                existing_record.source_text = text[:10000]
+                existing_record.source_text = full_text[:10000]
                 existing_record.embedding = full_vector
                 existing_record.model_name = settings.OLLAMA_EMBED_MODEL
             else:
                 s.add(SheetEmbedding(
                     sheet_id=sheet_id,
-                    source_text=text[:10000],
+                    source_text=full_text[:10000],
                     embedding=full_vector,
                     model_name=settings.OLLAMA_EMBED_MODEL,
                 ))
@@ -168,7 +180,9 @@ class RagService:
         session: Optional[AsyncSession] = None,
     ) -> None:
         """Build dense + BM25 index for all sheets and columns of a file."""
-        async with session or async_session_maker() as s:
+        own_session = session is None
+        s = session or async_session_maker()
+        try:
             sheets_result = await s.execute(
                 select(Sheet).where(Sheet.file_id == file_id)
             )
@@ -200,7 +214,19 @@ class RagService:
 
                 await self._index_comments(sheet.id, s)
 
+            # Коммитим все оставшиеся изменения (включая _index_comments для последнего sheet)
+            await s.commit()
+
             logger.info("File {} fully indexed: {} sheets", file_id, len(sheets))
+        except Exception:
+            await s.rollback()
+            raise
+        finally:
+            if own_session:
+                await s.close()
+
+        # Сохраняем BM25 индекс после полной индексации файла
+        self.persist_bm25()
 
     async def _index_comments(
         self,
@@ -246,7 +272,11 @@ class RagService:
         session: AsyncSession,
         max_rows: int = 500,
     ) -> str:
-        """Build a text representation of a sheet for embedding."""
+        """Build a text representation of a sheet for embedding.
+        
+        Формат: структурированный текст, где каждый материал — отдельный блок.
+        Это улучшает качество chunking и поиска.
+        """
         parts = [
             f"Лист: {sheet.normalized_name}",
             f"период: {sheet.period or 'unknown'}",
@@ -272,14 +302,19 @@ class RagService:
         fact_rows = list(fact_result.scalars().all())
 
         if fact_rows:
+            # Группируем по материалам — каждый материал отдельный блок
             current_item = None
+            item_lines = []
             for fp in fact_rows:
                 if fp.item_name_normalized != current_item:
-                    if current_item is not None:
-                        parts.append("")
+                    if item_lines:
+                        parts.append("\n".join(item_lines))
+                        parts.append("")  # пустая строка между материалами
                     current_item = fp.item_name_normalized
-                    parts.append(f"{current_item}:")
-                parts.append(f"  {fp.price_source}: {fp.price_value} руб/тн")
+                    item_lines = [f"{current_item}:"]
+                item_lines.append(f"  {fp.price_source}: {fp.price_value} руб/тн")
+            if item_lines:
+                parts.append("\n".join(item_lines))
         else:
             parts.append("данные (все колонки):")
             col_names_map = {c.col_index: c.normalized_name for c in columns}
@@ -344,12 +379,28 @@ class RagService:
         query: str,
         top_k: int = 20,
     ) -> List[HybridSearchResult]:
-        """Run hybrid BM25 + Dense search."""
+        """Run hybrid BM25 + Dense search.
+        
+        Если dense search не дал результатов (эмбеддинги не загружены или модель не работает),
+        делает fallback на прямой SQL-поиск через ILIKE по fact_prices.
+        """
         self._lazy_init_bm25()
 
+        # Пробуем dense search
+        dense_results = await self._dense.search(query, top_k=top_k)
+
+        # Если dense search не дал результатов — делаем fallback на SQL
+        if not dense_results:
+            logger.warning(
+                "Dense search returned no results for '{}'. "
+                "Falling back to SQL ILIKE search.",
+                query[:60],
+            )
+            return await self._sql_fallback_search(query, top_k=top_k)
+
+        # Если BM25 пуст — используем только dense
         if self._bm25 is None or self._bm25.size == 0 or not self._bm25.is_built:
-            logger.warning("BM25 index is empty or not built; falling back to dense-only search")
-            dense_results = await self._dense.search(query, top_k=top_k)
+            logger.warning("BM25 index is empty or not built; using dense-only results")
             return [
                 HybridSearchResult(
                     chunk=r.chunk,
@@ -363,8 +414,106 @@ class RagService:
                 for r in dense_results
             ]
 
+        # Полноценный hybrid search
         hybrid = HybridRetriever(bm25_index=self._bm25, dense_retriever=self._dense, fusion="rrf")
         return await hybrid.search(query, top_k=top_k)
+
+    async def _sql_fallback_search(
+        self,
+        query: str,
+        top_k: int = 20,
+    ) -> List[HybridSearchResult]:
+        """Fallback: прямой SQL-поиск через ILIKE по fact_prices.
+        
+        Используется когда dense search не дал результатов (например,
+        эмбеддинги не загружены или модель эмбеддингов не работает).
+        """
+        from sqlalchemy import text
+        from src.core.db.database import async_session_maker
+
+        # Извлекаем ключевые слова из запроса
+        import re
+        keywords = re.findall(r'\w+', query.lower())
+        # Фильтруем стоп-слова
+        stop_words = {'какова', 'сколько', 'какая', 'какой', 'какие', 'каких', 'цена', 'цены',
+                      'цену', 'стоимость', 'была', 'составила', 'составил', 'составило',
+                      'за', 'на', 'в', 'по', 'с', 'о', 'об', 'от', 'для', 'и', 'или',
+                      'не', 'ни', 'да', 'нет', 'это', 'то', 'что', 'как', 'так', 'все',
+                      'весь', 'вся', 'всего', 'всей', 'всех', 'всем', 'всеми',
+                      'январь', 'февраль', 'март', 'апрель', 'май', 'июнь',
+                      'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь',
+                      'января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
+                      'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря',
+                      'месяц', 'месяце', 'месяца', 'месяцев', 'год', 'года', 'году',
+                      'лет', '2025', '2024', '2026'}
+        keywords = [k for k in keywords if k not in stop_words and len(k) > 2]
+
+        if not keywords:
+            logger.warning("No meaningful keywords extracted from '{}'", query[:60])
+            return []
+
+        # Строим ILIKE условия
+        like_conditions = " OR ".join(
+            f"fp.item_name_normalized ILIKE '%{kw}%'" for kw in keywords
+        )
+
+        sql = f"""
+        SELECT DISTINCT fp.item_name_normalized, fp.period, fp.price_source, fp.price_value,
+               fp.sheet_id
+        FROM fact_prices fp
+        WHERE {like_conditions}
+        ORDER BY fp.item_name_normalized, fp.period
+        LIMIT {top_k * 3}
+        """
+
+        logger.info(
+            "SQL fallback search: keywords={}, sql={}",
+            keywords,
+            sql[:200],
+        )
+
+        try:
+            async with async_session_maker() as s:
+                result = await s.execute(text(sql))
+                rows = result.fetchall()
+
+            if not rows:
+                logger.warning("SQL fallback search returned no results for keywords={}", keywords)
+                return []
+
+            # Группируем по материалу и формируем чанки
+            from collections import defaultdict
+            by_item = defaultdict(list)
+            for row in rows:
+                by_item[row[0]].append(row)
+
+            results = []
+            for rank, (item_name, item_rows) in enumerate(sorted(by_item.items())[:top_k]):
+                chunk_parts = [f"{item_name}:"]
+                for row in item_rows[:5]:  # макс 5 строк на материал
+                    chunk_parts.append(f"  {row[2]}: {row[3]} руб/тн (период: {row[1]})")
+                chunk_text = "\n".join(chunk_parts)
+
+                results.append(HybridSearchResult(
+                    chunk=chunk_text,
+                    score=1.0 - (rank * 0.05),  # убывающий score
+                    bm25_score=0.0,
+                    dense_score=0.0,
+                    rank=rank + 1,
+                    source_type="sql_fallback",
+                    source_id=item_rows[0][4] if item_rows else 0,
+                ))
+
+            logger.info(
+                "SQL fallback search: found {} items for keywords={}",
+                len(results),
+                keywords,
+            )
+            return results
+
+        except Exception as exc:
+            logger.error("SQL fallback search failed: {}", exc)
+            return []
 
     async def dense_search(self, query: str, top_k: int = 20) -> list:
         """Run dense-only search."""

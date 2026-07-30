@@ -103,12 +103,14 @@ class DenseRetriever:
     ) -> List[DenseSearchResult]:
         """Поиск по отдельным чанкам (строкам данных) — наиболее точный."""
         async with session or async_session_maker() as s:
+            # Используем cosine_distance напрямую и конвертируем в score
+            # через 1/(1+distance), чтобы всегда получать положительный score в (0, 1]
             stmt = (
                 select(
                     ChunkEmbedding.source_text,
                     ChunkEmbedding.sheet_id,
-                    (1 - ChunkEmbedding.embedding.cosine_distance(query_vector)).label(
-                        "score"
+                    ChunkEmbedding.embedding.cosine_distance(query_vector).label(
+                        "distance"
                     ),
                 )
                 .order_by(
@@ -119,10 +121,13 @@ class DenseRetriever:
             rows = await s.execute(stmt)
             results: List[DenseSearchResult] = []
             for rank, row in enumerate(rows, start=1):
+                distance = float(row.distance)
+                # Конвертируем distance в score: 1/(1+distance) даёт (0.33, 1.0] для distance [0, 2]
+                score = 1.0 / (1.0 + distance)
                 results.append(
                     DenseSearchResult(
                         chunk=row.source_text,
-                        score=float(row.score),
+                        score=score,
                         source_type="chunk",
                         source_id=row.sheet_id,
                         rank=rank,
@@ -141,8 +146,8 @@ class DenseRetriever:
                 select(
                     SheetEmbedding.source_text,
                     SheetEmbedding.sheet_id,
-                    (1 - SheetEmbedding.embedding.cosine_distance(query_vector)).label(
-                        "score"
+                    SheetEmbedding.embedding.cosine_distance(query_vector).label(
+                        "distance"
                     ),
                 )
                 .order_by(
@@ -153,10 +158,12 @@ class DenseRetriever:
             rows = await s.execute(stmt)
             results: List[DenseSearchResult] = []
             for rank, row in enumerate(rows, start=1):
+                distance = float(row.distance)
+                score = 1.0 / (1.0 + distance)
                 results.append(
                     DenseSearchResult(
                         chunk=row.source_text,
-                        score=float(row.score),
+                        score=score,
                         source_type="sheet",
                         source_id=row.sheet_id,
                         rank=rank,
@@ -175,8 +182,8 @@ class DenseRetriever:
                 select(
                     ColumnEmbedding.source_text,
                     ColumnEmbedding.column_id,
-                    (1 - ColumnEmbedding.embedding.cosine_distance(query_vector)).label(
-                        "score"
+                    ColumnEmbedding.embedding.cosine_distance(query_vector).label(
+                        "distance"
                     ),
                 )
                 .order_by(
@@ -187,10 +194,12 @@ class DenseRetriever:
             rows = await s.execute(stmt)
             results: List[DenseSearchResult] = []
             for rank, row in enumerate(rows, start=1):
+                distance = float(row.distance)
+                score = 1.0 / (1.0 + distance)
                 results.append(
                     DenseSearchResult(
                         chunk=row.source_text,
-                        score=float(row.score),
+                        score=score,
                         source_type="column",
                         source_id=row.column_id,
                         rank=rank,

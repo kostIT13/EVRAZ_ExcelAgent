@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     LLM_MODEL_CHEAP: str
 
     OLLAMA_BASE_URL: str
-    OLLAMA_EMBED_MODEL: str = "jeffh/intfloat-multilingual-e5-large:q8_0"
+    OLLAMA_EMBED_MODEL: str
     EMBED_DIMENSION: int = 1024
 
     LLM_TEMPERATURE: float = 0.1

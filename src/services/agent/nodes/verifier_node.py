@@ -48,6 +48,7 @@ MIN_CONFIDENCE_PASS = 0.5
 
 
 def _format_result_deterministically(sql_result: List[Dict[str, Any]], max_rows: int = 10) -> str:
+    """Форматирует результат SQL-запроса в читаемый русский текст."""
     if not sql_result:
         return "Данные не найдены."
 
@@ -56,13 +57,26 @@ def _format_result_deterministically(sql_result: List[Dict[str, Any]], max_rows:
 
     columns = list(rows[0].keys()) if rows else []
 
+    # Определяем, какие колонки есть в результате
+    has_period = any("period" in c.lower() for c in columns)
+    has_price = any("price" in c.lower() or "value" in c.lower() for c in columns)
+    has_item = any("item" in c.lower() or "name" in c.lower() for c in columns)
+    has_source = any("source" in c.lower() for c in columns)
+    has_max = any("max" in c.lower() for c in columns)
+    has_min = any("min" in c.lower() for c in columns)
+    has_avg = any("avg" in c.lower() or "average" in c.lower() for c in columns)
+
     lines = []
     for row in rows:
         parts = []
+
+        # Форматируем каждую колонку по-русски
         for col in columns:
             val = row.get(col)
             if val is None:
                 continue
+
+            # Форматируем число
             if isinstance(val, float):
                 if val == int(val):
                     val_str = f"{int(val):,}".replace(",", " ")
@@ -70,9 +84,34 @@ def _format_result_deterministically(sql_result: List[Dict[str, Any]], max_rows:
                     val_str = f"{val:,.2f}".replace(",", " ")
             else:
                 val_str = str(val)
-            parts.append(f"{col}: {val_str}")
+
+            col_lower = col.lower()
+
+            # Человеческие названия для известных колонок
+            if col_lower == "period":
+                parts.append(f"месяц: {val_str}")
+            elif col_lower == "price_value" or col_lower == "price":
+                parts.append(f"цена: {val_str} руб/тн")
+            elif col_lower == "price_source" or col_lower == "source":
+                parts.append(f"поставщик: {val_str}")
+            elif col_lower == "item_name_normalized" or col_lower == "item_name":
+                parts.append(f"материал: {val_str}")
+            elif "max" in col_lower and "price" in col_lower:
+                parts.append(f"макс. цена: {val_str} руб/тн")
+            elif "min" in col_lower and "price" in col_lower:
+                parts.append(f"мин. цена: {val_str} руб/тн")
+            elif "avg" in col_lower and "price" in col_lower:
+                parts.append(f"средняя цена: {val_str} руб/тн")
+            elif col_lower == "price_value_diff" or "diff" in col_lower:
+                parts.append(f"изменение: {val_str} руб/тн")
+            elif col_lower == "count" or col_lower == "cnt":
+                parts.append(f"количество: {val_str}")
+            else:
+                # Для неизвестных колонок — просто название как есть
+                parts.append(f"{col}: {val_str}")
+
         if parts:
-            lines.append("; ".join(parts))
+            lines.append(", ".join(parts))
 
     result = "\n".join(lines)
 
@@ -140,10 +179,43 @@ async def verifier_node(
 
     sanity_issues = _sanity_check_result(sql_result)
     if "empty_result" in sanity_issues:
+        # Анализируем SQL чтобы дать более конкретную причину
+        sql_lower = sql_query.lower()
+        retry_details = []
+
+        # Проверяем, есть ли фильтр по price_source
+        if "price_source" in sql_lower:
+            retry_details.append(
+                "фильтр по price_source возможно не соответствует данным — "
+                "попробуй убрать price_source из WHERE или использовать другое значение"
+            )
+
+        # Проверяем, есть ли LIMIT
+        if "limit" in sql_lower:
+            retry_details.append(
+                "LIMIT может отсекать результаты — попробуй убрать LIMIT или увеличить его"
+            )
+
+        # Проверяем, много ли условий в ILIKE
+        ilike_count = sql_lower.count("ilike")
+        if ilike_count >= 2:
+            retry_details.append(
+                f"много ILIKE-условий ({ilike_count}) — попробуй использовать одно ILIKE "
+                "с более короткой маской (без лишних цифр и символов)"
+            )
+
+        if not retry_details:
+            retry_details.append(
+                "SQL не нашёл данных — попробуй убрать или смягчить условия WHERE, "
+                "используй более короткие ILIKE-маски"
+            )
+
+        retry_reason = "empty_result: " + "; ".join(retry_details)
+
         state["answer"] = "Запрос не вернул данных."
         state["confidence"] = 0.0
         state["needs_retry"] = True
-        state["retry_reason"] = "empty_result"
+        state["retry_reason"] = retry_reason
         state["retry_count"] = retry_count + 1
 
         state["trace"] = state.get("trace", {})
@@ -151,7 +223,7 @@ async def verifier_node(
             "is_correct": False,
             "confidence": 0.0,
             "needs_retry": True,
-            "retry_reason": "empty_result",
+            "retry_reason": retry_reason,
             "sanity_issues": sanity_issues,
         }
         return state
