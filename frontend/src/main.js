@@ -1,6 +1,6 @@
 /**
  * EVRAZ AI Agent — Modern Frontend Application
- * Корпоративный дизайн ЕВРАЗ с дашбордом, чатом, файлами и трассировкой.
+ * Корпоративный дизайн ЕВРАЗ с чатом, файлами и трассировкой.
  */
 
 /* global console */
@@ -46,7 +46,7 @@ const state = {
   messages: [],
   isAsking: false,
   charts: [],
-  currentPage: 'dashboard',
+  currentPage: 'chat',
 };
 
 // ============================================================
@@ -62,21 +62,10 @@ const dom = {
   // Navigation
   navItems: $$('.nav__item'),
   pages: {
-    dashboard: $('#pageDashboard'),
     chat: $('#pageChat'),
     files: $('#pageFiles'),
     trace: $('#pageTrace'),
   },
-
-  // Dashboard
-  statFiles: $('#statFiles'),
-  statSheets: $('#statSheets'),
-  statMonths: $('#statMonths'),
-  statQueries: $('#statQueries'),
-  dashboardPriceChart: $('#dashboardPriceChart'),
-  dashboardSourceChart: $('#dashboardSourceChart'),
-  dashboardTopItemsChart: $('#dashboardTopItemsChart'),
-  recentActivity: $('#recentActivity'),
 
   // Chat page - Files
   fileList: $('#fileList'),
@@ -175,41 +164,6 @@ function scrollToBottom(el) {
   requestAnimationFrame(() => {
     el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
   });
-}
-
-/**
- * Плавный скролл страницы к указанному элементу
- * @param {HTMLElement|string} target - элемент или CSS-селектор
- * @param {Object} options - { offset, behavior, block }
- */
-function scrollToElement(target, options = {}) {
-  const el = typeof target === 'string' ? document.querySelector(target) : target;
-  if (!el) return;
-
-  const {
-    offset = 0,
-    behavior = 'smooth',
-    block = 'start',
-  } = options;
-
-  const top = el.getBoundingClientRect().top + window.scrollY - offset;
-  window.scrollTo({ top, behavior });
-
-  // Для контейнеров с overflow: auto
-  const scrollableParent = el.closest('.scrollable, .chat-messages, .file-list, .dashboard, .trace-result, .details-content');
-  if (scrollableParent) {
-    const parentTop = el.getBoundingClientRect().top - scrollableParent.getBoundingClientRect().top + scrollableParent.scrollTop - offset;
-    scrollableParent.scrollTo({ top: parentTop, behavior });
-  }
-}
-
-/**
- * Плавный скролл в конец прокручиваемого контейнера
- * @param {HTMLElement} el - контейнер
- */
-function scrollToBottomSmooth(el) {
-  if (!el) return;
-  el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
 }
 
 function escapeHtml(str) {
@@ -437,197 +391,12 @@ function navigateTo(page) {
   if (mainEl) {
     mainEl.scrollTo({ top: 0, behavior: 'smooth' });
   }
-
-  // Загружаем данные для дашборда при переходе
-  if (page === 'dashboard') {
-    loadDashboard();
-  }
 }
 
 // Обработчики навигации
 dom.navItems.forEach(item => {
   item.addEventListener('click', () => navigateTo(item.dataset.page));
 });
-
-// ============================================================
-// ДАШБОРД
-// ============================================================
-async function loadDashboard() {
-  try {
-    // Статистика
-    const [filesData, traces] = await Promise.all([
-      api.listFiles({ limit: 100 }).catch(() => ({ files: [] })),
-      api.listTraces({ limit: 5 }).catch(() => []),
-    ]);
-
-    const files = filesData.files || [];
-    let totalSheets = 0;
-    let totalMonths = 0;
-
-    for (const f of files) {
-      totalSheets += f.total_sheets || f.sheet_count || 0;
-    }
-
-    // Получаем количество месяцев через API
-    try {
-      const monthsResult = await api.askQuestion({
-        question: 'О скольки месяцах у тебя есть информация?',
-        mode: 'agent',
-        top_k: 5,
-        conversation_history: [],
-      });
-      if (monthsResult && monthsResult.sql_result_preview && monthsResult.sql_result_preview.length > 0) {
-        totalMonths = monthsResult.sql_result_preview[0].количество_месяцев || 0;
-      }
-    } catch (e) {
-      // fallback — months остаётся 0
-    }
-
-    dom.statFiles.textContent = files.length || '—';
-    dom.statSheets.textContent = totalSheets || '—';
-    dom.statMonths.textContent = totalMonths || '—';
-    dom.statQueries.textContent = Array.isArray(traces) ? traces.length : '—';
-
-    // Загружаем данные для графиков
-    loadDashboardCharts();
-
-    // Последние запросы
-    renderRecentActivity(traces);
-
-  } catch (err) {
-    console.error('Dashboard load error:', err);
-  }
-}
-
-async function loadDashboardCharts() {
-  destroyCharts();
-
-  // График 1: Динамика цен по месяцам
-  try {
-    const priceData = await api.askQuestion({
-      question: 'Покажи среднюю цену по всем месяцам',
-      mode: 'agent',
-      top_k: 10,
-      conversation_history: [],
-    });
-
-    if (priceData.sql_result_preview && priceData.sql_result_preview.length > 0) {
-      const months = priceData.sql_result_preview.map(r => r.period || r.label || '');
-      const prices = priceData.sql_result_preview.map(r => {
-        const val = r.avg_price || r.average_price || r.price_value || r.value || 0;
-        return parseFloat(val) || 0;
-      });
-
-      if (months.length > 0) {
-        createLineChart('dashboardPriceChart',
-          months.map((m, i) => ({ label: m, value: prices[i] })),
-          'Средняя цена (руб/тн)'
-        );
-      }
-    }
-  } catch (e) {
-    // Если данных нет, показываем заглушку
-    createLineChart('dashboardPriceChart', [
-      { label: 'Янв', value: 0 },
-      { label: 'Фев', value: 0 },
-      { label: 'Мар', value: 0 },
-    ], 'Средняя цена (руб/тн)');
-  }
-
-  // График 2: Распределение по источникам цен
-  try {
-    const sourceData = await api.askQuestion({
-      question: 'Покажи количество записей по каждому источнику цен',
-      mode: 'agent',
-      top_k: 10,
-      conversation_history: [],
-    });
-
-    if (sourceData.sql_result_preview && sourceData.sql_result_preview.length > 0) {
-      const sources = sourceData.sql_result_preview.map(r => r.price_source || r.source || r.label || '');
-      const counts = sourceData.sql_result_preview.map(r => {
-        const val = r.count || r.cnt || r.quantity || r.value || 0;
-        return parseInt(val) || 0;
-      });
-
-      if (sources.length > 0) {
-        createDoughnutChart('dashboardSourceChart',
-          sources.map((s, i) => ({ label: s, value: counts[i], color: CHART_COLORS[i % CHART_COLORS.length] }))
-        );
-      }
-    }
-  } catch (e) {
-    createDoughnutChart('dashboardSourceChart', [
-      { label: 'Нет данных', value: 1, color: EVRAZ_COLORS.steel },
-    ]);
-  }
-
-  // График 3: Топ-10 материалов по средней цене
-  try {
-    const topData = await api.askQuestion({
-      question: 'Покажи топ 10 материалов по средней цене',
-      mode: 'agent',
-      top_k: 10,
-      conversation_history: [],
-    });
-
-    if (topData.sql_result_preview && topData.sql_result_preview.length > 0) {
-      const items = topData.sql_result_preview.map(r => {
-        const name = r.item_name_normalized || r.item_name || r.material || r.label || '';
-        // сокращаем длинные названия
-        return name.length > 25 ? name.slice(0, 22) + '...' : name;
-      });
-      const values = topData.sql_result_preview.map(r => {
-        const val = r.avg_price || r.average_price || r.price_value || r.value || 0;
-        return parseFloat(val) || 0;
-      });
-
-      if (items.length > 0) {
-        createBarChart('dashboardTopItemsChart',
-          items.map((item, i) => ({ label: item, value: values[i] })),
-          'Средняя цена (руб/тн)'
-        );
-      }
-    }
-  } catch (e) {
-    createBarChart('dashboardTopItemsChart', [
-      { label: 'Нет данных', value: 0 },
-    ], 'Средняя цена (руб/тн)');
-  }
-}
-
-function renderRecentActivity(traces) {
-  if (!Array.isArray(traces) || traces.length === 0) {
-    dom.recentActivity.innerHTML = `
-      <div class="empty-state" style="padding:24px;">
-        <div class="empty-state__text">Нет активности</div>
-      </div>`;
-    return;
-  }
-
-  dom.recentActivity.innerHTML = traces.map(t => {
-    const status = t.status === 'success' ? 'success' : 'error';
-    const icon = t.status === 'success' ? '✅' : '❌';
-    const question = (t.question || t.request_id || '').slice(0, 50);
-    return `
-      <div class="activity-item" style="cursor:pointer;" data-request-id="${t.request_id || ''}">
-        <div class="activity-item__icon activity-item__icon--${status}">${icon}</div>
-        <span class="activity-item__text">${escapeHtml(question)}</span>
-        <span class="activity-item__time">${t.created_at ? formatDate(t.created_at) : ''}</span>
-      </div>`;
-  }).join('');
-
-  // Клик по активности открывает трассировку
-  dom.recentActivity.querySelectorAll('.activity-item').forEach(el => {
-    el.addEventListener('click', () => {
-      const rid = el.dataset.requestId;
-      if (rid) {
-        navigateTo('trace');
-        setTimeout(() => loadTraceDetail(rid), 100);
-      }
-    });
-  });
-}
 
 // ============================================================
 // ЧАТ
@@ -725,34 +494,71 @@ function addMessage(type, content, meta = {}) {
   });
 }
 
-function renderChatChart(containerId, meta) {
+function renderChatChart(containerId, meta, retries = 10) {
   const canvas = document.getElementById(`${containerId}-canvas`);
-  if (!canvas) return;
+  if (!canvas) {
+    if (retries > 0) {
+      setTimeout(() => renderChatChart(containerId, meta, retries - 1), 300);
+    }
+    return;
+  }
+
+  // Ждём когда canvas будет иметь размеры
+  if (canvas.offsetParent === null || canvas.offsetWidth === 0) {
+    if (retries > 0) {
+      setTimeout(() => renderChatChart(containerId, meta, retries - 1), 300);
+    }
+    return;
+  }
 
   const preview = meta.sqlResultPreview || [];
+  if (preview.length === 0) return;
+
   const keys = Object.keys(preview[0] || {});
   if (keys.length < 2) return;
 
-  const labelKey = keys[0];
-  const valueKey = keys[1];
+  // Ищем ключ для меток (первый нечисловой) и ключ для значений (первый числовой)
+  let labelKey = keys[0];
+  let valueKey = keys[1];
+
+  // Пробуем найти числовую колонку для значения
+  for (const key of keys) {
+    const sample = preview[0][key];
+    if (typeof sample === 'number' || (typeof sample === 'string' && !isNaN(parseFloat(sample)) && key !== labelKey)) {
+      valueKey = key;
+      break;
+    }
+  }
 
   const labels = preview.map(r => String(r[labelKey] || ''));
-  const values = preview.map(r => parseFloat(r[valueKey]) || 0);
+  const values = preview.map(r => {
+    const v = parseFloat(r[valueKey]);
+    return isNaN(v) ? 0 : v;
+  });
+
+  // Проверяем, что есть хотя бы одна точка данных
+  if (labels.length === 0 || values.every(v => v === 0)) return;
 
   // Определяем тип графика
   const isTimeSeries = labels.some(l => /^\d{4}-\d{2}$/.test(l));
 
-  if (isTimeSeries) {
-    createLineChart(`${containerId}-canvas`,
-      labels.map((l, i) => ({ label: l, value: values[i] })),
-      valueKey
-    );
-  } else {
-    createBarChart(`${containerId}-canvas`,
-      labels.map((l, i) => ({ label: l, value: values[i] })),
-      valueKey
-    );
-  }
+  requestAnimationFrame(() => {
+    try {
+      if (isTimeSeries) {
+        createLineChart(`${containerId}-canvas`,
+          labels.map((l, i) => ({ label: l, value: values[i] })),
+          valueKey
+        );
+      } else {
+        createBarChart(`${containerId}-canvas`,
+          labels.map((l, i) => ({ label: l, value: values[i] })),
+          valueKey
+        );
+      }
+    } catch (e) {
+      console.warn('Chart render error:', e);
+    }
+  });
 }
 
 function showTypingIndicator() {
@@ -954,7 +760,7 @@ async function loadFiles(listEl = dom.fileList, selectCallback = null) {
           <span class="file-item__icon">📄</span>
           <div class="file-item__info">
             <div class="file-item__name">${escapeHtml(f.filename || 'unknown')}</div>
-            <div class="file-item__meta">${f.sheet_count || 0} листов • ${formatDate(f.uploaded_at)}</div>
+            <div class="file-item__meta">${f.total_sheets || f.sheet_count || 0} листов • ${formatDate(f.uploaded_at)}</div>
           </div>
           <span class="file-item__status ${statusClass}">${statusText}</span>
           <button class="file-item__delete" data-file-id="${f.id}" title="Удалить">✕</button>
@@ -1001,7 +807,7 @@ async function loadFileDetails(fileId) {
     dom.detailsFileName.textContent = `📄 ${file.filename || 'Файл'}`;
 
     const metaItems = [
-      `📊 ${file.sheet_count || 0} листов`,
+      `📊 ${file.total_sheets || file.sheet_count || 0} листов`,
       `📅 ${formatDate(file.uploaded_at)}`,
       file.status === 'processed' ? '✅ Обработан' : file.status === 'error' ? '❌ Ошибка' : '⏳ Загружен',
     ];
@@ -1009,7 +815,7 @@ async function loadFileDetails(fileId) {
 
     if (file.sheets && file.sheets.length > 0) {
       dom.detailsSheets.innerHTML = file.sheets.map(sheet => `
-        <div class="details-sheet">
+        <div class="details-sheet" data-file-id="${file.id}" data-sheet-id="${sheet.id}">
           <div class="details-sheet__header">
             <span class="details-sheet__name">📋 ${escapeHtml(sheet.original_name || sheet.normalized_name || 'Лист')}</span>
             <span class="details-sheet__meta">${sheet.row_count || 0} строк × ${sheet.col_count || 0} колонок</span>
@@ -1024,9 +830,22 @@ async function loadFileDetails(fileId) {
               `).join('')}
             </div>
             ${sheet.period ? `<div style="margin-top:8px;font-size:0.78rem;color:var(--evraz-gold);">📅 Период: ${sheet.period}</div>` : ''}
+            <button class="btn btn--sm btn--gold details-sheet__view-btn" data-file-id="${file.id}" data-sheet-id="${sheet.id}" style="margin-top:10px;">
+              👁 Просмотр данных
+            </button>
           </div>
         </div>
       `).join('');
+
+      // Обработчики клика по кнопке "Просмотр данных"
+      dom.detailsSheets.querySelectorAll('.details-sheet__view-btn').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const fileId = parseInt(btn.dataset.fileId);
+          const sheetId = parseInt(btn.dataset.sheetId);
+          await openSheetDataModal(fileId, sheetId);
+        });
+      });
     } else {
       dom.detailsSheets.innerHTML = '<div style="padding:16px;color:var(--color-text-muted);">Нет информации о листах</div>';
     }
@@ -1039,6 +858,78 @@ async function loadFileDetails(fileId) {
 
   } catch (err) {
     showToast(`Ошибка загрузки деталей: ${err.message}`, 'error');
+  }
+}
+
+/**
+ * Открывает модальное окно с данными листа (ячейки)
+ */
+async function openSheetDataModal(fileId, sheetId) {
+  try {
+    showModal('⏳ Загрузка данных...', '<div style="text-align:center;padding:40px;">Загружаем данные листа...</div>');
+
+    // Получаем детальную информацию о листе (колонки)
+    const sheetDetail = await api.getSheetDetail(fileId, sheetId);
+
+    // Получаем ячейки
+    const cells = await api.getSheetCells(fileId, sheetId, { limit: 200 });
+
+    const sheetName = sheetDetail.original_name || sheetDetail.normalized_name || 'Лист';
+    const columns = sheetDetail.columns || [];
+
+    if (!cells || cells.length === 0) {
+      showModal(`📋 ${escapeHtml(sheetName)}`, `
+        <div class="empty-state">
+          <div class="empty-state__icon">📊</div>
+          <div class="empty-state__text">Нет данных для отображения</div>
+        </div>
+      `);
+      return;
+    }
+
+    // Группируем ячейки по строкам
+    const rowsMap = {};
+    cells.forEach(cell => {
+      if (!rowsMap[cell.row_num]) {
+        rowsMap[cell.row_num] = {};
+      }
+      rowsMap[cell.row_num][cell.col_index] = cell.value_text || cell.value_number || cell.original_value || '';
+    });
+
+    // Сортируем строки
+    const rowNums = Object.keys(rowsMap).map(Number).sort((a, b) => a - b);
+
+    // Строим таблицу
+    let tableHtml = `<div style="overflow-x:auto;max-height:60vh;overflow-y:auto;">`;
+    tableHtml += `<table class="data-table">`;
+
+    // Заголовки колонок
+    tableHtml += `<thead><tr>`;
+    columns.forEach(col => {
+      tableHtml += `<th>${escapeHtml(col.original_name || col.normalized_name || `Колонка ${col.col_index}`)}</th>`;
+    });
+    tableHtml += `</tr></thead>`;
+
+    // Данные
+    tableHtml += `<tbody>`;
+    rowNums.forEach(rowNum => {
+      tableHtml += `<tr>`;
+      columns.forEach(col => {
+        const val = rowsMap[rowNum] && rowsMap[rowNum][col.col_index] !== undefined
+          ? rowsMap[rowNum][col.col_index]
+          : '';
+        tableHtml += `<td>${escapeHtml(String(val))}</td>`;
+      });
+      tableHtml += `</tr>`;
+    });
+    tableHtml += `</tbody></table>`;
+    tableHtml += `</div>`;
+
+    showModal(`📋 ${escapeHtml(sheetName)} — ${rowNums.length} строк`, tableHtml);
+
+  } catch (err) {
+    showToast(`Ошибка загрузки данных листа: ${err.message}`, 'error');
+    showModal('Ошибка', `<div style="color:var(--color-error);">${escapeHtml(err.message)}</div>`);
   }
 }
 
@@ -1058,7 +949,7 @@ function renderFilesDetailPage(file) {
   let sheetsHtml = '';
   if (file.sheets && file.sheets.length > 0) {
     sheetsHtml = file.sheets.map(sheet => `
-      <div class="details-sheet">
+      <div class="details-sheet" data-file-id="${file.id}" data-sheet-id="${sheet.id}">
         <div class="details-sheet__header">
           <span class="details-sheet__name">📋 ${escapeHtml(sheet.original_name || sheet.normalized_name || 'Лист')}</span>
           <span class="details-sheet__meta">${sheet.row_count || 0} строк × ${sheet.col_count || 0} колонок</span>
@@ -1073,6 +964,9 @@ function renderFilesDetailPage(file) {
             `).join('')}
           </div>
           ${sheet.period ? `<div style="margin-top:8px;font-size:0.78rem;color:var(--evraz-gold);">📅 Период: ${sheet.period}</div>` : ''}
+          <button class="btn btn--sm btn--gold details-sheet__view-btn" data-file-id="${file.id}" data-sheet-id="${sheet.id}" style="margin-top:10px;">
+            👁 Просмотр данных
+          </button>
         </div>
       </div>
     `).join('');
@@ -1083,7 +977,7 @@ function renderFilesDetailPage(file) {
       <div class="details-header">
         <h3 style="color:var(--evraz-gold);">📄 ${escapeHtml(file.filename || 'Файл')}</h3>
         <div class="details-meta">
-          <span class="details-meta__item">📊 ${file.sheet_count || 0} листов</span>
+          <span class="details-meta__item">📊 ${file.total_sheets || file.sheet_count || 0} листов</span>
           <span class="details-meta__item">📅 ${formatDate(file.uploaded_at)}</span>
           <span class="details-meta__item">${file.status === 'processed' ? '✅ Обработан' : file.status === 'error' ? '❌ Ошибка' : '⏳ Загружен'}</span>
         </div>
@@ -1094,6 +988,16 @@ function renderFilesDetailPage(file) {
       </div>
     </div>
   `;
+
+  // Обработчики клика по кнопке "Просмотр данных" на странице файлов
+  content.querySelectorAll('.details-sheet__view-btn').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const fileId = parseInt(btn.dataset.fileId);
+      const sheetId = parseInt(btn.dataset.sheetId);
+      await openSheetDataModal(fileId, sheetId);
+    });
+  });
 }
 
 // ============================================================
@@ -1165,16 +1069,23 @@ async function loadTraceDetail(requestId, resultEl = dom.traceResult, placeholde
         </div>
         ${trace.answer ? `<div style="padding:12px 16px;background:var(--color-surface-2);border:1px solid var(--glass-border);border-radius:var(--radius-sm);margin-bottom:12px;font-size:0.88rem;line-height:1.6;">${escapeHtml(trace.answer)}</div>` : ''}
       </div>
-      ${steps.map((step, i) => `
+      ${steps.map((step, i) => {
+        // Поля могут быть как на верхнем уровне, так и внутри data
+        const data = step.data || {};
+        const icon = step.icon || data.icon || '●';
+        const label = step.label || data.label || step.node || step.name || data.step || step.step || `Шаг ${i + 1}`;
+        const durationMs = step.duration_ms || data.duration_ms || 0;
+        const output = step.output || data.output || step.result || data.result || JSON.stringify(data, null, 2);
+        return `
         <div class="trace-step">
           <div class="trace-step__header">
-            <span class="trace-step__icon">${step.icon || '●'}</span>
-            <span>${escapeHtml(step.label || step.node || step.name || `Шаг ${i + 1}`)}</span>
-            ${step.duration_ms ? `<span style="margin-left:auto;font-size:0.72rem;color:var(--color-text-muted);">${formatMs(step.duration_ms)}</span>` : ''}
+            <span class="trace-step__icon">${icon}</span>
+            <span>${escapeHtml(label)}</span>
+            ${durationMs ? `<span style="margin-left:auto;font-size:0.72rem;color:var(--color-text-muted);">${formatMs(durationMs)}</span>` : ''}
           </div>
-          <div class="trace-step__body">${escapeHtml(step.output || step.result || JSON.stringify(step, null, 2))}</div>
-        </div>
-      `).join('')}
+          <div class="trace-step__body">${escapeHtml(typeof output === 'string' ? output : JSON.stringify(output, null, 2))}</div>
+        </div>`;
+      }).join('')}
     `;
 
     if (resultEl) resultEl.innerHTML = html;
@@ -1368,16 +1279,6 @@ async function init() {
     dom.pageTraceRefreshBtn.addEventListener('click', () => {
       loadTraceHistory(dom.pageTraceHistoryList);
     });
-
-    // Загружаем дашборд
-    loadDashboard();
-
-    // Периодическое обновление дашборда
-    setInterval(() => {
-      if (state.currentPage === 'dashboard') {
-        loadDashboard();
-      }
-    }, 60000);
 
     // Обновление трассировки
     setInterval(() => {

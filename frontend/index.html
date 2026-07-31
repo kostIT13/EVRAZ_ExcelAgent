@@ -30,10 +30,7 @@
 
       <!-- Навигация -->
       <nav class="nav">
-        <button class="nav__item nav__item--active" data-page="dashboard">
-          <span class="nav__icon">📊</span> Дашборд
-        </button>
-        <button class="nav__item" data-page="chat">
+        <button class="nav__item nav__item--active" data-page="chat">
           <span class="nav__icon">💬</span> Чат
         </button>
         <button class="nav__item" data-page="files">
@@ -53,66 +50,9 @@
 
   <main class="main">
     <!-- ============================================================
-         СТРАНИЦА: ДАШБОРД
+         СТРАНИЦА: ЧАТ (стартовая)
          ============================================================ -->
-    <div class="page page--active" id="pageDashboard">
-      <div class="stats-row" id="statsRow">
-        <div class="stat-card">
-          <div class="stat-card__icon">📄</div>
-          <div class="stat-card__value" id="statFiles">—</div>
-          <div class="stat-card__label">Загружено файлов</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-card__icon">📊</div>
-          <div class="stat-card__value" id="statSheets">—</div>
-          <div class="stat-card__label">Всего листов</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-card__icon">📅</div>
-          <div class="stat-card__value" id="statMonths">—</div>
-          <div class="stat-card__label">Месяцев данных</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-card__icon">💬</div>
-          <div class="stat-card__value" id="statQueries">—</div>
-          <div class="stat-card__label">Всего запросов</div>
-        </div>
-      </div>
-
-      <div class="chart-grid">
-        <div class="chart-card">
-          <div class="chart-card__title">📈 Динамика цен по месяцам</div>
-          <div class="chart-container" style="height:300px;">
-            <canvas id="dashboardPriceChart"></canvas>
-          </div>
-        </div>
-        <div class="chart-card">
-          <div class="chart-card__title">🏭 Распределение по источникам цен</div>
-          <div class="chart-container" style="height:300px;">
-            <canvas id="dashboardSourceChart"></canvas>
-          </div>
-        </div>
-        <div class="chart-card">
-          <div class="chart-card__title">📊 Топ-10 материалов по средней цене</div>
-          <div class="chart-container" style="height:300px;">
-            <canvas id="dashboardTopItemsChart"></canvas>
-          </div>
-        </div>
-        <div class="chart-card">
-          <div class="chart-card__title">🕐 Последние запросы</div>
-          <div class="activity-list" id="recentActivity">
-            <div class="empty-state" style="padding:24px;">
-              <div class="empty-state__text">Нет активности</div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- ============================================================
-         СТРАНИЦА: ЧАТ
-         ============================================================ -->
-    <div class="page" id="pageChat">
+    <div class="page page--active" id="pageChat">
       <div class="layout">
         <!-- Левая панель: Файлы -->
         <aside class="panel panel--files">
@@ -277,7 +217,7 @@
           <div class="panel__header">
             <h2 class="panel__title" id="filesDetailTitle">📋 Детальная информация</h2>
           </div>
-          <div id="filesDetailContent">
+          <div id="filesDetailContent" style="min-height:0;">
             <div class="empty-state">
               <div class="empty-state__icon">📊</div>
               <div class="empty-state__text">Выберите файл для просмотра детальной информации</div>
@@ -308,11 +248,11 @@
           />
           <button class="btn btn--primary" id="pageTraceBtn">🔍 Найти</button>
         </div>
-        <div style="display:flex;flex:1;min-height:0;overflow:hidden;">
-          <div style="width:320px;border-right:1px solid var(--glass-border);overflow-y:auto;flex-shrink:0;" id="pageTraceHistoryList">
+        <div style="display:flex;flex:1;min-height:0;">
+          <div style="width:320px;border-right:1px solid var(--glass-border);overflow-y:auto;flex-shrink:0;overflow-x:hidden;" id="pageTraceHistoryList">
             <div class="trace-history__empty" style="padding:24px;">История пуста</div>
           </div>
-          <div style="flex:1;overflow-y:auto;padding:16px 18px;" id="pageTraceResult">
+          <div style="flex:1;overflow-y:auto;padding:16px 18px;min-height:0;" id="pageTraceResult">
             <div class="empty-state">
               <div class="empty-state__icon">🔍</div>
               <div class="empty-state__text">Выберите запрос из истории слева или введите request_id</div>
