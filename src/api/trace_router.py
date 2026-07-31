@@ -8,6 +8,18 @@ from src.services.db_tables.query_log_service.service import TraceService
 
 router = APIRouter(prefix="/trace", tags=["traceability"])
 
+# Маппинг названий шагов на человекочитаемые иконки и подписи
+STEP_LABELS = {
+    "question": {"icon": "❓", "label": "Вопрос пользователя"},
+    "classifier": {"icon": "🔍", "label": "Классификация запроса"},
+    "planner": {"icon": "📋", "label": "Планирование"},
+    "codegen": {"icon": "💻", "label": "Генерация SQL"},
+    "executor": {"icon": "⚡", "label": "Выполнение SQL"},
+    "verifier": {"icon": "✅", "label": "Верификация"},
+    "retrieval": {"icon": "📚", "label": "Поиск в RAG"},
+    "answer": {"icon": "🤖", "label": "Формирование ответа"},
+}
+
 
 @router.get("", response_model=List[dict])
 async def list_traces(
@@ -43,37 +55,40 @@ async def get_trace(request_id: str) -> TraceResponse:
 
     steps = []
 
-    steps.append(TraceStepInfo(
-        step="question",
-        data={"question": log.question},
-    ))
+    def make_step(step_name: str, data: dict, duration_ms: int = 0) -> TraceStepInfo:
+        meta = STEP_LABELS.get(step_name, {"icon": "●", "label": step_name})
+        return TraceStepInfo(
+            step=step_name,
+            data={
+                **data,
+                "icon": meta["icon"],
+                "label": meta["label"],
+                "duration_ms": duration_ms,
+            },
+        )
+
+    steps.append(make_step("question", {"question": log.question}))
 
     agent_trace = trace_data.get("agent_trace", {})
     if agent_trace:
         for step_name in ["classifier", "planner", "codegen", "executor", "verifier"]:
             step_data = agent_trace.get(step_name)
             if step_data:
-                steps.append(TraceStepInfo(step=step_name, data=step_data))
+                duration = 0
+                if isinstance(step_data, dict):
+                    duration = step_data.get("duration_ms", 0) or 0
+                steps.append(make_step(step_name, step_data or {}, duration))
     else:
-        steps.append(TraceStepInfo(
-            step="retrieval",
-            data={
-                "retrieved_count": trace_data.get("retrieved_count", 0),
-                "retrieved_scores": trace_data.get("retrieved_scores", []),
-            },
-        ))
-        steps.append(TraceStepInfo(
-            step="verification",
-            data=trace_data.get("verification", {}),
-        ))
+        steps.append(make_step("retrieval", {
+            "retrieved_count": trace_data.get("retrieved_count", 0),
+            "retrieved_scores": trace_data.get("retrieved_scores", []),
+        }))
+        steps.append(make_step("verification", trace_data.get("verification", {})))
 
-    steps.append(TraceStepInfo(
-        step="answer",
-        data={
-            "answer": result_data.get("answer", ""),
-            "status": log.status,
-        },
-    ))
+    steps.append(make_step("answer", {
+        "answer": result_data.get("answer", ""),
+        "status": log.status,
+    }))
 
     return TraceResponse(
         request_id=log.request_id,
