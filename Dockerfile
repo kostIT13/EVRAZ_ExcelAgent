@@ -13,7 +13,6 @@ RUN pip install uv
 COPY pyproject.toml ./
 
 RUN uv pip install --system --no-cache-dir \
-    --index-url https://mirrors.cloud.tencent.com/pypi/simple \
     -e .
 
 COPY src/ ./src/

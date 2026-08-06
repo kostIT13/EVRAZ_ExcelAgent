@@ -1,34 +1,43 @@
 """
-RAG service: orchestrates chunking, embedding, BM25 indexing, and hybrid retrieval.
-Provides a high-level API for the generation pipeline and file indexing.
-"""
+RAG service: orchestrates chunking, embedding, and hybrid retrieval via Qdrant.
 
+Обеспечивает высокоуровневый API для пайплайна генерации и индексации файлов.
+Вектора (dense + sparse) хранятся в Qdrant, PostgreSQL — только реляционные данные.
+"""
 from __future__ import annotations
 
-import pickle
-from pathlib import Path
 from typing import List, Optional
+from uuid import NAMESPACE_URL, uuid5
 
 from loguru import logger
-from sqlalchemy import select, delete
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.config import settings
 from src.core.db.database import async_session_maker
 from src.core.db.models import Sheet, ColumnMetadata, Cell, ExcelComment
-from src.core.db.vector_models import ChunkEmbedding, ColumnEmbedding, SheetEmbedding
-from src.services.rag.bm25 import BM25Index
+from src.core.qdrant.client import QdrantVectorStore, qdrant_client
 from src.services.rag.chunker import make_chunks
-from src.services.rag.embedder import Embedder
+from src.services.rag.embedder import MAX_EMBED_CHARS, Embedder
 from src.services.rag.hybrid import HybridRetriever, HybridSearchResult
-from src.services.rag.retrieval import DenseRetriever
+from src.services.rag.sparse import SparseEmbedder, sparse_embedder
 
 
-# ---------------------------------------------------------------------------
-# RAG Service
-# ---------------------------------------------------------------------------
+def _point_id(source_type: str, source_id: int, chunk_index: int = 0) -> str:
+    """Формирует стабильный id точки в Qdrant (детерминированный UUID).
+
+    Qdrant принимает в качестве point ID только unsigned int или UUID.
+    Используем UUIDv5 от строкового представления, чтобы сохранить
+    детерминизм: один и тот же (source_type, source_id, chunk_index) всегда
+    даёт один и тот же UUID — это позволяет корректно перезаписывать
+    точки при повторной индексации.
+    """
+    raw = f"{source_type}:{source_id}:{chunk_index}"
+    return str(uuid5(NAMESPACE_URL, raw))
+
+
 class RagService:
-    """High-level RAG orchestrator.
+    """Высокоуровневый RAG-оркестратор поверх Qdrant.
 
     Usage
     -----
@@ -37,12 +46,20 @@ class RagService:
     results = await rag.hybrid_search("какой-то запрос", top_k=5)
     """
 
-    def __init__(self) -> None:
-        self._embedder = Embedder()
-        self._dense = DenseRetriever(self._embedder)
-        self._bm25: Optional[BM25Index] = None
-        self._bm25_path: Path = Path("data/bm25_index.pkl")
-        self._bm25_dirty: bool = False
+    def __init__(
+        self,
+        embedder: Optional[Embedder] = None,
+        store: Optional[QdrantVectorStore] = None,
+        sparse: Optional[SparseEmbedder] = None,
+    ) -> None:
+        self._embedder = embedder or Embedder()
+        self._store = store or qdrant_client
+        self._sparse = sparse or sparse_embedder
+        self._hybrid = HybridRetriever(
+            embedder=self._embedder,
+            store=self._store,
+            sparse=self._sparse,
+        )
 
     # ------------------------------------------------------------------
     # Session helpers
@@ -70,17 +87,6 @@ class RagService:
                 await s.close()
 
     # ------------------------------------------------------------------
-    # BM25 helpers (DRY)
-    # ------------------------------------------------------------------
-    def _update_bm25(self, chunks: List[str], metadata: List[dict]) -> None:
-        """Add chunks to BM25 index and rebuild."""
-        self._lazy_init_bm25()
-        if self._bm25 is not None and chunks:
-            self._bm25.add_chunks(chunks, metadata=metadata)
-            self._bm25.build()
-            self._bm25_dirty = True
-
-    # ------------------------------------------------------------------
     # Indexing
     # ------------------------------------------------------------------
     async def build_index_for_sheet(
@@ -89,56 +95,61 @@ class RagService:
         text: str,
         session: Optional[AsyncSession] = None,
     ) -> None:
-        """Chunk, embed, and store a sheet's text representation."""
+        """Чанкует, эмбеддит и сохраняет лист в Qdrant (dense + sparse)."""
         chunks = make_chunks(text, strategy="adaptive")
         logger.info("Sheet {}: split into {} chunks", sheet_id, len(chunks))
 
-        async def _do_index(s):
-            await s.execute(delete(ChunkEmbedding).where(ChunkEmbedding.sheet_id == sheet_id))
+        # Удаляем старые точки листа
+        await self._store.delete_by_filter(source_type="chunk", source_id=sheet_id)
+        await self._store.delete_by_filter(source_type="sheet", source_id=sheet_id)
 
-            for chunk_idx, chunk_text in enumerate(chunks):
-                vector = await self._embedder.embed(chunk_text)
-                s.add(ChunkEmbedding(
-                    sheet_id=sheet_id,
-                    chunk_index=chunk_idx,
-                    source_text=chunk_text[:10000],
-                    embedding=vector,
-                    model_name=settings.OLLAMA_EMBED_MODEL,
-                ))
-
-            # Для full_vector используем компактное представление:
-            # только названия материалов (без цен), чтобы эмбеддинг листа был лёгким для поиска
-            # и не обрезался. Берём первые 18000 символов текста (безопасный лимит модели BAAI/bge-m3).
-            full_text = text[:18000]
-            # Обрезаем по границе последнего полного названия материала
-            last_material_end = full_text.rfind("\n\n")
-            if last_material_end > 100:
-                full_text = text[:last_material_end]
-            
-            full_vector = await self._embedder.embed(full_text)
-            existing = await s.execute(
-                select(SheetEmbedding).where(SheetEmbedding.sheet_id == sheet_id)
+        points = []
+        # Сначала эмбеддим все чанки батчами (один HTTP-запрос на порцию вместо
+        # одного запроса на каждый чанк). Спарс-вектора считаются локально и быстро.
+        chunk_dense = await self._embedder.embed_batch(chunks)
+        for chunk_idx, (chunk_text, dense) in enumerate(zip(chunks, chunk_dense)):
+            sparse = self._sparse.embed(chunk_text)
+            points.append(
+                {
+                    "id": _point_id("chunk", sheet_id, chunk_idx),
+                    "dense": dense,
+                    "sparse": sparse,
+                    "payload": {
+                        "source_type": "chunk",
+                        "source_id": sheet_id,
+                        "text": chunk_text[:10000],
+                        "chunk_index": chunk_idx,
+                        "model_name": settings.OLLAMA_EMBED_MODEL,
+                    },
+                }
             )
-            existing_record = existing.scalar_one_or_none()
-            if existing_record:
-                existing_record.source_text = full_text[:10000]
-                existing_record.embedding = full_vector
-                existing_record.model_name = settings.OLLAMA_EMBED_MODEL
-            else:
-                s.add(SheetEmbedding(
-                    sheet_id=sheet_id,
-                    source_text=full_text[:10000],
-                    embedding=full_vector,
-                    model_name=settings.OLLAMA_EMBED_MODEL,
-                ))
 
-        await self._with_session(session, _do_index)
+        # Для full_vector используем компактное представление листа.
+        # Лимит берём из MAX_EMBED_CHARS, чтобы не превысить контекст модели эмбеддинга
+        # (bge-m3 = 8192 токена). Прежнее значение 18000 символов могло превышать контекст.
+        full_text = text[:MAX_EMBED_CHARS]
+        last_material_end = full_text.rfind("\n\n")
+        if last_material_end > 100:
+            full_text = text[:last_material_end]
 
-        self._update_bm25(
-            chunks,
-            [{"source_type": "sheet", "source_id": sheet_id}] * len(chunks),
+        full_dense = await self._embedder.embed(full_text)
+        full_sparse = self._sparse.embed(full_text)
+        points.append(
+            {
+                "id": _point_id("sheet", sheet_id, 0),
+                "dense": full_dense,
+                "sparse": full_sparse,
+                "payload": {
+                    "source_type": "sheet",
+                    "source_id": sheet_id,
+                    "text": full_text[:10000],
+                    "model_name": settings.OLLAMA_EMBED_MODEL,
+                },
+            }
         )
-        logger.info("Sheet {} indexed: {} chunks (dense) + BM25", sheet_id, len(chunks))
+
+        await self._store.upsert(points)
+        logger.info("Sheet {} indexed: {} chunks (dense + sparse)", sheet_id, len(chunks))
 
     async def build_index_for_column(
         self,
@@ -146,40 +157,74 @@ class RagService:
         text: str,
         session: Optional[AsyncSession] = None,
     ) -> None:
-        """Embed and store a column's text representation."""
-        async def _do_index(s):
-            existing = await s.execute(
-                select(ColumnEmbedding).where(ColumnEmbedding.column_id == column_id)
-            )
-            existing_record = existing.scalar_one_or_none()
-            vector = await self._embedder.embed(text)
+        """Эмбеддит и сохраняет колонку в Qdrant."""
+        await self._store.delete_by_filter(source_type="column", source_id=column_id)
 
-            if existing_record:
-                existing_record.source_text = text[:5000]
-                existing_record.embedding = vector
-                existing_record.model_name = settings.OLLAMA_EMBED_MODEL
-            else:
-                s.add(ColumnEmbedding(
-                    column_id=column_id,
-                    source_text=text[:5000],
-                    embedding=vector,
-                    model_name=settings.OLLAMA_EMBED_MODEL,
-                ))
-
-        await self._with_session(session, _do_index)
-
-        self._update_bm25(
-            [text],
-            [{"source_type": "column", "source_id": column_id}],
+        dense = await self._embedder.embed(text)
+        sparse = self._sparse.embed(text)
+        await self._store.upsert(
+            [
+                {
+                    "id": _point_id("column", column_id, 0),
+                    "dense": dense,
+                    "sparse": sparse,
+                    "payload": {
+                        "source_type": "column",
+                        "source_id": column_id,
+                        "text": text[:5000],
+                        "model_name": settings.OLLAMA_EMBED_MODEL,
+                    },
+                }
+            ]
         )
-        logger.info("Column {} indexed (dense + BM25)", column_id)
+        logger.info("Column {} indexed (dense + sparse)", column_id)
+
+    async def _build_index_for_columns(
+        self,
+        columns: List[ColumnMetadata],
+    ) -> None:
+        """Эмбеддит все колонки листа батчами (вместо одного HTTP-запроса на колонку)."""
+        if not columns:
+            return
+
+        col_texts = []
+        for col in columns:
+            col_parts = [
+                f"Колонка: {col.normalized_name}",
+                f"тип: {col.data_type}",
+            ]
+            if col.sample_values:
+                col_parts.append(f"примеры: {col.sample_values[:5]}")
+            col_texts.append(", ".join(col_parts))
+
+        col_dense = await self._embedder.embed_batch(col_texts)
+
+        points = []
+        for col, text, dense in zip(columns, col_texts, col_dense):
+            points.append(
+                {
+                    "id": _point_id("column", col.id, 0),
+                    "dense": dense,
+                    "sparse": self._sparse.embed(text),
+                    "payload": {
+                        "source_type": "column",
+                        "source_id": col.id,
+                        "text": text[:5000],
+                        "model_name": settings.OLLAMA_EMBED_MODEL,
+                    },
+                }
+            )
+            logger.debug("Column {} prepared for indexing", col.id)
+
+        await self._store.upsert(points)
+        logger.info("Indexed {} columns in batch", len(columns))
 
     async def build_index_for_file(
         self,
         file_id: int,
         session: Optional[AsyncSession] = None,
     ) -> None:
-        """Build dense + BM25 index for all sheets and columns of a file."""
+        """Строит dense + sparse индекс для всех листов и колонок файла."""
         own_session = session is None
         s = session or async_session_maker()
         try:
@@ -202,21 +247,11 @@ class RagService:
                     .where(ColumnMetadata.sheet_id == sheet.id)
                     .order_by(ColumnMetadata.col_index)
                 )
-                for col in cols_result.scalars().all():
-                    col_parts = [
-                        f"Колонка: {col.normalized_name}",
-                        f"тип: {col.data_type}",
-                    ]
-                    if col.sample_values:
-                        col_parts.append(f"примеры: {col.sample_values[:5]}")
-                    col_text = ", ".join(col_parts)
-                    await self.build_index_for_column(col.id, col_text, session=s)
+                await self._build_index_for_columns(list(cols_result.scalars().all()))
 
                 await self._index_comments(sheet.id, s)
 
-            # Коммитим все оставшиеся изменения (включая _index_comments для последнего sheet)
             await s.commit()
-
             logger.info("File {} fully indexed: {} sheets", file_id, len(sheets))
         except Exception:
             await s.rollback()
@@ -224,9 +259,6 @@ class RagService:
         finally:
             if own_session:
                 await s.close()
-
-        # Сохраняем BM25 индекс после полной индексации файла
-        self.persist_bm25()
 
     async def _index_comments(
         self,
@@ -250,20 +282,27 @@ class RagService:
         full_text = "\n".join(comment_texts)
         chunks = make_chunks(full_text, strategy="adaptive")
 
-        for chunk_idx, chunk_text in enumerate(chunks):
-            vector = await self._embedder.embed(chunk_text)
-            session.add(ChunkEmbedding(
-                sheet_id=sheet_id,
-                chunk_index=chunk_idx,
-                source_text=chunk_text[:5000],
-                embedding=vector,
-                model_name=settings.OLLAMA_EMBED_MODEL,
-            ))
+        await self._store.delete_by_filter(source_type="comment", source_id=sheet_id)
 
-        self._update_bm25(
-            chunks,
-            [{"source_type": "comment", "source_id": sheet_id}] * len(chunks),
-        )
+        points = []
+        chunk_dense = await self._embedder.embed_batch(chunks)
+        for chunk_idx, (chunk_text, dense) in enumerate(zip(chunks, chunk_dense)):
+            sparse = self._sparse.embed(chunk_text)
+            points.append(
+                {
+                    "id": _point_id("comment", sheet_id, chunk_idx),
+                    "dense": dense,
+                    "sparse": sparse,
+                    "payload": {
+                        "source_type": "comment",
+                        "source_id": sheet_id,
+                        "text": chunk_text[:5000],
+                        "model_name": settings.OLLAMA_EMBED_MODEL,
+                    },
+                }
+            )
+
+        await self._store.upsert(points)
         logger.info("Indexed {} comments for sheet_id={}", len(comments), sheet_id)
 
     @staticmethod
@@ -272,10 +311,9 @@ class RagService:
         session: AsyncSession,
         max_rows: int = 500,
     ) -> str:
-        """Build a text representation of a sheet for embedding.
-        
+        """Строит текстовое представление листа для эмбеддинга.
+
         Формат: структурированный текст, где каждый материал — отдельный блок.
-        Это улучшает качество chunking и поиска.
         """
         parts = [
             f"Лист: {sheet.normalized_name}",
@@ -302,14 +340,13 @@ class RagService:
         fact_rows = list(fact_result.scalars().all())
 
         if fact_rows:
-            # Группируем по материалам — каждый материал отдельный блок
             current_item = None
             item_lines = []
             for fp in fact_rows:
                 if fp.item_name_normalized != current_item:
                     if item_lines:
                         parts.append("\n".join(item_lines))
-                        parts.append("")  # пустая строка между материалами
+                        parts.append("")
                     current_item = fp.item_name_normalized
                     item_lines = [f"{current_item}:"]
                 item_lines.append(f"  {fp.price_source}: {fp.price_value} руб/тн")
@@ -346,31 +383,6 @@ class RagService:
 
         return "\n".join(parts)
 
-    async def build_full_index(
-        self,
-        session: Optional[AsyncSession] = None,
-    ) -> None:
-        """Rebuild the full BM25 index from all chunk embeddings in the DB."""
-        async def _do_fetch(s):
-            result = await s.execute(select(ChunkEmbedding))
-            return result.scalars().all()
-
-        records = await self._with_session(session, _do_fetch, commit=False)
-
-        chunks = [r.source_text for r in records if r.source_text]
-        if chunks:
-            metadata = [
-                {"source_type": "chunk", "source_id": r.sheet_id}
-                for r in records if r.source_text
-            ]
-            self._bm25 = BM25Index(chunks)
-            self._bm25._metadata = metadata
-            self._bm25.build()
-            self._bm25_dirty = True
-            logger.info("Full BM25 index rebuilt from {} chunks", len(chunks))
-        else:
-            logger.warning("No chunks found to build full BM25 index")
-
     # ------------------------------------------------------------------
     # Search
     # ------------------------------------------------------------------
@@ -379,180 +391,24 @@ class RagService:
         query: str,
         top_k: int = 20,
     ) -> List[HybridSearchResult]:
-        """Run hybrid BM25 + Dense search.
-        
-        Если dense search не дал результатов (эмбеддинги не загружены или модель не работает),
-        делает fallback на прямой SQL-поиск через ILIKE по fact_prices.
-        """
-        self._lazy_init_bm25()
-
-        # Пробуем dense search
-        dense_results = await self._dense.search(query, top_k=top_k)
-
-        # Если dense search не дал результатов — делаем fallback на SQL
-        if not dense_results:
-            logger.warning(
-                "Dense search returned no results for '{}'. "
-                "Falling back to SQL ILIKE search.",
-                query[:60],
-            )
-            return await self._sql_fallback_search(query, top_k=top_k)
-
-        # Если BM25 пуст — используем только dense
-        if self._bm25 is None or self._bm25.size == 0 or not self._bm25.is_built:
-            logger.warning("BM25 index is empty or not built; using dense-only results")
-            return [
-                HybridSearchResult(
-                    chunk=r.chunk,
-                    score=r.score,
-                    bm25_score=0.0,
-                    dense_score=r.score,
-                    rank=r.rank,
-                    source_type=r.source_type,
-                    source_id=r.source_id,
-                )
-                for r in dense_results
-            ]
-
-        # Полноценный hybrid search
-        hybrid = HybridRetriever(bm25_index=self._bm25, dense_retriever=self._dense, fusion="rrf")
-        return await hybrid.search(query, top_k=top_k)
-
-    async def _sql_fallback_search(
-        self,
-        query: str,
-        top_k: int = 20,
-    ) -> List[HybridSearchResult]:
-        """Fallback: прямой SQL-поиск через ILIKE по fact_prices.
-        
-        Используется когда dense search не дал результатов (например,
-        эмбеддинги не загружены или модель эмбеддингов не работает).
-        """
-        from sqlalchemy import text
-        from src.core.db.database import async_session_maker
-
-        # Извлекаем ключевые слова из запроса
-        import re
-        keywords = re.findall(r'\w+', query.lower())
-        # Фильтруем стоп-слова
-        stop_words = {'какова', 'сколько', 'какая', 'какой', 'какие', 'каких', 'цена', 'цены',
-                      'цену', 'стоимость', 'была', 'составила', 'составил', 'составило',
-                      'за', 'на', 'в', 'по', 'с', 'о', 'об', 'от', 'для', 'и', 'или',
-                      'не', 'ни', 'да', 'нет', 'это', 'то', 'что', 'как', 'так', 'все',
-                      'весь', 'вся', 'всего', 'всей', 'всех', 'всем', 'всеми',
-                      'январь', 'февраль', 'март', 'апрель', 'май', 'июнь',
-                      'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь',
-                      'января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
-                      'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря',
-                      'месяц', 'месяце', 'месяца', 'месяцев', 'год', 'года', 'году',
-                      'лет', '2025', '2024', '2026'}
-        keywords = [k for k in keywords if k not in stop_words and len(k) > 2]
-
-        if not keywords:
-            logger.warning("No meaningful keywords extracted from '{}'", query[:60])
-            return []
-
-        # Строим ILIKE условия
-        like_conditions = " OR ".join(
-            f"fp.item_name_normalized ILIKE '%{kw}%'" for kw in keywords
-        )
-
-        sql = f"""
-        SELECT DISTINCT fp.item_name_normalized, fp.period, fp.price_source, fp.price_value,
-               fp.sheet_id
-        FROM fact_prices fp
-        WHERE {like_conditions}
-        ORDER BY fp.item_name_normalized, fp.period
-        LIMIT {top_k * 3}
-        """
-
-        logger.info(
-            "SQL fallback search: keywords={}, sql={}",
-            keywords,
-            sql[:200],
-        )
-
+        """Гибридный поиск (dense + sparse) через Qdrant с реранкингом."""
         try:
-            async with async_session_maker() as s:
-                result = await s.execute(text(sql))
-                rows = result.fetchall()
-
-            if not rows:
-                logger.warning("SQL fallback search returned no results for keywords={}", keywords)
-                return []
-
-            # Группируем по материалу и формируем чанки
-            from collections import defaultdict
-            by_item = defaultdict(list)
-            for row in rows:
-                by_item[row[0]].append(row)
-
-            results = []
-            for rank, (item_name, item_rows) in enumerate(sorted(by_item.items())[:top_k]):
-                chunk_parts = [f"{item_name}:"]
-                for row in item_rows[:5]:  # макс 5 строк на материал
-                    chunk_parts.append(f"  {row[2]}: {row[3]} руб/тн (период: {row[1]})")
-                chunk_text = "\n".join(chunk_parts)
-
-                results.append(HybridSearchResult(
-                    chunk=chunk_text,
-                    score=1.0 - (rank * 0.05),  # убывающий score
-                    bm25_score=0.0,
-                    dense_score=0.0,
-                    rank=rank + 1,
-                    source_type="sql_fallback",
-                    source_id=item_rows[0][4] if item_rows else 0,
-                ))
-
-            logger.info(
-                "SQL fallback search: found {} items for keywords={}",
-                len(results),
-                keywords,
-            )
-            return results
-
+            return await self._hybrid.search(query, top_k=top_k)
         except Exception as exc:
-            logger.error("SQL fallback search failed: {}", exc)
+            logger.error("Hybrid search failed: {}", exc)
             return []
 
     async def dense_search(self, query: str, top_k: int = 20) -> list:
-        """Run dense-only search."""
-        return await self._dense.search(query, top_k=top_k)
+        """Dense-only поиск."""
+        from src.services.rag.retrieval import DenseRetriever
+        retriever = DenseRetriever(self._embedder, self._store, self._sparse)
+        return await retriever.search(query, top_k=top_k)
 
-    # ------------------------------------------------------------------
-    # BM25 persistence
-    # ------------------------------------------------------------------
-    def persist_bm25(self) -> None:
-        """Save BM25 index to disk if dirty."""
-        if self._bm25 is not None and self._bm25_dirty and self._bm25.is_built:
-            self._bm25_path.parent.mkdir(parents=True, exist_ok=True)
-            self._bm25.save(self._bm25_path)
-            self._bm25_dirty = False
-            logger.info("BM25 index persisted to disk")
-        elif self._bm25_dirty:
-            logger.warning("BM25 index is dirty but not built, skipping save")
-
-    def load_bm25(self) -> None:
-        """Load BM25 index from disk if available."""
-        if self._bm25_path.exists():
-            self._bm25 = BM25Index()
-            try:
-                self._bm25.load(self._bm25_path)
-                self._bm25_dirty = False
-                logger.info("BM25 index loaded from disk ({} chunks)", self._bm25.size)
-            except (EOFError, pickle.UnpicklingError, ValueError) as exc:
-                logger.warning("BM25 index file corrupted ({}), rebuilding from scratch", exc)
-                self._bm25_path.unlink(missing_ok=True)
-                self._bm25 = BM25Index([])
-                self._bm25_dirty = True
-
-    def _lazy_init_bm25(self) -> None:
-        """Инициализирует BM25 индекс при первом использовании."""
-        if self._bm25 is None:
-            self.load_bm25()
-        if self._bm25 is None:
-            self._bm25 = BM25Index([])
-            logger.info("BM25 index initialized empty (no chunks)")
+    async def clear_index(self) -> None:
+        """Полностью очищает векторный индекс (для переиндексации)."""
+        await self._store.delete_collection()
+        await self._store.ensure_collection()
+        logger.info("Vector index cleared and recreated")
 
 
 # ---------------------------------------------------------------------------

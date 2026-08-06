@@ -3,17 +3,23 @@ from src.core.logging_settings import logger
 from contextlib import asynccontextmanager
 from sqlalchemy import text
 from src.core.db.database import engine
+from src.core.qdrant.client import qdrant_client, ensure_collections
 from src.api.router import router as files_router
 from src.api.agent_router import router as agent_router
-from src.services.rag.rag_service import rag_service
 from src.api.trace_router import router as trace_router
+from src.api.errors import register_exception_handlers
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting EVRAZ RAG service...")
 
-    rag_service.load_bm25()
-    logger.info("BM25 index loaded ({} chunks)", rag_service._bm25.size if rag_service._bm25 else 0)
+    # Инициализация Qdrant-коллекции
+    try:
+        await ensure_collections()
+        logger.info("Qdrant collections ready")
+    except Exception as e:
+        logger.error(f"Qdrant initialization error: {e}")
 
     try:
         async with engine.connect() as conn:
@@ -23,8 +29,8 @@ async def lifespan(app: FastAPI):
         logger.error(f"Database connection error: {e}")
 
     yield
-    
-    rag_service.persist_bm25()
+
+    await qdrant_client.close()
     await engine.dispose()
     logger.info("Engine disposed, shutdown complete")
 
@@ -37,9 +43,12 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+register_exception_handlers(app)
+
 app.include_router(files_router)
 app.include_router(agent_router)
 app.include_router(trace_router)
+
 
 @app.get("/health")
 async def health():

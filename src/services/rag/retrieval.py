@@ -1,11 +1,9 @@
 from __future__ import annotations
 from typing import List, Optional
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-from src.core.db.database import async_session_maker
-from src.core.db.vector_models import ChunkEmbedding, ColumnEmbedding, SheetEmbedding
 from src.core.logging_settings import logger
+from src.core.qdrant.client import QdrantVectorStore, qdrant_client
 from src.services.rag.embedder import Embedder
+from src.services.rag.sparse import SparseEmbedder, sparse_embedder
 
 
 class DenseSearchResult:
@@ -34,37 +32,61 @@ class DenseSearchResult:
             "rank": self.rank,
         }
 
+
 class DenseRetriever:
-    def __init__(self, embedder: Embedder) -> None:
+    """Dense-ретривер поверх Qdrant.
+
+    Выполняет поиск по dense-векторам в Qdrant. Sparse-поиск и гибридное
+    слияние выполняются в Qdrant одним запросом (см. RagService.hybrid_search).
+    """
+
+    def __init__(
+        self,
+        embedder: Embedder,
+        store: Optional[QdrantVectorStore] = None,
+        sparse: Optional[SparseEmbedder] = None,
+    ) -> None:
         self._embedder = embedder
+        self._store = store or qdrant_client
+        self._sparse = sparse or sparse_embedder
 
     async def search(
         self,
         query: str,
         top_k: int = 10,
-        session: Optional[AsyncSession] = None,
     ) -> List[DenseSearchResult]:
+        """Dense-only поиск по всем типам источников."""
         query_vector = await self._embedder.embed(query)
 
         # Запрашиваем больше результатов из каждого источника,
-        # чтобы после слияния и дедупликации гарантированно получить top_k уникальных
+        # чтобы после дедупликации гарантированно получить top_k уникальных
         inner_limit = max(top_k * 3, 30)
 
-        # Ищем сначала по чанкам (наиболее точный поиск по строкам данных)
-        chunk_results = await self._search_chunk_embeddings(
-            query_vector, inner_limit, session
-        )
-        # Затем по листам (fallback — общий контекст листа)
-        sheet_results = await self._search_sheet_embeddings(
-            query_vector, inner_limit, session
-        )
-        column_results = await self._search_column_embeddings(
-            query_vector, inner_limit, session
-        )
+        results: List[DenseSearchResult] = []
+        for source_type in ("chunk", "sheet", "column", "comment"):
+            try:
+                hits = await self._store.dense_search(
+                    query_vector,
+                    top_k=inner_limit,
+                    source_type=source_type,
+                )
+                for hit in hits:
+                    payload = hit["payload"]
+                    results.append(
+                        DenseSearchResult(
+                            chunk=payload.get("text", ""),
+                            score=hit["score"],
+                            source_type=source_type,
+                            source_id=int(payload.get("source_id", 0)),
+                            rank=0,
+                        )
+                    )
+            except Exception as exc:
+                logger.warning("Dense search failed for source_type={}: {}", source_type, exc)
 
         # Дедупликация по (source_type, source_id): оставляем запись с макс. score
         seen: dict[tuple[str, int], DenseSearchResult] = {}
-        for r in chunk_results + sheet_results + column_results:
+        for r in results:
             key = (r.source_type, r.source_id)
             if key not in seen or r.score > seen[key].score:
                 seen[key] = r
@@ -81,128 +103,44 @@ class DenseRetriever:
         self,
         query: str,
         top_k: int = 10,
-        session: Optional[AsyncSession] = None,
     ) -> List[DenseSearchResult]:
         query_vector = await self._embedder.embed(query)
-        return await self._search_sheet_embeddings(query_vector, top_k, session)
+        return await self._search_source(query_vector, "sheet", top_k)
 
     async def search_columns(
         self,
         query: str,
         top_k: int = 10,
-        session: Optional[AsyncSession] = None,
     ) -> List[DenseSearchResult]:
         query_vector = await self._embedder.embed(query)
-        return await self._search_column_embeddings(query_vector, top_k, session)
+        return await self._search_source(query_vector, "column", top_k)
 
-    async def _search_chunk_embeddings(
+    async def _search_source(
         self,
         query_vector: List[float],
+        source_type: str,
         top_k: int,
-        session: Optional[AsyncSession],
     ) -> List[DenseSearchResult]:
-        """Поиск по отдельным чанкам (строкам данных) — наиболее точный."""
-        async with session or async_session_maker() as s:
-            # Используем cosine_distance напрямую и конвертируем в score
-            # через 1/(1+distance), чтобы всегда получать положительный score в (0, 1]
-            stmt = (
-                select(
-                    ChunkEmbedding.source_text,
-                    ChunkEmbedding.sheet_id,
-                    ChunkEmbedding.embedding.cosine_distance(query_vector).label(
-                        "distance"
-                    ),
-                )
-                .order_by(
-                    ChunkEmbedding.embedding.cosine_distance(query_vector).asc()
-                )
-                .limit(top_k)
+        try:
+            hits = await self._store.dense_search(
+                query_vector,
+                top_k=top_k,
+                source_type=source_type,
             )
-            rows = await s.execute(stmt)
-            results: List[DenseSearchResult] = []
-            for rank, row in enumerate(rows, start=1):
-                distance = float(row.distance)
-                # Конвертируем distance в score: 1/(1+distance) даёт (0.33, 1.0] для distance [0, 2]
-                score = 1.0 / (1.0 + distance)
-                results.append(
-                    DenseSearchResult(
-                        chunk=row.source_text,
-                        score=score,
-                        source_type="chunk",
-                        source_id=row.sheet_id,
-                        rank=rank,
-                    )
-                )
-            return results
+        except Exception as exc:
+            logger.warning("Dense search failed for source_type={}: {}", source_type, exc)
+            return []
 
-    async def _search_sheet_embeddings(
-        self,
-        query_vector: List[float],
-        top_k: int,
-        session: Optional[AsyncSession],
-    ) -> List[DenseSearchResult]:
-        async with session or async_session_maker() as s:
-            stmt = (
-                select(
-                    SheetEmbedding.source_text,
-                    SheetEmbedding.sheet_id,
-                    SheetEmbedding.embedding.cosine_distance(query_vector).label(
-                        "distance"
-                    ),
+        results: List[DenseSearchResult] = []
+        for rank, hit in enumerate(hits, start=1):
+            payload = hit["payload"]
+            results.append(
+                DenseSearchResult(
+                    chunk=payload.get("text", ""),
+                    score=hit["score"],
+                    source_type=source_type,
+                    source_id=int(payload.get("source_id", 0)),
+                    rank=rank,
                 )
-                .order_by(
-                    SheetEmbedding.embedding.cosine_distance(query_vector).asc()
-                )
-                .limit(top_k)
             )
-            rows = await s.execute(stmt)
-            results: List[DenseSearchResult] = []
-            for rank, row in enumerate(rows, start=1):
-                distance = float(row.distance)
-                score = 1.0 / (1.0 + distance)
-                results.append(
-                    DenseSearchResult(
-                        chunk=row.source_text,
-                        score=score,
-                        source_type="sheet",
-                        source_id=row.sheet_id,
-                        rank=rank,
-                    )
-                )
-            return results
-
-    async def _search_column_embeddings(
-        self,
-        query_vector: List[float],
-        top_k: int,
-        session: Optional[AsyncSession],
-    ) -> List[DenseSearchResult]:
-        async with session or async_session_maker() as s:
-            stmt = (
-                select(
-                    ColumnEmbedding.source_text,
-                    ColumnEmbedding.column_id,
-                    ColumnEmbedding.embedding.cosine_distance(query_vector).label(
-                        "distance"
-                    ),
-                )
-                .order_by(
-                    ColumnEmbedding.embedding.cosine_distance(query_vector).asc()
-                )
-                .limit(top_k)
-            )
-            rows = await s.execute(stmt)
-            results: List[DenseSearchResult] = []
-            for rank, row in enumerate(rows, start=1):
-                distance = float(row.distance)
-                score = 1.0 / (1.0 + distance)
-                results.append(
-                    DenseSearchResult(
-                        chunk=row.source_text,
-                        score=score,
-                        source_type="column",
-                        source_id=row.column_id,
-                        rank=rank,
-                    )
-                )
-            return results
+        return results

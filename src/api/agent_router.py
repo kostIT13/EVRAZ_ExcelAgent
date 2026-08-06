@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import List
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from src.api.schemas import AskRequest, AskResponse, SourceInfo
 from src.core.logging_settings import logger
 from src.services.generation.pipeline import pipeline, GenerationResult
@@ -71,35 +71,30 @@ async def ask_question(request: AskRequest) -> AskResponse:
         is_retry,
     )
 
-    try:
-        if request.mode == "rag":
-            result = await pipeline.run(
-                question=request.question,
-                top_k=request.top_k,
-                conversation_history=history_dicts,
-            )
-            return _build_rag_response(result, mode_used="rag")
-
-        agent_result = await pipeline.run_agent(
+    if request.mode == "rag":
+        result = await pipeline.run(
             question=request.question,
             top_k=request.top_k,
             conversation_history=history_dicts,
         )
+        return _build_rag_response(result, mode_used="rag")
 
-        if request.mode == "auto" and agent_result.status == "failed":
-            logger.info(
-                "Auto mode: agent failed, falling back to RAG for '{}'",
-                request.question[:80],
-            )
-            rag_result = await pipeline.run(
-                question=request.question,
-                top_k=request.top_k,
-                conversation_history=history_dicts,
-            )
-            return _build_rag_response(rag_result, mode_used="rag_fallback")
+    agent_result = await pipeline.run_agent(
+        question=request.question,
+        top_k=request.top_k,
+        conversation_history=history_dicts,
+    )
 
-        return _build_agent_response(agent_result)
+    if request.mode == "auto" and agent_result.status == "failed":
+        logger.info(
+            "Auto mode: agent failed, falling back to RAG for '{}'",
+            request.question[:80],
+        )
+        rag_result = await pipeline.run(
+            question=request.question,
+            top_k=request.top_k,
+            conversation_history=history_dicts,
+        )
+        return _build_rag_response(rag_result, mode_used="rag_fallback")
 
-    except Exception as exc:
-        logger.error("Ask request failed: {}", exc)
-        raise HTTPException(status_code=500, detail=str(exc))
+    return _build_agent_response(agent_result)

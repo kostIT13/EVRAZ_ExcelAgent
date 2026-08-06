@@ -2,7 +2,7 @@
 
 **AI-агент для интеллектуальной работы с Excel-файлами металлургической компании ЕВРАЗ.**
 
-Система позволяет загружать Excel-файлы с ценами на металлы, автоматически парсить их, строить векторные индексы (dense + BM25) и отвечать на вопросы пользователя на естественном языке — как через RAG-пайплайн, так и через специализированного LangGraph-агента с генерацией SQL.
+Система позволяет загружать Excel-файлы с ценами на металлы, автоматически парсить их, строить векторные индексы (dense + sparse в Qdrant) и отвечать на вопросы пользователя на естественном языке — как через RAG-пайплайн, так и через специализированного LangGraph-агента с генерацией SQL.
 
 ---
 
@@ -47,18 +47,27 @@
                     │  ┌────────────────────▼─────────────────────────┐   │
                     │  │              RagService                       │   │
                     │  │  ┌──────────┐ ┌──────────┐ ┌──────────────┐  │   │
-                    │  │  │ Dense    │ │  BM25    │ │   Hybrid     │  │   │
-                    │  │  │Retriever │ │  Index   │ │   Retriever  │  │   │
+                    │  │  │ Dense    │ │  Sparse  │ │   Hybrid     │  │   │
+                    │  │  │Retriever │ │  Vector  │ │   Retriever  │  │   │
                     │  │  └──────────┘ └──────────┘ └──────────────┘  │   │
                     │  └────────────────────┬─────────────────────────┘   │
                     └───────────────────────┼─────────────────────────────┘
                                             │
               ┌─────────────────────────────┼─────────────────────────────┐
-              │              PostgreSQL (pgvector)                        │
+              │              Qdrant (dense + sparse)                      │
+              │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────────┐   │
+              │  │  chunks  │ │  sheets  │ │ columns  │ │  comments  │   │
+              │  │ (dense+  │ │ (dense+  │ │ (dense+  │ │ (dense+    │   │
+              │  │  sparse) │ │  sparse) │ │  sparse) │ │  sparse)   │   │
+              │  └──────────┘ └──────────┘ └──────────┘ └────────────┘   │
+              └──────────────────────────────────────────────────────────┘
+                                            │
+              ┌─────────────────────────────┼─────────────────────────────┐
+              │              PostgreSQL (реляционные данные)              │
               │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────────┐   │
               │  │  files   │ │  sheets  │ │ columns  │ │   cells    │   │
               │  ├──────────┤ ├──────────┤ ├──────────┤ ├────────────┤   │
-              │  │chunk_emb │ │sheet_emb │ │col_emb   │ │query_cache │   │
+              │  │fact_prices││ query_logs││query_cache││golden_dataset│  │
               │  └──────────┘ └──────────┘ └──────────┘ └────────────┘   │
               └──────────────────────────────────────────────────────────┘
                                             │
@@ -66,7 +75,7 @@
               │         Ollama (LLM + Embeddings)                        │
               │  ┌──────────────────┐  ┌──────────────────┐              │
               │  │  LLM (chat)      │  │  Embedding Model │              │
-              │  │  (fallback)      │  │  nomic-embed-text│              │
+              │  │  (fallback)      │  │  BAAI/bge-m3     │              │
               │  └──────────────────┘  └──────────────────┘              │
               └──────────────────────────────────────────────────────────┘
 ```
@@ -76,10 +85,11 @@
 | Компонент | Назначение |
 |-----------|-----------|
 | **FastAPI** | Основной бэкенд-сервер (порт 8000) |
-| **PostgreSQL + pgvector** | Хранение данных Excel и векторных эмбеддингов |
+| **PostgreSQL** | Хранение реляционных данных Excel (файлы, листы, ячейки, логи) |
+| **Qdrant** | Векторное хранилище (dense + sparse вектора, гибридный поиск) |
 | **Ollama** | Локальный LLM для fallback и эмбеддингов |
 | **LangGraph** | Граф агента (Classifier → Planner → CodeGen → Executor → Verifier) |
-| **BM25 + Dense** | Гибридный поиск (sparse + dense retrieval) |
+| **flashrank** | Реранкинг результатов гибридного поиска |
 | **Frontend** | Веб-интерфейс на Vite (порт 8080) |
 
 ---
@@ -95,11 +105,12 @@
 - Хранение полной структуры: файл → листы → колонки → ячейки
 
 ### 🔍 Гибридный поиск (RAG)
-- **Dense retrieval**: эмбеддинги через `nomic-embed-text` (Ollama) с косинусной близостью
-- **Sparse retrieval**: BM25 (Okapi) для точного совпадения терминов
-- **Fusion**: RRF (Reciprocal Rank Fusion) или линейная комбинация
-- Кэширование эмбеддингов запросов в БД
-- Персистентность BM25-индекса на диск
+- **Dense retrieval**: эмбеддинги через `BAAI/bge-m3` (Ollama) с косинусной близостью
+- **Sparse retrieval**: BM25-подобные sparse-вектора (хранятся в Qdrant)
+- **Fusion**: RRF (Reciprocal Rank Fusion) — выполняется одним запросом к Qdrant
+- **Реранкинг**: кросс-энкодерная модель `ms-marco-MiniLM-L-12-v2` (flashrank)
+- Кэширование эмбеддингов запросов (in-memory, через абстрактный интерфейс)
+- Вектора хранятся в Qdrant (dense + sparse), PostgreSQL — только реляционные данные
 
 ### 🤖 LangGraph Agent
 - **Classifier**: определяет тип запроса (lookup / aggregate / cross_sheet / delta)
@@ -132,12 +143,13 @@
 | **FastAPI** | Веб-фреймворк |
 | **SQLAlchemy 2.0** | ORM |
 | **asyncpg** | Асинхронный драйвер PostgreSQL |
-| **pgvector** | Векторные эмбеддинги |
+| **Qdrant** | Векторное хранилище (dense + sparse) |
+| **fastembed** | Генерация sparse-векторов (BM25/SPLADE) |
+| **flashrank** | Реранкинг результатов поиска |
 | **LangGraph** | Граф агента |
 | **OpenAI SDK** | Клиент для LLM (OpenAI / vLLM / DeepSeek / Ollama) |
 | **openpyxl** | Парсинг Excel |
 | **pandas** | Обработка данных |
-| **rank-bm25** | BM25-индексация |
 | **Pydantic** | Валидация схем |
 | **Loguru** | Логирование |
 | **Alembic** | Миграции БД |
@@ -153,7 +165,8 @@
 | Технология | Назначение |
 |-----------|-----------|
 | **Docker / Docker Compose** | Контейнеризация |
-| **PostgreSQL** | База данных |
+| **PostgreSQL** | Реляционная база данных |
+| **Qdrant** | Векторное хранилище |
 | **Ollama** | Локальный LLM |
 
 ---
@@ -186,8 +199,8 @@ LLM_MODEL_CHEAP=qwen2.5:1.5b
 
 # Ollama (для эмбеддингов)
 OLLAMA_BASE_URL=http://ollama:11434/v1
-OLLAMA_EMBED_MODEL=nomic-embed-text
-EMBED_DIMENSION=768
+OLLAMA_EMBED_MODEL=BAAI/bge-m3
+EMBED_DIMENSION=1024
 
 # PostgreSQL
 POSTGRES_USER=postgres
@@ -196,6 +209,10 @@ POSTGRES_DB=evraz_rag
 POSTGRES_HOST=postgres
 POSTGRES_PORT=5432
 POSTGRES_URL=postgresql+asyncpg://postgres:your-password@postgres:5432/evraz_rag
+
+# Qdrant (векторное хранилище)
+QDRANT_URL=http://qdrant:6333
+QDRANT_COLLECTION=evraz_chunks
 ```
 
 ### 3. Запуск через Docker Compose
@@ -205,7 +222,8 @@ docker compose up -d
 ```
 
 Будут запущены:
-- **PostgreSQL** с pgvector (порт 5432)
+- **PostgreSQL** (порт 5432)
+- **Qdrant** (порт 6333)
 - **Ollama** (порт 11434)
 - **Backend** (порт 8000)
 - **Frontend** (порт 8080)
@@ -219,7 +237,7 @@ docker compose exec service alembic upgrade head
 ### 5. Загрузка модели эмбеддингов в Ollama
 
 ```bash
-docker compose exec ollama ollama pull nomic-embed-text
+docker compose exec ollama ollama pull BAAI/bge-m3
 ```
 
 ### 6. Проверка
@@ -245,13 +263,20 @@ curl http://localhost:8000/health
 | `LLM_MODEL_PRIMARY` | — | Основная модель |
 | `LLM_MODEL_CHEAP` | — | Дешёвая модель (fallback) |
 | `OLLAMA_BASE_URL` | `http://ollama:11434/v1` | URL Ollama |
-| `OLLAMA_EMBED_MODEL` | `nomic-embed-text` | Модель эмбеддингов |
-| `EMBED_DIMENSION` | `768` | Размерность эмбеддингов |
+| `OLLAMA_EMBED_MODEL` | `BAAI/bge-m3` | Модель эмбеддингов |
+| `EMBED_DIMENSION` | `1024` | Размерность эмбеддингов |
 | `LLM_TEMPERATURE` | `0.1` | Температура LLM |
 | `LLM_MAX_TOKENS` | `2048` | Максимум токенов |
 | `REQUEST_TIMEOUT_S` | `60` | Таймаут запроса к LLM |
 | `MAX_RETRIES` | `3` | Количество retry при ошибках LLM |
 | `POSTGRES_URL` | — | Полный URL подключения к БД |
+| `QDRANT_URL` | `http://qdrant:6333` | URL Qdrant |
+| `QDRANT_API_KEY` | — | API-ключ Qdrant (опционально) |
+| `QDRANT_COLLECTION` | `evraz_chunks` | Имя коллекции в Qdrant |
+| `QDRANT_SPARSE_MODEL` | `Qdrant/bm25` | Модель sparse-векторов (fastembed) |
+| `RERANKER_MODEL` | `ms-marco-MiniLM-L-12-v2` | Модель реранкера (flashrank) |
+| `RERANKER_ENABLED` | `true` | Включить реранкинг |
+| `RERANKER_TOP_K` | `5` | Сколько результатов вернуть после реранкинга |
 
 ---
 
@@ -425,22 +450,24 @@ needs_correction = (
 
 ### Индексация
 
-1. **Dense**: каждый чанк эмбеддится через `nomic-embed-text` → хранится в `chunk_embeddings`
-2. **Sparse**: BM25-индекс строится по тем же чанкам → сохраняется на диск (`data/bm25_index.pkl`)
+1. **Dense**: каждый чанк эмбеддится через `BAAI/bge-m3` → хранится в Qdrant
+2. **Sparse**: BM25-подобные sparse-вектора генерируются через fastembed → хранятся в Qdrant
 3. **Column embeddings**: отдельные эмбеддинги для каждой колонки
 4. **Sheet embeddings**: общий эмбеддинг для каждого листа (fallback)
+5. **Comments**: эмбеддинги Excel-комментариев
 
 ### Гибридный поиск
 
 ```
-Запрос → [Embedder] → Dense search (pgvector cosine distance)
-       → [BM25]     → Sparse search (Okapi BM25)
-       → [Fusion]   → RRF / Linear → Результаты
+Запрос → [Embedder] → Dense vector
+       → [Sparse]   → Sparse vector
+       → [Qdrant]   → Гибридный поиск (RRF-слияние одним запросом)
+       → [Reranker] → Реранкинг (flashrank) → Результаты
 ```
 
-Методы фьюжн:
-- **RRF** (Reciprocal Rank Fusion): `score = 1 / (k + rank)`, где `k=60`
-- **Linear**: `score = α * BM25 + (1-α) * Dense`, где `α=0.3`
+Методы слияния (fusion):
+- **RRF** (Reciprocal Rank Fusion): `score = 1 / (k + rank)`, где `k=60` — выполняется в Qdrant
+- **Реранкинг**: кросс-энкодерная модель `ms-marco-MiniLM-L-12-v2` переупорядочивает результаты
 
 ### Verifier (проверка ответов)
 
@@ -457,7 +484,7 @@ needs_correction = (
 ```
 EVRAZ_AGENT/
 ├── .env.example              # Шаблон конфигурации
-├── docker-compose.yml        # Docker Compose (PostgreSQL + Ollama + Backend + Frontend)
+├── docker-compose.yml        # Docker Compose (PostgreSQL + Qdrant + Ollama + Backend + Frontend)
 ├── Dockerfile                # Dockerfile для backend
 ├── Dockerfile.frontend       # Dockerfile для frontend
 ├── pyproject.toml            # Зависимости Python
@@ -467,8 +494,7 @@ EVRAZ_AGENT/
 │   ├── env.py
 │   └── script.py.mako
 │
-├── data/                     # Данные (BM25 индекс, Excel-файлы)
-│   ├── bm25_index.pkl
+├── data/                     # Данные (Excel-файлы)
 │   └── data_proportional_prices.xlsx
 │
 ├── frontend/                 # Веб-интерфейс
@@ -493,7 +519,8 @@ EVRAZ_AGENT/
     │   ├── agent_router.py   # /ask/* эндпоинты
     │   ├── trace_router.py   # /trace/* эндпоинты
     │   ├── schemas.py        # Pydantic-схемы
-    │   └── dependencies.py   # DI
+    │   ├── dependencies.py   # DI
+    │   └── errors.py         # Централизованная обработка ошибок
     │
     ├── core/                 # Ядро
     │   ├── config.py         # Настройки (pydantic-settings)
@@ -501,8 +528,9 @@ EVRAZ_AGENT/
     │   ├── db/
     │   │   ├── base.py       # SQLAlchemy Base
     │   │   ├── database.py   # Асинхронный движок + сессии
-    │   │   ├── models.py     # ORM-модели (File, Sheet, ColumnMetadata, Cell, QueryLog)
-    │   │   └── vector_models.py  # Векторные модели (ChunkEmbedding, SheetEmbedding, ...)
+    │   │   └── models.py     # ORM-модели (File, Sheet, ColumnMetadata, Cell, QueryLog)
+    │   ├── qdrant/
+    │   │   └── client.py     # Qdrant-клиент (dense + sparse, гибридный поиск)
     │   └── excel/
     │       ├── parser.py     # Парсинг Excel (openpyxl)
     │       ├── normalize.py  # Нормализация данных и типов
@@ -515,11 +543,13 @@ EVRAZ_AGENT/
     │   │
     │   ├── rag/
     │   │   ├── rag_service.py  # Оркестратор RAG
-    │   │   ├── bm25.py         # BM25-индекс (rank_bm25)
     │   │   ├── chunker.py      # Разбивка на чанки
-    │   │   ├── embedder.py     # Эмбеддинги + кэш
-    │   │   ├── hybrid.py       # Гибридный поиск (RRF / Linear)
-    │   │   └── retrieval.py    # Dense retrieval (pgvector)
+    │   │   ├── embedder.py     # Эмбеддинги + абстрактный кэш
+    │   │   ├── embedding_cache.py  # Интерфейс кэша эмбеддингов
+    │   │   ├── sparse.py       # Генерация sparse-векторов (fastembed)
+    │   │   ├── reranker.py     # Реранкинг (flashrank)
+    │   │   ├── hybrid.py       # Гибридный поиск (RRF через Qdrant)
+    │   │   └── retrieval.py    # Dense retrieval (Qdrant)
     │   │
     │   ├── generation/
     │   │   ├── pipeline.py     # GenerationPipeline (RAG + Agent)
@@ -556,16 +586,19 @@ EVRAZ_AGENT/
 uv sync
 
 # Запуск PostgreSQL (например, через Docker)
-docker run -d --name pgvector \
+docker run -d --name postgres \
   -e POSTGRES_USER=postgres \
   -e POSTGRES_PASSWORD=password \
   -e POSTGRES_DB=evraz_rag \
   -p 5432:5432 \
-  ankane/pgvector:latest
+  postgres:16-alpine
+
+# Запуск Qdrant
+docker run -d --name qdrant -p 6333:6333 qdrant/qdrant:latest
 
 # Запуск Ollama
 docker run -d --name ollama -p 11434:11434 ollama/ollama:latest
-docker exec ollama ollama pull nomic-embed-text
+docker exec ollama ollama pull BAAI/bge-m3
 
 # Миграции БД
 alembic upgrade head

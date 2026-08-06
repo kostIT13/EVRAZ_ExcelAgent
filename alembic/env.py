@@ -1,7 +1,7 @@
 """Alembic environment configuration for EVRAZ_AGENT.
 
 Uses offline mode by default so that migrations can be generated
-without a running PostgreSQL + pgvector instance.
+without a running PostgreSQL instance.
 """
 
 from logging.config import fileConfig
@@ -9,7 +9,6 @@ from pathlib import Path
 
 from alembic import context
 from dotenv import load_dotenv
-from pgvector.sqlalchemy import VECTOR  # noqa: F401
 from sqlalchemy import engine_from_config, pool
 
 # Загружаем .env перед импортом settings
@@ -27,12 +26,6 @@ from src.core.db.models import (  # noqa: E402
     QueryCache,
     QueryLog,
     Sheet,
-)
-from src.core.db.vector_models import (  # noqa: E402
-    ChunkEmbedding,
-    ColumnEmbedding,
-    QueryEmbeddingCache,
-    SheetEmbedding,
 )
 from src.core.config import settings  # noqa: E402
 
@@ -76,7 +69,7 @@ def run_migrations_offline() -> None:
 def run_migrations_online() -> None:
     """Run migrations in 'online' mode.
 
-    Требует работающего PostgreSQL с pgvector.
+    Требует работающего PostgreSQL.
     """
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),

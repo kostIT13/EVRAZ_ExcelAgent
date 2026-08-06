@@ -108,8 +108,17 @@ class LLMClient:
             )
             return resp.data[0].embedding
         except Exception as exc:
-            logger.error("Embedding failed: {}", exc)
-            return [0.0] * settings.EMBED_DIMENSION
+            # Важно НЕ возвращать молча нулевой вектор: это маскирует ошибку
+            # и приводит к индексации битых (нулевых) векторов, что делает поиск
+            # бессмысленным. Пробрасываем исключение, чтобы пайплайн остановился
+            # и ошибка стала видимой.
+            logger.error(
+                "Embedding failed (model='{}', input_len={}): {}",
+                self._embed_model,
+                len(text),
+                exc,
+            )
+            raise
 
     async def embed_batch(self, texts: List[str]) -> List[List[float]]:
         """Embed multiple texts in a single API call (batch)."""
@@ -124,8 +133,14 @@ class LLMClient:
             sorted_data = sorted(resp.data, key=lambda x: x.index)
             return [item.embedding for item in sorted_data]
         except Exception as exc:
-            logger.error("Batch embedding failed: {}", exc)
-            return [[0.0] * settings.EMBED_DIMENSION for _ in texts]
+            # Аналогично embed(): не возвращаем молча нулевые векторы.
+            logger.error(
+                "Batch embedding failed (model='{}', batch_size={}): {}",
+                self._embed_model,
+                len(texts),
+                exc,
+            )
+            raise
 
     @staticmethod
     async def _call(

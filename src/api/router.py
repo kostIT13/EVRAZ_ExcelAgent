@@ -1,13 +1,13 @@
 import tempfile
 from pathlib import Path
 from typing import List
-from fastapi import APIRouter, Depends, UploadFile, HTTPException, Query
+from fastapi import APIRouter, Depends, UploadFile, Query
 from fastapi import File as FastAPIFile
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.db.database import get_db
 from src.core.logging_settings import logger
-from src.services.excel.ingestion_service import ExcelIngestionService
 from src.services.rag.rag_service import rag_service
+from src.api.errors import AppError, FileTooLargeError, ValidationError
 from src.api.schemas import (
     FileResponse,
     FileListResponse,
@@ -40,16 +40,16 @@ async def upload_file(
 ):
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in ALLOWED_EXTENSIONS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid file type '{suffix}'. Allowed: {', '.join(ALLOWED_EXTENSIONS)}",
+        raise ValidationError(
+            f"Invalid file type '{suffix}'. Allowed: {', '.join(ALLOWED_EXTENSIONS)}"
         )
 
-    content = await file.read()
+    # Читаем только MAX_FILE_SIZE + 1 байт, чтобы не загружать огромный файл в память.
+    # Если файл больше лимита — сразу отклоняем, не читая его целиком.
+    content = await file.read(MAX_FILE_SIZE + 1)
     if len(content) > MAX_FILE_SIZE:
-        raise HTTPException(
-            status_code=400,
-            detail=f"File too large ({len(content)} bytes). Max: {MAX_FILE_SIZE} bytes",
+        raise FileTooLargeError(
+            f"File too large. Max: {MAX_FILE_SIZE} bytes"
         )
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
@@ -63,13 +63,6 @@ async def upload_file(
             message="File uploaded and processed successfully",
             file=FileResponse.model_validate(file_record),
         )
-    except FileNotFoundError:
-        raise HTTPException(status_code=400, detail="File not found")
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error("Upload failed: {}", e, exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
     finally:
         if tmp_path.exists():
             tmp_path.unlink()
@@ -152,11 +145,10 @@ async def get_sheet_cells(
 async def reindex_file(
     file_id: int,
     service: FileServiceDependency,
-    session: AsyncSession = Depends(get_db),
 ):
     await service.get_by_id(file_id)
 
     logger.info("Reindexing file id={}", file_id)
-    await rag_service.build_index_for_file(file_id, session=session)
+    await rag_service.build_index_for_file(file_id)
     logger.info("Reindex complete for file id={}", file_id)
     return {"message": f"File {file_id} reindexed successfully"}

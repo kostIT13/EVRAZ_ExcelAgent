@@ -119,6 +119,10 @@ class SQLAlchemyExcelRepository(ExcelRepository):
             self.session.add(sheet_record)
             await self.session.flush()
 
+            # Предзагружаем маппинг "нормализованное имя колонки → ColumnMetadata".
+            # Раньше для каждой ячейки выполнялся отдельный SELECT (_get_column_by_name),
+            # что давало N+1 запросов к БД при большом количестве ячеек.
+            col_by_name: Dict[str, ColumnMetadata] = {}
             for header in sheet.headers:
                 col_record = ColumnMetadata(
                     sheet_id=sheet_record.id,
@@ -128,12 +132,13 @@ class SQLAlchemyExcelRepository(ExcelRepository):
                     data_type="text",
                 )
                 self.session.add(col_record)
+                col_by_name[header.col_name] = col_record
             await self.session.flush()
 
             for row_idx, row_data in enumerate(sheet.data):
                 for col_name, value in row_data.items():
                     if value is not None and value != "":
-                        col_record = await self._get_column_by_name(sheet_record.id, col_name)
+                        col_record = col_by_name.get(col_name)
                         if col_record:
                             cell_record = Cell(
                                 sheet_id=sheet_record.id,
