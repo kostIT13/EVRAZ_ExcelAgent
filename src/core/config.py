@@ -28,5 +28,17 @@ class Settings(BaseSettings):
     POSTGRES_USER: str
     POSTGRES_PORT: int = 5432
 
+    # Qdrant (векторное хранилище)
+    QDRANT_URL: str = "http://qdrant:6333"
+    QDRANT_API_KEY: str = ""
+    QDRANT_COLLECTION: str = "evraz_chunks"
+    QDRANT_EMBEDDING_MODEL: str = "BAAI/bge-small-en-v1.5"
+    QDRANT_SPARSE_MODEL: str = "Qdrant/bm25"
+
+    # Реранкер (flashrank)
+    RERANKER_MODEL: str = "ms-marco-MiniLM-L-12-v2"
+    RERANKER_ENABLED: bool = True
+    RERANKER_TOP_K: int = 5
+
 
 settings = Settings()

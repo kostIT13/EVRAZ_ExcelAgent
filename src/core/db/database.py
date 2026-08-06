@@ -27,7 +27,7 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             yield session
             await session.commit()
             logger.debug("Transaction committed")
-        except Exception as e:
+        except Exception:
             await session.rollback()
-            logger.error(f"Transaction error {e}", exc_info=True)
+            logger.exception("Transaction error")
             raise

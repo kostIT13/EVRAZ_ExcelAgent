@@ -1,15 +1,12 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import List, Optional, TYPE_CHECKING
+from typing import List, Optional
 
 from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, func, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.core.db.base import Base
-
-if TYPE_CHECKING:
-    from src.core.db.vector_models import ChunkEmbedding, ColumnEmbedding, QueryEmbeddingCache, SheetEmbedding
 
 
 class File(Base):
@@ -53,19 +50,6 @@ class Sheet(Base):
     columns: Mapped[List["ColumnMetadata"]] = relationship("ColumnMetadata", back_populates="sheet", cascade="all, delete-orphan")
     cells: Mapped[List["Cell"]] = relationship("Cell", back_populates="sheet", cascade="all, delete-orphan")
     fact_prices: Mapped[List["FactPrice"]] = relationship("FactPrice", back_populates="sheet", cascade="all, delete-orphan")
-    embedding: Mapped[Optional["SheetEmbedding"]] = relationship(
-        "SheetEmbedding",
-        back_populates="sheet",
-        uselist=False,
-        cascade="all, delete-orphan",
-        lazy="raise",
-    )
-    chunk_embeddings: Mapped[List["ChunkEmbedding"]] = relationship(
-        "ChunkEmbedding",
-        back_populates="sheet",
-        cascade="all, delete-orphan",
-        lazy="raise",
-    )
 
     __table_args__ = (
         Index("ix_sheets_file_id", "file_id"),
@@ -88,13 +72,6 @@ class ColumnMetadata(Base):
     sample_values: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
 
     sheet: Mapped["Sheet"] = relationship("Sheet", back_populates="columns")
-    embedding: Mapped[Optional["ColumnEmbedding"]] = relationship(
-        "ColumnEmbedding",
-        back_populates="column",
-        uselist=False,
-        cascade="all, delete-orphan",
-        lazy="raise"
-    )
 
     __table_args__ = (
         Index("ix_column_metadata_sheet_id", "sheet_id"),
