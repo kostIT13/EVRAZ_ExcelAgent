@@ -13,8 +13,27 @@ class Settings(BaseSettings):
     LLM_MODEL_CHEAP: str
 
     OLLAMA_BASE_URL: str
-    OLLAMA_EMBED_MODEL: str
+
+    # Dense-эмбеддинг модель (локальный инференс через fastembed, без HTTP к Ollama).
+    # intfloat/multilingual-e5-large — мультиязычная модель (~100 языков, включая
+    # русский), контекст 512 токенов (~1000 символов русского текста), что позволяет
+    # эмбеддить чанки без агрессивной обрезки (в отличие от прежней MiniLM-L12-v2
+    # с контекстом 128 токенов, терявшей ~80% содержания чанка).
+    # ВАЖНО: fastembed 0.8.0 не поддерживает e5-small, поэтому используем e5-large.
+    # Размерность 1024 ОБЯЗАНА совпадать с размерностью коллекции в Qdrant
+    # (EMBED_DIMENSION). После смены размерности пересоздайте коллекцию
+    # (scripts/recreate_qdrant_collection.py) и заново загрузите файлы.
+    EMBED_MODEL: str = "intfloat/multilingual-e5-large"
+    # Legacy-параметр (модель эмбеддинга в Ollama), оставлен для обратной
+    # совместимости при деплое, но fastembed-embedder его не использует.
+    OLLAMA_EMBED_MODEL: str = "intfloat/multilingual-e5-large"
     EMBED_DIMENSION: int = 1024
+
+    # Размер батча эмбеддингов (количество текстов на один проход fastembed).
+    # fastembed инференсит локально на CPU батчами — это сильно быстрее
+    # последовательных HTTP-запросов к Ollama. Значение можно переопределить
+    # через .env (EMBED_BATCH_SIZE).
+    EMBED_BATCH_SIZE: int = 32
 
     LLM_TEMPERATURE: float = 0.1
     LLM_MAX_TOKENS: int = 2048

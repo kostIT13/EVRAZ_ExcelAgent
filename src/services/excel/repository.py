@@ -1,7 +1,7 @@
 import re
 from pathlib import Path
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import insert, select
 from loguru import logger
 from typing import Any, Dict, List, Optional
 from src.core.db.models import File, Sheet, ColumnMetadata, Cell, FactPrice, EntityDictionary, ExcelComment
@@ -135,20 +135,25 @@ class SQLAlchemyExcelRepository(ExcelRepository):
                 col_by_name[header.col_name] = col_record
             await self.session.flush()
 
+            # Bulk-insert ячеек: раньше каждая ячейка добавлялась через session.add(),
+            # что при тысячах ячеек давало тысячи отдельных ORM-операций. Теперь
+            # собираем все ячейки листа и вставляем одним insert-запросом.
+            cell_rows = []
             for row_idx, row_data in enumerate(sheet.data):
                 for col_name, value in row_data.items():
                     if value is not None and value != "":
                         col_record = col_by_name.get(col_name)
                         if col_record:
-                            cell_record = Cell(
-                                sheet_id=sheet_record.id,
-                                row_num=row_idx + 1,
-                                col_index=col_record.col_index,
-                                value_text=str(value) if not isinstance(value, (int, float)) else None,
-                                value_number=value if isinstance(value, (int, float)) else None,
-                                original_value=str(value),
-                            )
-                            self.session.add(cell_record)
+                            cell_rows.append({
+                                "sheet_id": sheet_record.id,
+                                "row_num": row_idx + 1,
+                                "col_index": col_record.col_index,
+                                "value_text": str(value) if not isinstance(value, (int, float)) else None,
+                                "value_number": value if isinstance(value, (int, float)) else None,
+                                "original_value": str(value),
+                            })
+            if cell_rows:
+                await self.session.execute(insert(Cell), cell_rows)
 
             await self._save_fact_prices(sheet_record, sheet)
 

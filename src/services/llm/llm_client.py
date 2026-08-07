@@ -124,10 +124,21 @@ class LLMClient:
         """Embed multiple texts in a single API call (batch)."""
         if not texts:
             return []
+        import time
+        start = time.monotonic()
         try:
             resp = await self._embed.embeddings.create(
                 model=self._embed_model,
                 input=texts,
+            )
+            elapsed = time.monotonic() - start
+            total_chars = sum(len(t) for t in texts)
+            logger.info(
+                "Embedded batch: n={}, chars={}, took={:.1f}s (model='{}')",
+                len(texts),
+                total_chars,
+                elapsed,
+                self._embed_model,
             )
             # Sort by index to preserve original order
             sorted_data = sorted(resp.data, key=lambda x: x.index)

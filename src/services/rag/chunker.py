@@ -4,10 +4,11 @@ from typing import List, Optional
 
 
 # Модель intfloat/multilingual-e5-large имеет контекст 512 токенов.
-# T5 tokenizer: 1 токен ≈ 2-4 символа для русского текста.
-# Безопасный лимит: ~1200 символов (оставляет запас на special tokens).
-# Для чанков используем 1000, для full_vector листа 1200.
-MAX_CHARS_SAFE = 1200
+# XLM-R tokenizer: 1 токен ≈ 1.5-2 символа для русского текста.
+# Безопасный лимит: ~1000 символов (оставляет запас на special tokens),
+# совпадает с MAX_EMBED_CHARS в embedder.py — чанкер и эмбеддер не теряют
+# символы при передаче друг другу.
+MAX_CHARS_SAFE = 1000
 
 
 def _truncate_to_safe(text: str, max_chars: int = MAX_CHARS_SAFE) -> str:

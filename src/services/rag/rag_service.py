@@ -6,7 +6,7 @@ RAG service: orchestrates chunking, embedding, and hybrid retrieval via Qdrant.
 """
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Dict, List, Optional
 from uuid import NAMESPACE_URL, uuid5
 
 from loguru import logger
@@ -119,14 +119,15 @@ class RagService:
                         "source_id": sheet_id,
                         "text": chunk_text[:10000],
                         "chunk_index": chunk_idx,
-                        "model_name": settings.OLLAMA_EMBED_MODEL,
+                        "model_name": settings.EMBED_MODEL,
                     },
                 }
             )
 
         # Для full_vector используем компактное представление листа.
         # Лимит берём из MAX_EMBED_CHARS, чтобы не превысить контекст модели эмбеддинга
-        # (bge-m3 = 8192 токена). Прежнее значение 18000 символов могло превышать контекст.
+        # (intfloat/multilingual-e5-large, 512 токенов ≈ 1000 символов русского текста).
+        # Прежнее значение 18000 символов могло превышать контекст.
         full_text = text[:MAX_EMBED_CHARS]
         last_material_end = full_text.rfind("\n\n")
         if last_material_end > 100:
@@ -143,7 +144,7 @@ class RagService:
                     "source_type": "sheet",
                     "source_id": sheet_id,
                     "text": full_text[:10000],
-                    "model_name": settings.OLLAMA_EMBED_MODEL,
+                    "model_name": settings.EMBED_MODEL,
                 },
             }
         )
@@ -172,7 +173,7 @@ class RagService:
                         "source_type": "column",
                         "source_id": column_id,
                         "text": text[:5000],
-                        "model_name": settings.OLLAMA_EMBED_MODEL,
+                        "model_name": settings.EMBED_MODEL,
                     },
                 }
             ]
@@ -210,7 +211,7 @@ class RagService:
                         "source_type": "column",
                         "source_id": col.id,
                         "text": text[:5000],
-                        "model_name": settings.OLLAMA_EMBED_MODEL,
+                        "model_name": settings.EMBED_MODEL,
                     },
                 }
             )
@@ -297,7 +298,7 @@ class RagService:
                         "source_type": "comment",
                         "source_id": sheet_id,
                         "text": chunk_text[:5000],
-                        "model_name": settings.OLLAMA_EMBED_MODEL,
+                        "model_name": settings.EMBED_MODEL,
                     },
                 }
             )
@@ -355,25 +356,23 @@ class RagService:
         else:
             parts.append("данные (все колонки):")
             col_names_map = {c.col_index: c.normalized_name for c in columns}
-            distinct_rows = (
-                await session.execute(
-                    select(Cell.row_num)
-                    .where(Cell.sheet_id == sheet.id)
-                    .distinct()
-                    .order_by(Cell.row_num)
-                    .limit(max_rows)
-                )
-            ).scalars().all()
-            for row_num in distinct_rows:
-                row_cells = (
-                    await session.execute(
-                        select(Cell)
-                        .where(Cell.sheet_id == sheet.id, Cell.row_num == row_num)
-                        .order_by(Cell.col_index)
-                    )
-                ).scalars().all()
+
+            # Устраняем N+1: раньше для каждой строки выполнялся отдельный SELECT.
+            # Теперь одним запросом вытаскиваем все ячейки листа (в пределах max_rows)
+            # и группируем по row_num в Python.
+            cells_result = await session.execute(
+                select(Cell)
+                .where(Cell.sheet_id == sheet.id)
+                .order_by(Cell.row_num, Cell.col_index)
+                .limit(max_rows * 64)  # верхняя оценка числа колонок в строке
+            )
+            cells_by_row: Dict[int, List] = {}
+            for c in cells_result.scalars().all():
+                cells_by_row.setdefault(c.row_num, []).append(c)
+
+            for row_num in sorted(cells_by_row)[:max_rows]:
                 row_values = []
-                for c in row_cells:
+                for c in cells_by_row[row_num]:
                     val = c.value_text or str(c.value_number or "")
                     col_name = col_names_map.get(c.col_index, f"col_{c.col_index}")
                     if val:

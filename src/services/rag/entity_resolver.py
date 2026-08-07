@@ -10,8 +10,10 @@
 from __future__ import annotations
 
 import re
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
+from rapidfuzz import fuzz, process as rapidfuzz_process
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -71,10 +73,37 @@ def levenshtein_similarity(a: str, b: str) -> float:
 class EntityResolver:
     """Резолвит названия лома в канонические сущности."""
 
+    # TTL кэша списка сущностей справочника. Внутри одного resolve_batch справочник
+    # загружается один раз и не перезапрашивается при каждом имени.
+    DICT_CACHE_TTL_SECONDS = 300.0
+
     def __init__(self, llm: Optional[LLMClient] = None):
         self._llm = llm or LLMClient()
-        self._embedder = Embedder(self._llm)
+        self._embedder = Embedder()
         self._cache: Dict[str, Optional[int]] = {}  # normalized_name → entity_id
+        self._all_entities: List[EntityDictionary] = []
+        self._all_entities_loaded_at: float = 0.0
+
+    async def _load_all_entities(
+        self,
+        session: AsyncSession,
+    ) -> List[EntityDictionary]:
+        """Загружает весь справочник в память (с TTL-кэшем).
+
+        Это устраняет главное узкое место: раньше для каждого уникального названия
+        выполнялось по два полных `SELECT * FROM entity_dictionary` (поиск по алиасам
+        и fuzzy-match), что при сотнях названий и растущем справочнике давало
+        O(N × M) запросов и времени. Теперь справочник читается один раз и
+        переиспользуется внутри batch (и между batch в пределах TTL).
+        """
+        now = time.monotonic()
+        if self._all_entities and (now - self._all_entities_loaded_at) < self.DICT_CACHE_TTL_SECONDS:
+            return self._all_entities
+
+        result = await session.execute(select(EntityDictionary))
+        self._all_entities = list(result.scalars().all())
+        self._all_entities_loaded_at = now
+        return self._all_entities
 
     async def resolve(
         self,
@@ -99,14 +128,26 @@ class EntityResolver:
         if normalized in self._cache:
             cached_id = self._cache[normalized]
             if cached_id is not None:
-                return cached_id, await self._get_canonical_name(cached_id, session)
+                # Берём каноническое имя из уже загруженного справочника,
+                # не делая отдельный SELECT по ID.
+                own_session = session is None
+                s = session or async_session_maker()
+                try:
+                    all_entities = await self._load_all_entities(s)
+                    entity = self._entity_by_id(all_entities, cached_id)
+                    return cached_id, (entity.canonical_name if entity else normalized)
+                finally:
+                    if own_session:
+                        await s.close()
             return None, normalized
 
-        # 2. Ищем в БД
+        # 2. Ищем в БД. Справочник загружается один раз и кэшируется,
+        # поэтому повторные вызовы resolve() не делают полные SELECT *.
         own_session = session is None
         s = session or async_session_maker()
         try:
-            entity = await self._find_entity(s, normalized)
+            all_entities = await self._load_all_entities(s)
+            entity = self._find_entity(all_entities, normalized)
             if entity is not None:
                 self._cache[normalized] = entity.id
                 return entity.id, entity.canonical_name
@@ -126,14 +167,45 @@ class EntityResolver:
     ) -> Dict[str, Tuple[Optional[int], str]]:
         """Резолвит список названий лома.
 
+        Справочник загружается в память один раз на весь батч, а не на каждое
+        имя (раньше каждое имя делало до двух полных `SELECT * FROM entity_dictionary`).
+
         Returns:
             Dict[исходное_имя → (entity_id, canonical_name)]
         """
-        result = {}
-        for name in names:
-            entity_id, canonical = await self.resolve(name, session)
-            result[name] = (entity_id, canonical)
-        return result
+        own_session = session is None
+        s = session or async_session_maker()
+        try:
+            all_entities = await self._load_all_entities(s)
+            result = {}
+            for name in names:
+                normalized = normalize_name(name)
+                if not normalized:
+                    result[name] = (None, name)
+                    continue
+
+                # 1. Проверяем кэш резолва
+                if normalized in self._cache:
+                    cached_id = self._cache[normalized]
+                    if cached_id is not None:
+                        entity = self._entity_by_id(all_entities, cached_id)
+                        result[name] = (cached_id, entity.canonical_name if entity else normalized)
+                    else:
+                        result[name] = (None, normalized)
+                    continue
+
+                # 2. Ищем в памяти (точное → алиасы → fuzzy)
+                entity = self._find_entity(all_entities, normalized)
+                if entity is not None:
+                    self._cache[normalized] = entity.id
+                    result[name] = (entity.id, entity.canonical_name)
+                else:
+                    self._cache[normalized] = None
+                    result[name] = (None, normalized)
+            return result
+        finally:
+            if own_session:
+                await s.close()
 
     async def add_entity(
         self,
@@ -289,46 +361,82 @@ class EntityResolver:
             if own_session:
                 await s.close()
 
-    async def _find_entity(
+    def _entity_by_id(
         self,
-        session: AsyncSession,
+        all_entities: List[EntityDictionary],
+        entity_id: int,
+    ) -> Optional[EntityDictionary]:
+        """Возвращает сущность по ID из уже загруженного в память справочника."""
+        for entity in all_entities:
+            if entity.id == entity_id:
+                return entity
+        return None
+
+    @staticmethod
+    def _fuzzy_best(
+        candidates: List[Tuple[str, EntityDictionary]],
         normalized_name: str,
     ) -> Optional[EntityDictionary]:
-        """Ищет сущность в БД по нормализованному имени."""
-        # 1. Точное совпадение по canonical_name
-        result = await session.execute(
-            select(EntityDictionary).where(
-                EntityDictionary.canonical_name == normalized_name
-            )
-        )
-        entity = result.scalar_one_or_none()
-        if entity is not None:
-            return entity
+        """Ищет лучшее fuzzy-совпадение через rapidfuzz (на порядки быстрее Python).
 
-        # 2. Поиск по алиасам (JSON содержит список)
-        all_entities = await session.execute(select(EntityDictionary))
-        for entity in all_entities.scalars().all():
-            if entity.aliases and normalized_name in entity.aliases:
+        Использует C-реализацию rapidfuzz вместо чистого Python-Levenshtein,
+        который ранее выполнял сравнение для каждой сущности и каждого алиаса.
+        """
+        if not candidates:
+            return None
+
+        # extractOne ожидает плоский список строк. Кандидаты у нас — кортежи
+        # (строка, entity), поэтому передаём только строки, а entity достаём
+        # по индексу из исходного списка.
+        strings = [c[0] for c in candidates]
+        best, score, index = rapidfuzz_process.extractOne(
+            normalized_name,
+            strings,
+            scorer=fuzz.ratio,
+            processor=None,
+        )
+        if score / 100.0 >= FUZZY_THRESHOLD:
+            return candidates[index][1]
+        return None
+
+    def _find_entity(
+        self,
+        all_entities: List[EntityDictionary],
+        normalized_name: str,
+    ) -> Optional[EntityDictionary]:
+        """Ищет сущность в уже загруженном справочнике по нормализованному имени.
+
+        Все операции выполняются в памяти над одним списком сущностей (без
+        повторных SELECT * в БД на каждое имя):
+        1. Точное совпадение по canonical_name.
+        2. Точное совпадение по алиасам.
+        3. Fuzzy-match по canonical_name и алиасам через rapidfuzz.
+        """
+        # 1. Точное совпадение по canonical_name
+        for entity in all_entities:
+            if entity.canonical_name == normalized_name:
                 return entity
 
-        # 3. Fuzzy match по canonical_name
-        all_entities = await session.execute(select(EntityDictionary))
-        best_match = None
-        best_score = 0.0
-        for entity in all_entities.scalars().all():
-            sim = levenshtein_similarity(normalized_name, entity.canonical_name)
-            if sim > best_score:
-                best_score = sim
-                best_match = entity
-            # Проверяем алиасы
-            for alias in (entity.aliases or []):
-                sim = levenshtein_similarity(normalized_name, alias)
-                if sim > best_score:
-                    best_score = sim
-                    best_match = entity
+        # 2. Точное совпадение по алиасам
+        alias_hits = []
+        for entity in all_entities:
+            if entity.aliases and normalized_name in entity.aliases:
+                return entity
+            if entity.aliases:
+                alias_hits.extend((alias, entity) for alias in entity.aliases)
 
-        if best_score >= FUZZY_THRESHOLD:
-            return best_match
+        # 3. Fuzzy match (canonical_name, затем алиасы)
+        canonical_candidates = [
+            (entity.canonical_name, entity) for entity in all_entities
+        ]
+        best = self._fuzzy_best(canonical_candidates, normalized_name)
+        if best is not None:
+            return best
+
+        if alias_hits:
+            best = self._fuzzy_best(alias_hits, normalized_name)
+            if best is not None:
+                return best
 
         return None
 

@@ -1,25 +1,25 @@
 from __future__ import annotations
+import asyncio
 import hashlib
 from typing import List, Optional
 import numpy as np
 from src.core.config import settings
 from src.core.logging_settings import logger
-from src.services.llm.llm_client import LLMClient
 from src.services.rag.embedding_cache import EmbeddingCache, InMemoryEmbeddingCache
 
 
-# Модель BAAI/bge-m3 имеет контекст 8192 токена.
-# Токенизатор XLM-RoBERTa даёт для русского текста примерно 1 токен на 1.5-2 символа.
-# 6000 символов ≈ 3000-4000 токенов — гарантированно в пределах контекста модели.
-# Прежний лимит 18000 символов мог давать >8192 токенов и вызывал ошибку
-# "the input length exceeds the context length" в Ollama.
-MAX_EMBED_CHARS = 6000
+# Модель intfloat/multilingual-e5-large имеет контекст 512 токенов.
+# Токенизатор XLM-RoBERTa даёт для русского текста примерно 1 токен
+# на 1.5-2 символа. 512 токенов ≈ 770-1020 символов.
+# Обрезаем до 1000 символов (безопасный запас). Для длинных чанков лучше,
+# чтобы основная смысловая нагрузка была в начале текста.
+MAX_EMBED_CHARS = 1000
 
 
 def _truncate_text_for_embed(text: str, max_chars: int = MAX_EMBED_CHARS) -> str:
     """Обрезает текст до безопасного лимита для модели эмбеддинга.
 
-    Модель BAAI/bge-m3 имеет контекст 8192 токенов.
+    Модель intfloat/multilingual-e5-large имеет контекст 512 токенов.
     Обрезаем по границе абзаца или предложения, чтобы сохранить смысл.
     """
     if len(text) <= max_chars:
@@ -48,21 +48,47 @@ def _truncate_text_for_embed(text: str, max_chars: int = MAX_EMBED_CHARS) -> str
 
 
 class Embedder:
-    """Генератор dense-эмбеддингов.
+    """Генератор dense-эмбеддингов на базе fastembed (локальный CPU-инференс).
 
-    Embedder знает только про LLM (Ollama) и абстрактный кэш.
+    В отличие от прежней реализации (которая ходила по HTTP к Ollama),
+    fastembed загружает модель локально и инференсит прямо на хосте.
+    Это радикально ускоряет индексацию (pload file): нет сетевых round-trip'ов
+    и последовательных запросов — батч считается одним проходом.
+
+    Embedder знает только про fastembed и абстрактный кэш.
     Он НЕ знает про конкретное хранилище (Postgres/Qdrant/Redis) —
     кэш прокидывается через интерфейс EmbeddingCache.
     """
 
     def __init__(
         self,
-        llm: Optional[LLMClient] = None,
         cache: Optional[EmbeddingCache] = None,
+        model_name: Optional[str] = None,
     ) -> None:
-        self._llm = llm or LLMClient()
         self._cache: EmbeddingCache = cache or InMemoryEmbeddingCache()
+        self._model_name: str = model_name or settings.EMBED_MODEL
+        self._model = None  # ленивая инициализация fastembed.TextEmbedding
+        # fastembed загружает модель при первом embed(); при первом вызове
+        # будет скачивание модели, поэтому логируем явно.
         self._dim: int = settings.EMBED_DIMENSION
+        # Максимум текстов в одном батче для одного прохода fastembed.
+        self.EMBED_BATCH_SIZE = settings.EMBED_BATCH_SIZE
+
+    def _get_model(self):
+        """Лениво инициализирует fastembed.TextEmbedding (модель грузится один раз)."""
+        if self._model is None:
+            from fastembed import TextEmbedding
+
+            logger.info("Loading fastembed TextEmbedding '{}' (first call, may download model)", self._model_name)
+            self._model = TextEmbedding(model_name=self._model_name)
+            # У fastembed 0.8.x у TextEmbedding нет публичного атрибута dimension;
+            # размерность берём из конфига (EMBED_DIMENSION, согласован с моделью).
+            logger.info(
+                "fastembed TextEmbedding '{}' loaded, dimension={}",
+                self._model_name,
+                self._dim,
+            )
+        return self._model
 
     async def embed(self, text: str) -> List[float]:
         # Обрезаем текст до безопасного лимита модели
@@ -72,24 +98,19 @@ class Embedder:
         if cached is not None:
             return cached
 
-        vector = await self._llm.embed(safe_text)
+        vector = await self._embed_texts([safe_text])
+        result = vector[0]
 
-        await self._save_to_cache(safe_text, vector)
+        await self._save_to_cache(safe_text, result)
 
-        return vector
-
-    # Максимум текстов в одном батче для одного HTTP-запроса к Ollama.
-    # Умеренный размер снижает вероятность переполнения буфера и улучшает
-    # latency vs throughput (Ollama обрабатывает батч одним проходом).
-    EMBED_BATCH_SIZE = 32
+        return result
 
     async def embed_batch(self, texts: List[str]) -> List[List[float]]:
-        """Эмбеддит список текстов батчами через один вызов LLM-API.
+        """Эмбеддит список текстов батчами через локальный fastembed-инференс.
 
-        В отличие от прежней реализации (которая вызывала embed() по одному —
-        N отдельных HTTP-запросов), здесь тексты группируются в порции
-        EMBED_BATCH_SIZE и отправляются одним запросом. Это радикально снижает
-        число round-trip'ов к Ollama и ускоряет индексацию.
+        В отличие от прежней реализации (HTTP к Ollama), здесь не требуется
+        группировать в отдельные запросы ради round-trip'ов — fastembed сам
+        инференсит порции. Тем не менее батчим для контроля памяти.
         """
         if not texts:
             return []
@@ -114,7 +135,7 @@ class Embedder:
             batch_indices = to_embed_indices[chunk_start : chunk_start + self.EMBED_BATCH_SIZE]
             batch_texts = [safe_texts[i] for i in batch_indices]
 
-            vectors = await self._llm.embed_batch(batch_texts)
+            vectors = await self._embed_texts(batch_texts)
 
             for batch_pos, orig_idx in enumerate(batch_indices):
                 vector = vectors[batch_pos]
@@ -123,6 +144,20 @@ class Embedder:
 
         # Гарантируем возврат в исходном порядке
         return [v for v in results if v is not None]
+
+    async def _embed_texts(self, texts: List[str]) -> List[List[float]]:
+        """Синхронный fastembed-инференс, выполненный в отдельном потоке.
+
+        fastembed.embed() возвращает генератор numpy-векторов. Чтобы не блокировать
+        asyncio event loop, выполняем в потоке через asyncio.to_thread.
+        """
+        model = self._get_model()
+
+        def _run() -> List[List[float]]:
+            vectors = list(model.embed(texts))
+            return [v.tolist() for v in vectors]
+
+        return await asyncio.to_thread(_run)
 
     @staticmethod
     def _hash_query(query: str) -> str:
@@ -146,7 +181,7 @@ class Embedder:
                 query_hash,
                 text,
                 vector,
-                settings.OLLAMA_EMBED_MODEL,
+                self._model_name,
             )
             logger.debug("Embedding cached for hash={}", query_hash[:12])
         except Exception as exc:
