@@ -56,7 +56,7 @@ class DenseRetriever:
         top_k: int = 10,
     ) -> List[DenseSearchResult]:
         """Dense-only поиск по всем типам источников."""
-        query_vector = await self._embedder.embed(query)
+        query_vector = await self._embedder.embed(query, is_query=True)
 
         # Запрашиваем больше результатов из каждого источника,
         # чтобы после дедупликации гарантированно получить top_k уникальных
@@ -104,7 +104,7 @@ class DenseRetriever:
         query: str,
         top_k: int = 10,
     ) -> List[DenseSearchResult]:
-        query_vector = await self._embedder.embed(query)
+        query_vector = await self._embedder.embed(query, is_query=True)
         return await self._search_source(query_vector, "sheet", top_k)
 
     async def search_columns(
@@ -112,7 +112,7 @@ class DenseRetriever:
         query: str,
         top_k: int = 10,
     ) -> List[DenseSearchResult]:
-        query_vector = await self._embedder.embed(query)
+        query_vector = await self._embedder.embed(query, is_query=True)
         return await self._search_source(query_vector, "column", top_k)
 
     async def _search_source(

@@ -14,25 +14,21 @@ class Settings(BaseSettings):
 
     OLLAMA_BASE_URL: str
 
-    # Dense-эмбеддинг модель (локальный инференс через fastembed, без HTTP к Ollama).
-    # intfloat/multilingual-e5-large — мультиязычная модель (~100 языков, включая
-    # русский), контекст 512 токенов (~1000 символов русского текста), что позволяет
-    # эмбеддить чанки без агрессивной обрезки (в отличие от прежней MiniLM-L12-v2
-    # с контекстом 128 токенов, терявшей ~80% содержания чанка).
-    # ВАЖНО: fastembed 0.8.0 не поддерживает e5-small, поэтому используем e5-large.
-    # Размерность 1024 ОБЯЗАНА совпадать с размерностью коллекции в Qdrant
+    # Dense-эмбеддинг модель через Ollama (локальный HTTP /v1/embeddings).
+    # nomic-embed-text — 768 dim, контекст 8192 токенов, хорошо работает с русским
+    # текстом на CPU. Модель запускается в контейнере Ollama и не зависит от
+    # HuggingFace Hub (в отличие от fastembed e5-large, который качал ~2.2 ГБ с HF
+    # и зависал при недоступности HF).
+    # Размерность 768 ОБЯЗАНА совпадать с размерностью коллекции в Qdrant
     # (EMBED_DIMENSION). После смены размерности пересоздайте коллекцию
     # (scripts/recreate_qdrant_collection.py) и заново загрузите файлы.
-    EMBED_MODEL: str = "intfloat/multilingual-e5-large"
-    # Legacy-параметр (модель эмбеддинга в Ollama), оставлен для обратной
-    # совместимости при деплое, но fastembed-embedder его не использует.
-    OLLAMA_EMBED_MODEL: str = "intfloat/multilingual-e5-large"
-    EMBED_DIMENSION: int = 1024
+    # EMBED_MODEL оставлен для обратной совместимости; embedder использует OLLAMA_EMBED_MODEL.
+    EMBED_MODEL: str = "nomic-embed-text"
+    OLLAMA_EMBED_MODEL: str = "nomic-embed-text"
+    EMBED_DIMENSION: int = 768
 
-    # Размер батча эмбеддингов (количество текстов на один проход fastembed).
-    # fastembed инференсит локально на CPU батчами — это сильно быстрее
-    # последовательных HTTP-запросов к Ollama. Значение можно переопределить
-    # через .env (EMBED_BATCH_SIZE).
+    # Размер батча эмбеддингов (количество текстов на один HTTP-запрос к Ollama).
+    # Значение можно переопределить через .env (EMBED_BATCH_SIZE).
     EMBED_BATCH_SIZE: int = 32
 
     LLM_TEMPERATURE: float = 0.1

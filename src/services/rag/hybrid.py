@@ -65,7 +65,7 @@ class HybridRetriever:
         top_k: int = 10,
     ) -> List[HybridSearchResult]:
         # Dense-вектор запроса
-        dense_vector = await self._embedder.embed(query)
+        dense_vector = await self._embedder.embed(query, is_query=True)
         # Sparse-вектор запроса
         sparse_vector = self._sparse.embed(query)
 

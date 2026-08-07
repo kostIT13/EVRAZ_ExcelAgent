@@ -126,7 +126,7 @@ class RagService:
 
         # Для full_vector используем компактное представление листа.
         # Лимит берём из MAX_EMBED_CHARS, чтобы не превысить контекст модели эмбеддинга
-        # (intfloat/multilingual-e5-large, 512 токенов ≈ 1000 символов русского текста).
+        # (nomic-embed-text, 8192 токенов; 1000 символов русского текста — безопасно).
         # Прежнее значение 18000 символов могло превышать контекст.
         full_text = text[:MAX_EMBED_CHARS]
         last_material_end = full_text.rfind("\n\n")

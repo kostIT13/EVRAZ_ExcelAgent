@@ -1,26 +1,32 @@
 from __future__ import annotations
-import asyncio
 import hashlib
 from typing import List, Optional
+
 import numpy as np
+
 from src.core.config import settings
 from src.core.logging_settings import logger
+from src.services.llm.llm_client import LLMClient
 from src.services.rag.embedding_cache import EmbeddingCache, InMemoryEmbeddingCache
 
 
-# Модель intfloat/multilingual-e5-large имеет контекст 512 токенов.
-# Токенизатор XLM-RoBERTa даёт для русского текста примерно 1 токен
-# на 1.5-2 символа. 512 токенов ≈ 770-1020 символов.
-# Обрезаем до 1000 символов (безопасный запас). Для длинных чанков лучше,
-# чтобы основная смысловая нагрузка была в начале текста.
+# Верхний предел символов для эмбеддинга одного текста. Модель nomic-embed-text
+# имеет контекст 8192 токенов, поэтому 1000 символов русского текста — безопасный
+# запас, не требующий агрессивной обрезки смысла.
 MAX_EMBED_CHARS = 1000
+
+# nomic-embed-text рекомендует явные префиксы для разделения поисковых запросов
+# и документов: это повышает качество ретрива. Префикс добавляется до обрезки,
+# поэтому суммарная длина не превысит MAX_EMBED_CHARS.
+NOMIC_QUERY_PREFIX = "search_query: "
+NOMIC_DOCUMENT_PREFIX = "search_document: "
 
 
 def _truncate_text_for_embed(text: str, max_chars: int = MAX_EMBED_CHARS) -> str:
     """Обрезает текст до безопасного лимита для модели эмбеддинга.
 
-    Модель intfloat/multilingual-e5-large имеет контекст 512 токенов.
-    Обрезаем по границе абзаца или предложения, чтобы сохранить смысл.
+    Модель nomic-embed-text имеет контекст 8192 токенов. Обрезаем по границе
+    абзаца или предложения, чтобы сохранить смысл.
     """
     if len(text) <= max_chars:
         return text
@@ -48,14 +54,13 @@ def _truncate_text_for_embed(text: str, max_chars: int = MAX_EMBED_CHARS) -> str
 
 
 class Embedder:
-    """Генератор dense-эмбеддингов на базе fastembed (локальный CPU-инференс).
+    """Генератор dense-эмбеддингов через Ollama (HTTP, OpenAI-совместимый /v1/embeddings).
 
-    В отличие от прежней реализации (которая ходила по HTTP к Ollama),
-    fastembed загружает модель локально и инференсит прямо на хосте.
-    Это радикально ускоряет индексацию (pload file): нет сетевых round-trip'ов
-    и последовательных запросов — батч считается одним проходом.
+    Модель nomic-embed-text (768 dim) запускается локально в контейнере Ollama.
+    В отличие от fastembed (который качал большие веса с HuggingFace Hub и
+    мог недоступен/зависать), Ollama уже работает в docker и не зависит от HF.
 
-    Embedder знает только про fastembed и абстрактный кэш.
+    Embedder знает только про LLMClient (HTTP к Ollama) и абстрактный кэш.
     Он НЕ знает про конкретное хранилище (Postgres/Qdrant/Redis) —
     кэш прокидывается через интерфейс EmbeddingCache.
     """
@@ -63,101 +68,65 @@ class Embedder:
     def __init__(
         self,
         cache: Optional[EmbeddingCache] = None,
+        llm: Optional[LLMClient] = None,
         model_name: Optional[str] = None,
     ) -> None:
         self._cache: EmbeddingCache = cache or InMemoryEmbeddingCache()
-        self._model_name: str = model_name or settings.EMBED_MODEL
-        self._model = None  # ленивая инициализация fastembed.TextEmbedding
-        # fastembed загружает модель при первом embed(); при первом вызове
-        # будет скачивание модели, поэтому логируем явно.
+        self._llm: LLMClient = llm or LLMClient()
+        self._model_name: str = model_name or settings.OLLAMA_EMBED_MODEL
         self._dim: int = settings.EMBED_DIMENSION
-        # Максимум текстов в одном батче для одного прохода fastembed.
-        self.EMBED_BATCH_SIZE = settings.EMBED_BATCH_SIZE
 
-    def _get_model(self):
-        """Лениво инициализирует fastembed.TextEmbedding (модель грузится один раз)."""
-        if self._model is None:
-            from fastembed import TextEmbedding
+    async def embed(self, text: str, is_query: bool = False) -> List[float]:
+        """Эмбеддит один текст через Ollama. Для nomic-embed-text добавляет префикс.
 
-            logger.info("Loading fastembed TextEmbedding '{}' (first call, may download model)", self._model_name)
-            self._model = TextEmbedding(model_name=self._model_name)
-            # У fastembed 0.8.x у TextEmbedding нет публичного атрибута dimension;
-            # размерность берём из конфига (EMBED_DIMENSION, согласован с моделью).
-            logger.info(
-                "fastembed TextEmbedding '{}' loaded, dimension={}",
-                self._model_name,
-                self._dim,
-            )
-        return self._model
-
-    async def embed(self, text: str) -> List[float]:
-        # Обрезаем текст до безопасного лимита модели
-        safe_text = _truncate_text_for_embed(text)
+        is_query=True -> префикс "search_query: " (поисковый запрос);
+        is_query=False -> префикс "search_document: " (документ/чанк).
+        """
+        prefix = NOMIC_QUERY_PREFIX if is_query else NOMIC_DOCUMENT_PREFIX
+        # Префикс добавляем до обрезки, чтобы суммарно не превысить лимит
+        safe_text = _truncate_text_for_embed(prefix + text)
 
         cached = await self._load_from_cache(safe_text)
         if cached is not None:
             return cached
 
-        vector = await self._embed_texts([safe_text])
-        result = vector[0]
+        result = await self._llm.embed(safe_text)
 
         await self._save_to_cache(safe_text, result)
 
         return result
 
-    async def embed_batch(self, texts: List[str]) -> List[List[float]]:
-        """Эмбеддит список текстов батчами через локальный fastembed-инференс.
+    async def embed_batch(self, texts: List[str], is_query: bool = False) -> List[List[float]]:
+        """Эмбеддит список текстов батчами через Ollama (один HTTP-запрос).
 
-        В отличие от прежней реализации (HTTP к Ollama), здесь не требуется
-        группировать в отдельные запросы ради round-trip'ов — fastembed сам
-        инференсит порции. Тем не менее батчим для контроля памяти.
+        is_query=True -> префикс "search_query: " (запросы), иначе "search_document: ".
         """
         if not texts:
             return []
 
-        safe_texts = [_truncate_text_for_embed(t) for t in texts]
+        prefix = NOMIC_QUERY_PREFIX if is_query else NOMIC_DOCUMENT_PREFIX
+        safe_texts = [_truncate_text_for_embed(prefix + t) for t in texts]
 
         # Сначала вытаскиваем всё, что есть в кэше
         results: List[Optional[List[float]]] = [None] * len(safe_texts)
-        hashes: List[str] = []
         to_embed_indices: List[int] = []
         for idx, safe in enumerate(safe_texts):
-            h = self._hash_query(safe)
-            hashes.append(h)
             cached = await self._load_from_cache(safe)
             if cached is not None:
                 results[idx] = cached
             else:
                 to_embed_indices.append(idx)
 
-        # Батчим только незакэшированные тексты
-        for chunk_start in range(0, len(to_embed_indices), self.EMBED_BATCH_SIZE):
-            batch_indices = to_embed_indices[chunk_start : chunk_start + self.EMBED_BATCH_SIZE]
-            batch_texts = [safe_texts[i] for i in batch_indices]
-
-            vectors = await self._embed_texts(batch_texts)
-
-            for batch_pos, orig_idx in enumerate(batch_indices):
+        if to_embed_indices:
+            batch_texts = [safe_texts[i] for i in to_embed_indices]
+            vectors = await self._llm.embed_batch(batch_texts)
+            for batch_pos, orig_idx in enumerate(to_embed_indices):
                 vector = vectors[batch_pos]
                 results[orig_idx] = vector
                 await self._save_to_cache(safe_texts[orig_idx], vector)
 
         # Гарантируем возврат в исходном порядке
         return [v for v in results if v is not None]
-
-    async def _embed_texts(self, texts: List[str]) -> List[List[float]]:
-        """Синхронный fastembed-инференс, выполненный в отдельном потоке.
-
-        fastembed.embed() возвращает генератор numpy-векторов. Чтобы не блокировать
-        asyncio event loop, выполняем в потоке через asyncio.to_thread.
-        """
-        model = self._get_model()
-
-        def _run() -> List[List[float]]:
-            vectors = list(model.embed(texts))
-            return [v.tolist() for v in vectors]
-
-        return await asyncio.to_thread(_run)
 
     @staticmethod
     def _hash_query(query: str) -> str:
