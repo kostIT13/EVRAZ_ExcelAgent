@@ -67,6 +67,10 @@ services:
     volumes:
       - ./data:/app/data
       - ./src:/app/src
+      - model_cache:/root/.cache/huggingface
+    environment:
+      - HF_HOME=/root/.cache/huggingface
+      - HF_HUB_DISABLE_TELEMETRY=1
     command: uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
     networks:
       - app_network
@@ -87,6 +91,7 @@ volumes:
   pgdata:
   qdrant_data:
   ollama_data:
+  model_cache:
 
 networks:
   app_network:

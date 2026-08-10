@@ -72,12 +72,12 @@
               └──────────────────────────────────────────────────────────┘
                                             │
               ┌─────────────────────────────┼─────────────────────────────┐
-              │         Ollama (LLM + Embeddings)                        │
-              │  ┌──────────────────┐  ┌──────────────────┐              │
-              │  │  LLM (chat)      │  │  Embedding Model │              │
-              │  │  (fallback)      │  │  BAAI/bge-m3     │              │
-              │  └──────────────────┘  └──────────────────┘              │
-              └──────────────────────────────────────────────────────────┘
+              │         Ollama (LLM)        │      fastembed (Dense)      │
+              │  ┌──────────────────┐       │  ┌──────────────────────┐   │
+              │  │  LLM (chat)      │       │  │ Embedding Model      │   │
+              │  │  (fallback)      │       │  │ multilingual-e5-small│   │
+              │  └──────────────────┘       │  └──────────────────────┘   │
+              └─────────────────────────────┴─────────────────────────────┘
 ```
 
 ### Компоненты
@@ -87,7 +87,8 @@
 | **FastAPI** | Основной бэкенд-сервер (порт 8000) |
 | **PostgreSQL** | Хранение реляционных данных Excel (файлы, листы, ячейки, логи) |
 | **Qdrant** | Векторное хранилище (dense + sparse вектора, гибридный поиск) |
-| **Ollama** | Локальный LLM для fallback и эмбеддингов |
+| **Ollama** | Локальный LLM для fallback (chat) |
+| **fastembed** | Локальные dense-эмбеддинги (multilingual-e5-large) на ONNX Runtime |
 | **LangGraph** | Граф агента (Classifier → Planner → CodeGen → Executor → Verifier) |
 | **flashrank** | Реранкинг результатов гибридного поиска |
 | **Frontend** | Веб-интерфейс на Vite (порт 8080) |
@@ -105,7 +106,7 @@
 - Хранение полной структуры: файл → листы → колонки → ячейки
 
 ### 🔍 Гибридный поиск (RAG)
-- **Dense retrieval**: эмбеддинги через `BAAI/bge-m3` (Ollama) с косинусной близостью
+- **Dense retrieval**: эмбеддинги через `fastembed` (`intfloat/multilingual-e5-large`) с косинусной близостью
 - **Sparse retrieval**: BM25-подобные sparse-вектора (хранятся в Qdrant)
 - **Fusion**: RRF (Reciprocal Rank Fusion) — выполняется одним запросом к Qdrant
 - **Реранкинг**: кросс-энкодерная модель `ms-marco-MiniLM-L-12-v2` (flashrank)
@@ -197,9 +198,9 @@ LLM_API_KEY=your-api-key
 LLM_MODEL_PRIMARY=deepseek-ai/DeepSeek-V4-Flash
 LLM_MODEL_CHEAP=qwen2.5:1.5b
 
-# Ollama (для эмбеддингов)
-OLLAMA_BASE_URL=http://ollama:11434/v1
-OLLAMA_EMBED_MODEL=BAAI/bge-m3
+# Dense-эмбеддинги через fastembed (локально, ONNX Runtime)
+EMBED_MODEL=intfloat/multilingual-e5-large
+FASTEMBED_MODEL=intfloat/multilingual-e5-large
 EMBED_DIMENSION=1024
 
 # PostgreSQL
@@ -234,11 +235,10 @@ docker compose up -d
 docker compose exec service alembic upgrade head
 ```
 
-### 5. Загрузка модели эмбеддингов в Ollama
+### 5. Загрузка модели эмбеддингов (fastembed)
 
-```bash
-docker compose exec ollama ollama pull BAAI/bge-m3
-```
+Модель `intfloat/multilingual-e5-large` скачивается автоматически при первом
+запуске с HuggingFace Hub и кэшируется локально (никаких действий не требуется).
 
 ### 6. Проверка
 
@@ -262,8 +262,8 @@ curl http://localhost:8000/health
 | `LLM_API_KEY` | — | API-ключ |
 | `LLM_MODEL_PRIMARY` | — | Основная модель |
 | `LLM_MODEL_CHEAP` | — | Дешёвая модель (fallback) |
-| `OLLAMA_BASE_URL` | `http://ollama:11434/v1` | URL Ollama |
-| `OLLAMA_EMBED_MODEL` | `BAAI/bge-m3` | Модель эмбеддингов |
+| `OLLAMA_BASE_URL` | `http://ollama:11434` | URL Ollama (chat fallback) |
+| `FASTEMBED_MODEL` | `intfloat/multilingual-e5-large` | Модель dense-эмбеддингов (fastembed) |
 | `EMBED_DIMENSION` | `1024` | Размерность эмбеддингов |
 | `LLM_TEMPERATURE` | `0.1` | Температура LLM |
 | `LLM_MAX_TOKENS` | `2048` | Максимум токенов |
@@ -450,7 +450,7 @@ needs_correction = (
 
 ### Индексация
 
-1. **Dense**: каждый чанк эмбеддится через `BAAI/bge-m3` → хранится в Qdrant
+1. **Dense**: каждый чанк эмбеддится через `fastembed` (`intfloat/multilingual-e5-large`) → хранится в Qdrant
 2. **Sparse**: BM25-подобные sparse-вектора генерируются через fastembed → хранятся в Qdrant
 3. **Column embeddings**: отдельные эмбеддинги для каждой колонки
 4. **Sheet embeddings**: общий эмбеддинг для каждого листа (fallback)
