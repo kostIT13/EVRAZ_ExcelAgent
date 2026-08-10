@@ -12,7 +12,6 @@ import ChatMessage, { type ChatMessageData } from '@/components/chat/ChatMessage
 import SourcesModal from '@/components/chat/SourcesModal';
 import AgentProgress from '@/components/chat/AgentProgress';
 import TypingIndicator from '@/components/chat/TypingIndicator';
-import ResultChart from '@/components/chat/ResultChart';
 
 export default function ChatPage() {
   const navigate = useNavigate();
@@ -109,11 +108,6 @@ export default function ChatPage() {
     navigate(`/trace?request_id=${requestId}`);
   };
 
-  const latestMeta = messages
-    .slice()
-    .reverse()
-    .find((m) => m.meta?.sql_result_preview && m.meta.sql_result_preview.length > 0)?.meta;
-
   return (
     <div className="layout">
       <aside className="panel panel--files">
@@ -161,8 +155,6 @@ export default function ChatPage() {
 
           {isAsking && mode === 'agent' && agentStep >= 0 && <AgentProgress activeStep={agentStep} />}
           {isAsking && mode !== 'agent' && <TypingIndicator />}
-
-          {latestMeta && <ResultChart data={latestMeta.sql_result_preview as unknown[]} />}
 
           <div ref={messagesEndRef} />
         </div>
