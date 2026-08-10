@@ -3,7 +3,7 @@ import re
 from typing import List, Optional
 
 
-# Модель nomic-embed-text (Ollama) имеет контекст 8192 токенов.
+# Модель multilingual-e5-large (fastembed) имеет контекст 512 токенов.
 # 1000 символов русского текста — безопасный лимит без обрезки смысла.
 # Безопасный лимит: ~1000 символов (оставляет запас на special tokens),
 # совпадает с MAX_EMBED_CHARS в embedder.py — чанкер и эмбеддер не теряют

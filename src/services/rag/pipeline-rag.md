@@ -51,7 +51,7 @@
 │  │              RagService.build_index_for_file()        │           │
 │  │  ┌──────────────┐  ┌──────────────┐  ┌────────────┐ │           │
 │  │  │  Chunker     │  │  Embedder    │  │  BM25Index │ │           │
-│  │  │  (adaptive)  │  │  (Ollama)    │  │  (disk)    │ │           │
+│  │  │  (adaptive)  │  │  (fastembed) │  │  (disk)    │ │           │
 │  │  └──────────────┘  └──────────────┘  └────────────┘ │           │
 │  └──────────────────────────────────────────────────────┘           │
 └─────────────────────────────────────────────────────────────────────┘
@@ -221,9 +221,9 @@ File (1) ──▶ Sheet (N) ──▶ ColumnMetadata (N)
 4. Сортировка по убыванию score
 
 **Embedder** ([`src/services/rag/embedder.py`](src/services/rag/embedder.py)):
-- Использует Ollama (`nomic-embed-text`) через OpenAI-совместимый API
+- Использует fastembed (`intfloat/multilingual-e5-large`) локально на ONNX Runtime
 - Кэширует эмбеддинги запросов в таблице `QueryEmbeddingCache` (по SHA256 хешу)
-- Размерность: 768 (настраивается через `EMBED_DIMENSION`)
+- Размерность: 1024 (настраивается через `EMBED_DIMENSION`)
 
 ### 2.3 Sparse retrieval (BM25)
 

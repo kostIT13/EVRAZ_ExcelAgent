@@ -12,22 +12,21 @@ class Settings(BaseSettings):
     LLM_MODEL_PRIMARY: str
     LLM_MODEL_CHEAP: str
 
-    OLLAMA_BASE_URL: str
+    OLLAMA_BASE_URL: str = "http://ollama:11434"
 
-    # Dense-эмбеддинг модель через Ollama (локальный HTTP /v1/embeddings).
-    # nomic-embed-text — 768 dim, контекст 8192 токенов, хорошо работает с русским
-    # текстом на CPU. Модель запускается в контейнере Ollama и не зависит от
-    # HuggingFace Hub (в отличие от fastembed e5-large, который качал ~2.2 ГБ с HF
-    # и зависал при недоступности HF).
-    # Размерность 768 ОБЯЗАНА совпадать с размерностью коллекции в Qdrant
+    # Dense-эмбеддинг модель через fastembed (локально, ONNX Runtime).
+    # multilingual-e5-large — 1024 dim, хорошо работает с русским текстом на CPU.
+    # Модель скачивается один раз с HuggingFace Hub и кэшируется локально,
+    # после чего работает полностью офлайн без внешних HTTP-сервисов.
+    # Размерность 1024 ОБЯЗАНА совпадать с размерностью коллекции в Qdrant
     # (EMBED_DIMENSION). После смены размерности пересоздайте коллекцию
     # (scripts/recreate_qdrant_collection.py) и заново загрузите файлы.
-    # EMBED_MODEL оставлен для обратной совместимости; embedder использует OLLAMA_EMBED_MODEL.
-    EMBED_MODEL: str = "nomic-embed-text"
-    OLLAMA_EMBED_MODEL: str = "nomic-embed-text"
-    EMBED_DIMENSION: int = 768
+    # EMBED_MODEL оставлен для обратной совместимости; embedder использует FASTEMBED_MODEL.
+    EMBED_MODEL: str = "intfloat/multilingual-e5-large"
+    FASTEMBED_MODEL: str = "intfloat/multilingual-e5-large"
+    EMBED_DIMENSION: int = 1024
 
-    # Размер батча эмбеддингов (количество текстов на один HTTP-запрос к Ollama).
+    # Размер батча эмбеддингов (количество текстов на один вызов fastembed).
     # Значение можно переопределить через .env (EMBED_BATCH_SIZE).
     EMBED_BATCH_SIZE: int = 32
 

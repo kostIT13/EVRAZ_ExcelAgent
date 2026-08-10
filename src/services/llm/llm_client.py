@@ -26,15 +26,6 @@ class LLMClient:
             base_url=settings.LLM_BASE_URL,
             timeout=settings.REQUEST_TIMEOUT_S,
         )
-        embed_url = settings.OLLAMA_BASE_URL.rstrip("/")
-        if not embed_url.endswith("/v1"):
-            embed_url += "/v1"
-        self._embed = AsyncOpenAI(
-            api_key="sk-no-key-required",
-            base_url=embed_url,
-            timeout=settings.REQUEST_TIMEOUT_S,
-        )
-        self._embed_model: str = settings.OLLAMA_EMBED_MODEL
 
     async def chat(
         self,
@@ -99,59 +90,6 @@ class LLMClient:
         except Exception as exc:
             logger.error("Streaming error on model '{}': {}", target, exc)
             yield f"\n\n[Ошибка: {exc}]"
-
-    async def embed(self, text: str) -> List[float]:
-        try:
-            resp = await self._embed.embeddings.create(
-                model=self._embed_model,
-                input=text,
-            )
-            return resp.data[0].embedding
-        except Exception as exc:
-            # Важно НЕ возвращать молча нулевой вектор: это маскирует ошибку
-            # и приводит к индексации битых (нулевых) векторов, что делает поиск
-            # бессмысленным. Пробрасываем исключение, чтобы пайплайн остановился
-            # и ошибка стала видимой.
-            logger.error(
-                "Embedding failed (model='{}', input_len={}): {}",
-                self._embed_model,
-                len(text),
-                exc,
-            )
-            raise
-
-    async def embed_batch(self, texts: List[str]) -> List[List[float]]:
-        """Embed multiple texts in a single API call (batch)."""
-        if not texts:
-            return []
-        import time
-        start = time.monotonic()
-        try:
-            resp = await self._embed.embeddings.create(
-                model=self._embed_model,
-                input=texts,
-            )
-            elapsed = time.monotonic() - start
-            total_chars = sum(len(t) for t in texts)
-            logger.info(
-                "Embedded batch: n={}, chars={}, took={:.1f}s (model='{}')",
-                len(texts),
-                total_chars,
-                elapsed,
-                self._embed_model,
-            )
-            # Sort by index to preserve original order
-            sorted_data = sorted(resp.data, key=lambda x: x.index)
-            return [item.embedding for item in sorted_data]
-        except Exception as exc:
-            # Аналогично embed(): не возвращаем молча нулевые векторы.
-            logger.error(
-                "Batch embedding failed (model='{}', batch_size={}): {}",
-                self._embed_model,
-                len(texts),
-                exc,
-            )
-            raise
 
     @staticmethod
     async def _call(

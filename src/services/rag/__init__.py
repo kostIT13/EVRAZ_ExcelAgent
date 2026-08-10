@@ -3,12 +3,12 @@ RAG (Retrieval-Augmented Generation) module.
 
 Provides hybrid retrieval combining:
 - **Sparse** (BM25-подобные sparse-вектора через Qdrant)
-- **Dense** (векторный поиск через Qdrant + Ollama embeddings)
+- **Dense** (векторный поиск через Qdrant + fastembed embeddings)
 
 Components
 ----------
 - ``sparse`` — генерация sparse-векторов (BM25/SPLADE)
-- ``embedder`` — Dense embedding via Ollama
+- ``embedder`` — Dense embedding via fastembed (локально)
 - ``retrieval`` — Qdrant-based dense retrieval
 - ``hybrid`` — Hybrid retriever (dense + sparse fusion через Qdrant)
 - ``reranker`` — Реранкинг результатов (flashrank)
