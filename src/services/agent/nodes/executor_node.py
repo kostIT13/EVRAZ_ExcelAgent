@@ -50,13 +50,16 @@ def _extract_price_source_from_sql(sql: str) -> Optional[str]:
 
 
 def _collect_samples_from_schema(schema: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Собирает все fact_prices_samples из схемы в единый список."""
+    """Собирает все fact_prices_samples из схемы в единый список.
+
+    Колонка item_name берётся из mart.price_facts (нормализованная long-таблица).
+    """
     all_samples: List[Dict[str, Any]] = []
     seen_items: Set[str] = set()
     for sheet in schema:
         samples = sheet.get("fact_prices_samples", [])
         for s in samples:
-            item = s.get("item_name_normalized", "")
+            item = s.get("item_name") or s.get("item_name_normalized", "")
             if item and item not in seen_items:
                 seen_items.add(item)
                 all_samples.append(s)
@@ -67,18 +70,13 @@ def _build_samples_fallback_sql(
     original_sql: str,
     samples: List[Dict[str, Any]],
 ) -> Optional[str]:
-    """Строит fallback SQL, заменяя ILIKE-маски на реальные item_name_normalized из samples.
-    
-    Если LLM выдумал ILIKE-маску '%лом алюминия стружка%', а в БД реальное название
-    'лом алюминия стружка', то этот fallback подставит точное значение через IN.
-    
-    Стратегия:
-    1. Извлекаем ILIKE-паттерны из оригинального SQL
-    2. Для каждого паттерна ищем подходящие реальные названия из samples
-    3. Заменяем ILIKE-условия на IN (...)
+    """Строит fallback SQL, заменяя ILIKE-маски на реальные item_name из samples.
+
+    Работает по март-таблице mart.price_facts: заменяет ILIKE-маски по item_name
+    на точные значения через IN (если LLM выдумал маску, а в БД реальное название).
     """
     sql_lower = original_sql.lower().strip()
-    if "from fact_prices" not in sql_lower:
+    if "price_facts" not in sql_lower:
         return None
     if not samples:
         return None
@@ -105,29 +103,29 @@ def _build_samples_fallback_sql(
     items_list = sorted(matched_items)
     items_formatted = ", ".join(f"'{item}'" for item in items_list)
     
-    # Заменяем все ILIKE по item_name_normalized на IN
+    # Заменяем все ILIKE по item_name (колонка mart.price_facts) на IN.
     new_sql = re.sub(
-        r"AND\s+fp\.item_name_normalized\s+ILIKE\s+'[^']+'\s*",
-        f"AND fp.item_name_normalized IN ({items_formatted})",
+        r"AND\s+fp\.item_name\s+ILIKE\s+'[^']+'\s*",
+        f"AND fp.item_name IN ({items_formatted})",
         original_sql,
         flags=re.IGNORECASE,
     )
     new_sql = re.sub(
-        r"WHERE\s+fp\.item_name_normalized\s+ILIKE\s+'[^']+'\s*",
-        f"WHERE fp.item_name_normalized IN ({items_formatted})",
+        r"WHERE\s+fp\.item_name\s+ILIKE\s+'[^']+'\s*",
+        f"WHERE fp.item_name IN ({items_formatted})",
         new_sql,
         flags=re.IGNORECASE,
     )
-    # Также заменяем вариант без префикса fp.
+    # Вариант без префикса fp.
     new_sql = re.sub(
-        r"AND\s+item_name_normalized\s+ILIKE\s+'[^']+'\s*",
-        f"AND item_name_normalized IN ({items_formatted})",
+        r"AND\s+item_name\s+ILIKE\s+'[^']+'\s*",
+        f"AND item_name IN ({items_formatted})",
         new_sql,
         flags=re.IGNORECASE,
     )
     new_sql = re.sub(
-        r"WHERE\s+item_name_normalized\s+ILIKE\s+'[^']+'\s*",
-        f"WHERE item_name_normalized IN ({items_formatted})",
+        r"WHERE\s+item_name\s+ILIKE\s+'[^']+'\s*",
+        f"WHERE item_name IN ({items_formatted})",
         new_sql,
         flags=re.IGNORECASE,
     )
@@ -139,22 +137,22 @@ def _build_samples_fallback_sql(
 
 
 def _build_no_item_filter_sql(original_sql: str) -> Optional[str]:
-    """Строит fallback SQL, полностью убирая фильтрацию по item_name_normalized.
-    
+    """Строит fallback SQL, полностью убирая фильтрацию по item_name (mart.price_facts).
+
     Используется как крайняя мера, когда даже с реальными названиями из samples
     ничего не нашлось. Оставляет только фильтры по period и price_source.
     """
     sql_lower = original_sql.lower().strip()
-    if "from fact_prices" not in sql_lower:
+    if "price_facts" not in sql_lower:
         return None
 
-    # Убираем все строки, содержащие item_name_normalized
+    # Убираем все строки, содержащие item_name
     lines = original_sql.split('\n')
     filtered_lines = []
     item_filter_removed = False
     for line in lines:
         stripped = line.strip()
-        if 'item_name_normalized' in stripped.lower():
+        if 'item_name' in stripped.lower():
             item_filter_removed = True
             continue
         if item_filter_removed and stripped:
@@ -165,7 +163,7 @@ def _build_no_item_filter_sql(original_sql: str) -> Optional[str]:
             filtered_lines.append(stripped)
 
     if not item_filter_removed:
-        filtered_lines = [l for l in lines if 'item_name_normalized' not in l.lower()]
+        filtered_lines = [l for l in lines if 'item_name' not in l.lower()]
 
     fallback_sql = '\n'.join(filtered_lines).strip()
     
@@ -188,8 +186,8 @@ def _build_fallback_sql(original_sql: str) -> Optional[str]:
     """
     sql_lower = original_sql.lower().strip()
     
-    # Проверяем, что это SELECT из fact_prices
-    if "from fact_prices" not in sql_lower:
+    # Проверяем, что это SELECT из mart.price_facts
+    if "price_facts" not in sql_lower:
         return None
     
     # Извлекаем ORDER BY и LIMIT чтобы сохранить их после трансформации
@@ -245,12 +243,22 @@ async def _execute_sql(
     session: Optional[AsyncSession],
     request_id: str,
 ) -> tuple[List[Dict[str, Any]], Optional[str]]:
-    """Выполняет SQL и возвращает (result, error)."""
+    """Выполняет SQL через read-only роль app_readonly (защита на уровне БД).
+
+    Помимо keyword-blacklist валидации в codegen, Executor подключается к БД
+    через отдельную роль с GRANT SELECT только на mart.*, поэтому любые попытки
+    INSERT/UPDATE/DELETE/DROP и доступ к не-mart таблицам блокируются сервером.
+    statement_timeout задаётся на уровне сессии в дополнение к REQUEST_TIMEOUT_S
+    для LLM.
+    """
+    from src.core.db.database import readonly_session_maker
+    from src.core.config import settings
+
     try:
-        async with (session or async_session_maker()) as s:
+        async with (session or readonly_session_maker()) as s:
             async with s.begin():
                 await s.execute(
-                    text(f"SET LOCAL statement_timeout = '{QUERY_TIMEOUT_SECONDS}s'")
+                    text(f"SET LOCAL statement_timeout = '{settings.DB_STATEMENT_TIMEOUT_MS}'")
                 )
                 result = await s.execute(text(sql_query))
 
@@ -285,6 +293,9 @@ async def executor_node(
     session: Optional[AsyncSession] = None,
     **kwargs: Any,
 ) -> GraphState:
+    from src.core.metrics import observe_node
+    import time as _time
+    _node_start = _time.monotonic()
     request_id = state.get("request_id", "?")[:8]
     sql_query = state.get("sql_query", "")
     validation_errors = state.get("validation_errors", [])
@@ -441,5 +452,11 @@ async def executor_node(
         "fallback_used": len(fallback_chain) > 0,
         "fallbacks_tried": [label for label, _ in fallback_chain],
     }
+
+    # Латентность узла для Prometheus.
+    try:
+        observe_node("executor", _time.monotonic() - _node_start)
+    except Exception:
+        pass
 
     return state

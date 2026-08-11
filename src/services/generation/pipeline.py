@@ -6,12 +6,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.db.database import async_session_maker
 from src.core.db.models import QueryLog
 from src.core.logging_settings import logger
-from src.services.generation.rag_prompt import build_rag_prompt, format_context
 from src.services.generation.verifier import Verifier, VerificationResult
 from src.services.llm.llm_client import LLMClient
-from src.services.rag.hybrid import HybridSearchResult
-from src.services.rag.rag_service import RagService, rag_service
 from src.services.agent.graph import LangGraphAgent, AgentResult
+
+# RAG-импорты (HybridSearchResult, RagService) удалены — RAG-over-cells больше нет.
+# GenerationResult оставлен только для обратной совместимости; основной путь —
+# run_agent() через LangGraph.
 
 
 class GenerationResult:
@@ -27,14 +28,14 @@ class GenerationResult:
     def __init__(
         self,
         answer: str,
-        retrieved_chunks: List[HybridSearchResult],
+        retrieved_chunks: Optional[List[Any]],
         verification: VerificationResult,
         latency_ms: int,
         request_id: str,
         model_used: str,
     ) -> None:
         self.answer = answer
-        self.retrieved_chunks = retrieved_chunks
+        self.retrieved_chunks = retrieved_chunks or []
         self.verification = verification
         self.latency_ms = latency_ms
         self.request_id = request_id
@@ -43,7 +44,9 @@ class GenerationResult:
     def to_dict(self) -> dict:
         return {
             "answer": self.answer,
-            "retrieved_chunks": [r.to_dict() for r in self.retrieved_chunks],
+            "retrieved_chunks": [
+                getattr(r, "to_dict", lambda: str(r))() for r in self.retrieved_chunks
+            ],
             "verification": self.verification.to_dict(),
             "latency_ms": self.latency_ms,
             "request_id": self.request_id,
@@ -54,12 +57,10 @@ class GenerationResult:
 class GenerationPipeline:
     def __init__(
         self,
-        rag: Optional[RagService] = None,
         llm: Optional[LLMClient] = None,
         verifier: Optional[Verifier] = None,
         agent: Optional[LangGraphAgent] = None,
     ) -> None:
-        self._rag = rag or rag_service
         self._llm = llm or LLMClient()
         self._verifier = verifier or Verifier()
         self._agent = agent or LangGraphAgent(llm=self._llm)
@@ -72,82 +73,20 @@ class GenerationPipeline:
         session: Optional[AsyncSession] = None,
         conversation_history: Optional[List[Dict[str, str]]] = None,
     ) -> GenerationResult:
-        """Запустить RAG-пайплайн (без агента, как было раньше).
-
-        Args:
-            question: Вопрос пользователя.
-            top_k: Количество чанков для поиска.
-            use_cheap_model: Использовать дешёвую модель.
-            session: Опциональная сессия БД.
-            conversation_history: История предыдущих попыток для self-correction.
-        """
-        request_id = str(uuid.uuid4())
-        start_time = time.monotonic()
-        is_retry = bool(conversation_history)
-
-        logger.info(
-            "Pipeline [{}]: retrieving top_k={} for query '{}' (retry={})",
-            request_id[:8],
-            top_k,
-            question[:80],
-            is_retry,
-        )
-        retrieved: List[HybridSearchResult] = await self._rag.hybrid_search(
-            query=question, top_k=top_k
-        )
-        logger.info(
-            "Pipeline [{}]: retrieved {} chunks",
-            request_id[:8],
-            len(retrieved),
-        )
-
-        context = format_context(retrieved)
-        messages = build_rag_prompt(question, context, conversation_history=conversation_history)
-
-        logger.info(
-            "Pipeline [{}]: calling LLM (cheap={})",
-            request_id[:8],
-            use_cheap_model,
-        )
-        try:
-            answer = await self._llm.chat(
-                messages=messages,
-                model=None,
-                temperature=0.1,
-                max_tokens=2048,
-            )
-        except Exception as exc:
-            logger.error(
-                "Pipeline [{}]: LLM call failed: {}", request_id[:8], exc
-            )
-            answer = f"Ошибка при генерации ответа: {exc}"
-
-        verification = self._verifier.verify(answer, retrieved)
-        logger.info(
-            "Pipeline [{}]: verification passed={}, score={:.3f}",
-            request_id[:8],
-            verification.passed,
-            verification.score,
-        )
-
-        latency_ms = int((time.monotonic() - start_time) * 1000)
-        await self._log_to_db(
-            request_id=request_id,
+        """DEPRECATED: RAG-пайплайн удалён. Делегирует в run_agent (entity-resolution)."""
+        result = await self.run_agent(
             question=question,
-            answer=answer,
-            retrieved=retrieved,
-            verification=verification,
-            latency_ms=latency_ms,
+            top_k=top_k,
             session=session,
+            conversation_history=conversation_history,
         )
-
         return GenerationResult(
-            answer=answer,
-            retrieved_chunks=retrieved,
-            verification=verification,
-            latency_ms=latency_ms,
-            request_id=request_id,
-            model_used="primary/cheap",
+            answer=result.answer,
+            retrieved_chunks=[],
+            verification=VerificationResult(passed=True, score=result.confidence),
+            latency_ms=result.latency_ms,
+            request_id=result.request_id,
+            model_used="primary",
         )
 
     async def run_agent(
@@ -253,15 +192,15 @@ class GenerationPipeline:
         request_id: str,
         question: str,
         answer: str,
-        retrieved: List[HybridSearchResult],
+        retrieved: List[Any],
         verification: VerificationResult,
         latency_ms: int,
         session: Optional[AsyncSession],
     ) -> None:
-        """Persist query log to the database (RAG mode)."""
+        """Persist query log to the database (RAG mode, legacy)."""
         trace = {
             "retrieved_count": len(retrieved),
-            "retrieved_scores": [r.score for r in retrieved],
+            "retrieved_scores": [getattr(r, "score", 0.0) for r in retrieved],
             "verification": verification.to_dict(),
         }
 

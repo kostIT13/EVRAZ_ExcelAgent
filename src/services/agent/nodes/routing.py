@@ -3,7 +3,6 @@ from typing import Literal
 from src.core.logging_settings import logger
 from src.services.agent.graph_state import (
     GraphState,
-    NODE_RAG,
     NODE_CLASSIFIER,
     NODE_DISAMBIGUATION,
     NODE_PLANNER,
@@ -15,16 +14,6 @@ from src.services.agent.graph_state import (
 )
 
 MAX_RETRY_COUNT = 3
-
-
-def route_after_rag(state: GraphState) -> Literal["classifier", "failed"]:
-    rag_error = state.get("rag_error")
-    if rag_error:
-        logger.warning(
-            "Routing: RAG had error ({}), continuing to classifier anyway",
-            rag_error,
-        )
-    return NODE_CLASSIFIER
 
 
 def route_after_classifier(state: GraphState) -> Literal["disambiguation", "planner", "failed"]:

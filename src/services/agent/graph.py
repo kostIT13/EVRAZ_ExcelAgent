@@ -8,7 +8,6 @@ from langgraph.graph import END, StateGraph
 from src.core.logging_settings import logger
 from src.services.agent.graph_state import (
     GraphState,
-    NODE_RAG,
     NODE_CLASSIFIER,
     NODE_DISAMBIGUATION,
     NODE_PLANNER,
@@ -18,7 +17,7 @@ from src.services.agent.graph_state import (
     NODE_ANSWER,
     NODE_FAILED,
 )
-from src.services.agent.nodes.rag_node import rag_node
+from src.services.agent.nodes.entity_resolution_node import entity_resolution_node
 from src.services.agent.nodes.classifier_node import classifier_node
 from src.services.agent.nodes.disambiguation_node import disambiguation_node
 from src.services.agent.nodes.planner_node import planner_node
@@ -27,7 +26,6 @@ from src.services.agent.nodes.executor_node import executor_node
 from src.services.agent.nodes.verifier_node import verifier_node
 from src.services.agent.nodes.answer_node import answer_node
 from src.services.agent.nodes.routing import (
-    route_after_rag,
     route_after_classifier,
     route_after_disambiguation,
     route_after_planner,
@@ -36,7 +34,7 @@ from src.services.agent.nodes.routing import (
     route_after_verifier,
 )
 from src.services.llm.llm_client import LLMClient
-from src.services.rag.query_cache import query_cache_service
+from src.services.entity_resolution.query_cache import query_cache_service
 
 
 async def failed_node(state: GraphState, **kwargs: Any) -> GraphState:
@@ -49,7 +47,6 @@ async def failed_node(state: GraphState, **kwargs: Any) -> GraphState:
 def build_agent_graph() -> StateGraph:
     workflow = StateGraph(GraphState)
 
-    workflow.add_node(NODE_RAG, rag_node)
     workflow.add_node(NODE_CLASSIFIER, classifier_node)
     workflow.add_node(NODE_DISAMBIGUATION, disambiguation_node)
     workflow.add_node(NODE_PLANNER, planner_node)
@@ -59,16 +56,10 @@ def build_agent_graph() -> StateGraph:
     workflow.add_node(NODE_ANSWER, answer_node)
     workflow.add_node(NODE_FAILED, failed_node)
 
-    workflow.set_entry_point(NODE_RAG)
-
-    workflow.add_conditional_edges(
-        NODE_RAG,
-        route_after_rag,
-        {
-            NODE_CLASSIFIER: NODE_CLASSIFIER,
-            NODE_FAILED: NODE_FAILED,
-        },
-    )
+    # Тяжёлый RAG-узел удалён из начала графа. Вместо него entity-resolution
+    # выполняется внутри Classifier/Planner (см. classifier_node/planner_node),
+    # которые заполняют state['entity_candidates'] и передают его в CodeGen.
+    workflow.set_entry_point(NODE_CLASSIFIER)
 
     workflow.add_conditional_edges(
         NODE_CLASSIFIER,
@@ -224,9 +215,8 @@ class LangGraphAgent:
             "question": question,
             "request_id": request_id,
             "top_k": top_k,
-            "rag_context": "",
-            "rag_chunks": [],
-            "rag_error": None,
+            "entity_candidates": [],
+            "entities_for_prompt": None,
             "query_type": None,
             "entities": [],
             "relevant_sheets": [],
@@ -278,6 +268,13 @@ class LangGraphAgent:
             status = "low_confidence"
         else:
             status = "low_confidence"
+
+        # Prometheus-наблюдаемость: RPS, статус, латентность.
+        try:
+            from src.core.metrics import observe_ask
+            observe_ask(status, latency_ms / 1000.0)
+        except Exception:
+            pass
 
         answer = final_state.get("answer", "")
         if not answer:

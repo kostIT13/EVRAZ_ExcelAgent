@@ -19,10 +19,16 @@ dependencies = [
     "psycopg2>=2.9.12",
     "dotenv>=0.9.9",
     "python-multipart>=0.0.18",
-    "numpy>=1.26.0",
-    "qdrant-client>=1.12.0",
-    "fastembed>=0.4.0",
-    "flashrank>=0.2.0",
     "rapidfuzz>=3.14.5",
+    "prometheus-client>=0.20.0",
+    "slowapi>=0.1.9",
+    "pytest>=8.0.0",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "golden: интеграционные golden-dataset тесты (требуют LLM и данные)",
+]
+addopts = "-ra"
 

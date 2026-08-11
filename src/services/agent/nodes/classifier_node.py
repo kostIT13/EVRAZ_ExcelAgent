@@ -12,6 +12,7 @@ from src.services.agent.graph_state import (
     NODE_PLANNER,
 )
 from src.services.llm.llm_client import LLMClient
+from src.services.entity_resolution.entity_resolver import entity_resolver
 
 CLASSIFIER_SYSTEM_PROMPT = """Ты — классификатор запросов к базе данных Excel-файла Evraz с ценами на металлы.
 
@@ -62,7 +63,6 @@ async def classifier_node(
     llm = llm or LLMClient()
     request_id = state.get("request_id", "?")[:8]
     question = state.get("question", "")
-    rag_context = state.get("rag_context", "")
 
     logger.info(
         "Classifier Node [{}]: classifying '{}'",
@@ -77,18 +77,37 @@ async def classifier_node(
         len(sheets),
     )
 
+    # Entity-resolution: top-N кандидатов item/supplier/period по вопросу.
+    # Заменяет тяжёлый RAG-over-cells; кандидаты передаются в Planner/CodeGen.
+    try:
+        candidates = await entity_resolver.resolve_candidates(question, top_n=10)
+        state["entity_candidates"] = [c.to_dict() for c in candidates]
+    except Exception as exc:
+        logger.warning(
+            "Classifier Node [{}]: entity resolution failed: {}",
+            request_id,
+            exc,
+        )
+        state["entity_candidates"] = []
+
     sheets_json = json.dumps(sheets, ensure_ascii=False, indent=2)
-    rag_section = (
-        f"\nRAG-контекст (релевантные данные):\n{rag_context[:20000]}"
-        if rag_context
+    candidates_text = json.dumps(
+        state.get("entity_candidates", [])[:5],
+        ensure_ascii=False,
+        indent=2,
+    )
+    entity_section = (
+        f"\nСущности-кандидаты (pg_trgm):\n{candidates_text}"
+        if state.get("entity_candidates")
         else ""
     )
-    user_message = f"""Вопрос пользователя: {question}{rag_section}
+    user_message = f"""Вопрос пользователя: {question}{entity_section}
 
 Список листов в базе данных:
 {sheets_json}
 
-Определи тип запроса, сущности и ID релевантных листов."""
+Определи тип запроса, сущности и ID релевантных листов. Используй
+сущности-кандидаты, чтобы уточнить названия лома/поставщиков."""
 
     messages = [
         {"role": "system", "content": CLASSIFIER_SYSTEM_PROMPT},

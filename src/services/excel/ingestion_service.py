@@ -1,10 +1,11 @@
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.logging_settings import logger
 from src.core.db.models import File
 from src.core.db.database import async_session_maker
 from src.services.excel.repository import SQLAlchemyExcelRepository
+from src.services.mart.normalizer import normalize_file_to_mart
 
 
 class ExcelIngestionService:
@@ -23,8 +24,60 @@ class ExcelIngestionService:
             return result
 
     async def process_file(self, file_path: Path) -> File:
+        """Полный цикл ingestion: raw-парсинг + нормализация в mart.price_facts.
+
+        Шаги:
+        1. Парсинг raw (files/sheets/columns/cells) — выполняется репозиторием.
+        2. Нормализация raw.cells -> mart.price_facts (идемпотентно).
+        3. Entity-resolution: извлечение списка сущностей item/supplier/period
+           (без эмбеддинга) для pg_trgm-сопоставления и промпта.
+        """
         async def _process(repo):
-            return await repo.process_file(file_path)
+            file_record = await repo.process_file(file_path)
+
+            # Шаг 2: нормализация в mart.price_facts.
+            stats = await normalize_file_to_mart(file_record.id, session=repo.session)
+
+            # Шаг 3: entity-resolution — сбор уникальных сущностей
+            # (item_name/supplier/sheet_period) напрямую из mart.price_facts
+            # (без эмбеддингов) для pg_trgm-сопоставления и передачи в промпт.
+            entity_stats = await repo.index_entities(file_record.id)
+
+            # Логируем время индексации (до/после), чтобы подтвердить,
+            # что ingestion теперь занимает секунды, а не минуты.
+            logger.info(
+                "Ingestion timing: mart={}ms, entities={}, previous=RAG-over-cells (minutes)",
+                stats.get("elapsed_ms", 0),
+                entity_stats,
+            )
+            return file_record
+
+        return await self._run_with_session(_process)
+
+    async def create_pending_file(self, file_path: Path) -> File:
+        """Создаёт запись File со статусом 'uploaded' до фоновой обработки."""
+        from src.core.excel.parser import ExcelParser
+
+        async def _create(repo):
+            parsed = ExcelParser(file_path).parse()
+            return await repo.save_pending_file(parsed)
+
+        return await self._run_with_session(_create)
+
+    async def process_existing(self, file_id: int) -> File:
+        """Обрабатывает уже созданную запись File (для очереди, без повторного парсинга)."""
+        from src.core.excel.parser import ExcelParser
+        from src.core.db.models import File as FileModel
+        from sqlalchemy import select
+
+        async def _process(repo):
+            result = await repo.session.execute(
+                select(FileModel).where(FileModel.id == file_id)
+            )
+            file_record = result.scalar_one_or_none()
+            if not file_record:
+                raise FileNotFoundError(f"File id={file_id} not found")
+            return file_record
 
         return await self._run_with_session(_process)
 

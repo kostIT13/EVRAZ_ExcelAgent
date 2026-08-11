@@ -3,7 +3,7 @@ import json
 from typing import Any, Dict, List, Optional
 from sqlalchemy import select
 from src.core.db.database import async_session_maker
-from src.core.db.models import ColumnMetadata, Sheet, FactPrice
+from src.core.db.models import ColumnMetadata, Sheet, PriceFact
 from src.core.logging_settings import logger
 from src.services.agent.graph_state import (
     GraphState,
@@ -11,28 +11,24 @@ from src.services.agent.graph_state import (
 )
 from src.services.llm.llm_client import LLMClient
 
-PLANNER_SYSTEM_PROMPT = """Ты — планировщик запросов к базе данных Excel-файла с ценами на металлы.
+PLANNER_SYSTEM_PROMPT = """Ты — планировщик запросов к нормализованной факт-таблице цен на металлы.
 
 У тебя есть:
 1. Вопрос пользователя
-2. RAG-контекст (релевантные фрагменты данных из Excel)
+2. Список сущностей-кандидатов (item_name/supplier/sheet_period), найденных по вопросу
 3. Тип запроса (lookup/aggregate/cross_sheet/delta)
 4. Сущности, извлечённые из вопроса
-5. Схема релевантных листов (таблиц) с их колонками
+5. Схема таблицы mart.price_facts
 
-Твоя задача — составить текстовый план действий для генерации SQL-запроса.
-План должен быть конкретным и содержать:
-1. Какие листы (таблицы) нужно использовать
-2. Какие колонки нужны для ответа
-3. Какие условия фильтрации (WHERE)
-4. Нужна ли агрегация (SUM/AVG/MIN/MAX) или группировка
-5. Нужна ли сортировка
+Твоя задача — составить текстовый план действий для генерации SQL-запроса
+по таблице mart.price_facts. План должен содержать:
+1. Какие условия фильтрации (WHERE) по item_name/supplier/sheet_period/price_type
+2. Нужна ли агрегация (SUM/AVG/MIN/MAX) или группировка
+3. Нужна ли сортировка
 
 Правила:
-- Не выдумывай колонки — используй только те, что есть в схеме
-- Если тип запроса cross_sheet или delta — нужны несколько листов
-- Для delta нужна разница между значениями из разных листов/периодов
-- Используй RAG-контекст чтобы понять, какие именно данные искать
+- Не выдумывай значения item_name/supplier — используй только сущности-кандидаты
+- Схема: mart.price_facts — единственная таблица для вопросов о ценах
 - План должен быть на русском языке, кратким (3-5 предложений)
 
 Верни ТОЛЬКО текст плана без лишних пояснений.
@@ -73,8 +69,8 @@ async def get_sheet_schema(sheet_ids: List[int]) -> List[Dict[str, Any]]:
             ]
 
             fact_result = await session.execute(
-                select(FactPrice)
-                .where(FactPrice.sheet_id == sid)
+                select(PriceFact)
+                .where(PriceFact.sheet_id == sid)
                 .limit(20)
             )
             fact_rows = fact_result.scalars().all()
@@ -82,13 +78,14 @@ async def get_sheet_schema(sheet_ids: List[int]) -> List[Dict[str, Any]]:
             fact_samples = []
             seen_items = set()
             for fp in fact_rows:
-                if fp.item_name_normalized not in seen_items:
-                    seen_items.add(fp.item_name_normalized)
+                if fp.item_name not in seen_items:
+                    seen_items.add(fp.item_name)
                     fact_samples.append({
-                        "item_name_normalized": fp.item_name_normalized,
-                        "period": fp.period,
-                        "price_source": fp.price_source,
-                        "price_value": fp.price_value,
+                        "item_name": fp.item_name,
+                        "sheet_period": fp.sheet_period,
+                        "supplier": fp.supplier,
+                        "price_type": fp.price_type,
+                        "value": fp.value,
                     })
                 if len(fact_samples) >= 10:
                     break
@@ -102,12 +99,13 @@ async def get_sheet_schema(sheet_ids: List[int]) -> List[Dict[str, Any]]:
                 "columns": sheet_columns,
                 "fact_prices_samples": fact_samples,
                 "fact_prices_schema": {
-                    "table": "fact_prices",
+                    "table": "mart.price_facts",
                     "columns": [
-                        {"name": "period", "type": "TEXT", "description": "период (например, '2025-11')"},
-                        {"name": "item_name_normalized", "type": "TEXT", "description": "нормализованное название лома"},
-                        {"name": "price_source", "type": "TEXT", "description": "источник цены: среднерыночная, аукцион_старт, аукцион_победитель, или название поставщика"},
-                        {"name": "price_value", "type": "FLOAT", "description": "значение цены в руб/тн"},
+                        {"name": "sheet_period", "type": "TEXT", "description": "период (например, '2025-11')"},
+                        {"name": "item_name", "type": "TEXT", "description": "нормализованное название лома"},
+                        {"name": "supplier", "type": "TEXT", "description": "поставщик или NULL"},
+                        {"name": "price_type", "type": "TEXT", "description": "среднерыночная / аукцион_старт / аукцион_победитель / поставщик"},
+                        {"name": "value", "type": "FLOAT", "description": "значение цены в руб/тн"},
                     ],
                 },
             })
@@ -125,46 +123,60 @@ async def planner_node(
     query_type = state.get("query_type")
     entities = state.get("entities", [])
     relevant_sheets = state.get("relevant_sheets", [])
-    rag_context = state.get("rag_context", "")
+    entity_candidates = state.get("entity_candidates", [])
 
     logger.info(
-        "Planner Node [{}]: planning for type={}, sheets={}",
+        "Planner Node [{}]: planning for type={}, candidates={}",
         request_id,
         query_type.value if query_type else "?",
-        [s.get("name", str(s)) for s in relevant_sheets],
+        len(entity_candidates),
     )
 
     sheet_ids = [s["id"] for s in relevant_sheets]
     schema = await get_sheet_schema(sheet_ids)
 
     if not schema:
+        # Планируем по mart.price_facts даже без листов (fallback на факт-таблицу).
         logger.warning(
-            "Planner Node [{}]: no schema for sheets {}",
+            "Planner Node [{}]: no schema for sheets {}, falling back to price_facts",
             request_id,
             sheet_ids,
         )
-        state["plan"] = "Не найдена схема релевантных листов"
-        state["trace"] = state.get("trace", {})
-        state["trace"][NODE_PLANNER] = {"error": "no_schema", "sheet_ids": sheet_ids}
-        return state
+        schema = [
+            {
+                "id": None,
+                "name": "price_facts",
+                "fact_prices_schema": {
+                    "table": "mart.price_facts",
+                    "columns": [
+                        {"name": "sheet_period", "type": "TEXT", "description": "период (например, '2025-11')"},
+                        {"name": "item_name", "type": "TEXT", "description": "нормализованное название лома"},
+                        {"name": "supplier", "type": "TEXT", "description": "поставщик или None"},
+                        {"name": "price_type", "type": "TEXT", "description": "среднерыночная / аукцион_старт / аукцион_победитель / поставщик"},
+                        {"name": "value", "type": "FLOAT", "description": "значение цены в руб/тн"},
+                    ],
+                },
+            }
+        ]
 
     state["schema"] = schema
 
     schema_json = json.dumps(schema, ensure_ascii=False, indent=2)
-    rag_section = (
-        f"\nRAG-контекст (релевантные данные):\n{rag_context[:20000]}"
-        if rag_context
+    candidates_text = json.dumps(entity_candidates[:10], ensure_ascii=False, indent=2)
+    candidates_section = (
+        f"\nСущности-кандидаты (item_name/supplier/sheet_period):\n{candidates_text}"
+        if entity_candidates
         else ""
     )
-    user_message = f"""Вопрос пользователя: {question}{rag_section}
+    user_message = f"""Вопрос пользователя: {question}{candidates_section}
 
 Тип запроса: {query_type.value if query_type else 'unknown'}
 Сущности: {', '.join(entities) if entities else 'не определены'}
 
-Схема релевантных листов:
+Схема mart.price_facts:
 {schema_json}
 
-Составь план действий для SQL-запроса."""
+Составь план действий для SQL-запроса по mart.price_facts."""
 
     messages = [
         {"role": "system", "content": PLANNER_SYSTEM_PROMPT},

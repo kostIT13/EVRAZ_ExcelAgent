@@ -1,13 +1,16 @@
 import tempfile
 from pathlib import Path
 from typing import List
-from fastapi import APIRouter, Depends, UploadFile, Query
+from fastapi import APIRouter, Depends, UploadFile, Query, Request
 from fastapi import File as FastAPIFile
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.db.database import get_db
 from src.core.logging_settings import logger
-from src.services.rag.rag_service import rag_service
 from src.api.errors import AppError, FileTooLargeError, ValidationError
+from src.api.security import verify_api_key
+from src.core.ratelimit import get_limiter, upload_limit
+
+_limiter = get_limiter()
 from src.api.schemas import (
     FileResponse,
     FileListResponse,
@@ -34,10 +37,14 @@ MAX_FILE_SIZE = 50 * 1024 * 1024
 
 
 @router.post("/upload", response_model=UploadResponse, status_code=201)
+@_limiter.limit(upload_limit)
 async def upload_file(
+    request: Request,
     service: ExcelIngestionServiceDependency,
-    file: UploadFile = FastAPIFile(...)
+    file: UploadFile = FastAPIFile(...),
+    _key: str = Depends(verify_api_key),
 ):
+    request = request  # noqa: F841
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in ALLOWED_EXTENSIONS:
         raise ValidationError(
@@ -57,15 +64,38 @@ async def upload_file(
         tmp_path = Path(tmp.name)
 
     try:
-        file_record = await service.process_file(tmp_path)
-        logger.info("File uploaded successfully: id={}, filename={}", file_record.id, file_record.filename)
+        # Асинхронный ingestion: парсинг+нормализация уходят в фоновую очередь.
+        # Клиент сразу получает file_id и опрашивает статус через GET /files/{id}.
+        from src.services.excel.ingestion_queue import ingestion_queue
+        file_id = await ingestion_queue.enqueue(tmp_path)
+        file_record = await service.get_file(file_id)
+        logger.info("File queued for processing: id={}, filename={}", file_id, file.filename)
         return UploadResponse(
-            message="File uploaded and processed successfully",
+            message="File uploaded, processing started asynchronously",
             file=FileResponse.model_validate(file_record),
         )
     finally:
         if tmp_path.exists():
             tmp_path.unlink()
+
+
+@router.get("/{file_id}/status", response_model=FileDetailResponse)
+async def get_ingestion_status(
+    file_id: int,
+    service: FileServiceDependency,
+):
+    """Опрос статуса асинхронной обработки файла (uploaded/processing/ready/failed)."""
+    from src.services.excel.ingestion_queue import ingestion_queue
+    file_record = await service.get_by_id(file_id)
+    status = ingestion_queue.get_status(file_id)
+    if file_record and file_record.status == "ready":
+        return FileDetailResponse.model_validate(file_record)
+    if file_record:
+        # Возвращаем текущий статус обработки.
+        data = FileDetailResponse.model_validate(file_record).model_dump()
+        data["status"] = status.get("status", file_record.status)
+        return FileDetailResponse(**data)
+    raise FileNotFoundError(f"File id={file_id} not found")
 
 
 @router.get("", response_model=FileListResponse)
@@ -146,9 +176,26 @@ async def reindex_file(
     file_id: int,
     service: FileServiceDependency,
 ):
+    """Пересоздаёт mart.price_facts и справочники сущностей для файла.
+
+    Векторный RAG-индекс (Qdrant) удалён из архитектуры, поэтому переиндексация
+    означает повторную нормализацию raw.cells -> mart.price_facts и пересборку
+    списка сущностей для pg_trgm-сопоставления.
+    """
     await service.get_by_id(file_id)
 
+    from src.services.mart.normalizer import normalize_file_to_mart
+    from src.services.excel.repository import SQLAlchemyExcelRepository
+
     logger.info("Reindexing file id={}", file_id)
-    await rag_service.build_index_for_file(file_id)
-    logger.info("Reindex complete for file id={}", file_id)
+    async with get_db() as session:
+        repo = SQLAlchemyExcelRepository(session)
+        stats = await normalize_file_to_mart(file_id, session=session)
+        entity_stats = await repo.index_entities(file_id)
+    logger.info(
+        "Reindex complete for file id={}: mart={}, entities={}",
+        file_id,
+        stats,
+        entity_stats,
+    )
     return {"message": f"File {file_id} reindexed successfully"}

@@ -16,9 +16,10 @@ class GraphState(TypedDict, total=False):
     request_id: str
     top_k: int
 
-    rag_context: str
-    rag_chunks: List[Dict[str, Any]]
-    rag_error: Optional[str]
+    # Entity-resolution (вместо тяжёлого RAG-over-cells).
+    # Список top-N кандидатов item/supplier/period, найденных по вопросу.
+    entity_candidates: List[Dict[str, Any]]
+    entities_for_prompt: Optional[Dict[str, List[str]]]
 
     query_type: QueryType
     entities: List[str]
@@ -46,7 +47,6 @@ class GraphState(TypedDict, total=False):
     error: Optional[str]
 
 
-NODE_RAG = "rag"
 NODE_CLASSIFIER = "classifier"
 NODE_DISAMBIGUATION = "disambiguation"
 NODE_PLANNER = "planner"

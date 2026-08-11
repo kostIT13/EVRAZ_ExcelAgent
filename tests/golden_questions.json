@@ -1,0 +1,72 @@
+[
+  {
+    "id": "g001",
+    "question": "Какая среднерыночная цена на лом меди в январе 2025?",
+    "query_type": "lookup",
+    "expected_result_value": 720000.0,
+    "expected_sql_hint": "price_type='среднерыночная' AND item_name ILIKE '%медь%' AND sheet_period='2025-01'"
+  },
+  {
+    "id": "g002",
+    "question": "Сравни цены на латунь у всех поставщиков в декабре 2025",
+    "query_type": "lookup",
+    "expected_result_type": "multirow",
+    "expected_sql_hint": "price_type='поставщик' AND item_name ILIKE '%латун%'"
+  },
+  {
+    "id": "g003",
+    "question": "Какая средняя цена на никель по всем месяцам?",
+    "query_type": "aggregate",
+    "expected_result_type": "aggregate",
+    "expected_sql_hint": "AVG(value) GROUP BY sheet_period AND item_name ILIKE '%никел%'"
+  },
+  {
+    "id": "g004",
+    "question": "На сколько изменилась цена на медь между январем и февралем 2025?",
+    "query_type": "delta",
+    "expected_result_type": "delta",
+    "expected_sql_hint": "sheet_period='2025-01' и '2025-02', price_type='среднерыночная'"
+  },
+  {
+    "id": "g005",
+    "question": "Какая стартовая цена аукциона на лом меди в марте 2025?",
+    "query_type": "lookup",
+    "expected_result_type": "scalar",
+    "expected_sql_hint": "price_type='аукцион_старт' AND sheet_period='2025-03' AND item_name ILIKE '%медь%'"
+  },
+  {
+    "id": "g006",
+    "question": "Кто победил в аукционе по латуни в январе 2025 и по какой цене?",
+    "query_type": "lookup",
+    "expected_result_type": "multirow",
+    "expected_sql_hint": "price_type='аукцион_победитель' AND sheet_period='2025-01' AND item_name ILIKE '%латун%'"
+  },
+  {
+    "id": "g007",
+    "question": "Покажи все цены на бронзу в апреле 2025",
+    "query_type": "lookup",
+    "expected_result_type": "multirow",
+    "expected_sql_hint": "sheet_period='2025-04' AND item_name ILIKE '%бронз%'"
+  },
+  {
+    "id": "g008",
+    "question": "Какая цена на лом меди у поставщика ООО Металл в январе 2025?",
+    "query_type": "lookup",
+    "expected_result_type": "scalar",
+    "expected_sql_hint": "supplier ILIKE '%металл%' AND sheet_period='2025-01' AND item_name ILIKE '%медь%'"
+  },
+  {
+    "id": "g009",
+    "question": "О скольки месяцах у тебя есть информация?",
+    "query_type": "aggregate",
+    "expected_result_type": "aggregate",
+    "expected_sql_hint": "COUNT(DISTINCT sheet_period)"
+  },
+  {
+    "id": "g010",
+    "question": "Сколько всего листов в базе данных?",
+    "query_type": "aggregate",
+    "expected_result_type": "aggregate",
+    "expected_sql_hint": "COUNT(*) FROM sheets"
+  }
+]

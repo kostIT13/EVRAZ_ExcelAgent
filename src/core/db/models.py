@@ -233,3 +233,63 @@ class QueryLog(Base):
         Index("ix_query_logs_user_id", "user_id"),
         Index("ix_query_logs_status", "status"),
     )
+
+
+class PriceFact(Base):
+    """mart.price_facts — нормализованная long-таблица фактов цен.
+
+    На ней строятся все SQL-запросы агента (вместо EAV cells). Появляется из
+    raw.cells на этапе нормализации (итеративно, идемпотентно).
+    """
+
+    __tablename__ = "price_facts"
+    __table_args__ = {"schema": "mart"}
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    file_id: Mapped[int] = mapped_column(Integer, ForeignKey("files.id", ondelete="CASCADE"), nullable=False, index=True)
+    sheet_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    source_row_ref: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, comment="ссылка на исходную строку raw-таблицы")
+    sheet_period: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)
+    item_name: Mapped[str] = mapped_column(Text, nullable=False)
+    supplier: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    price_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    value: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    currency: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, default="RUB")
+    unit: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_mart_price_facts_item_name", "item_name"),
+        Index("ix_mart_price_facts_supplier", "supplier"),
+        Index("ix_mart_price_facts_sheet_period", "sheet_period"),
+        Index("ix_mart_price_facts_file_id", "file_id"),
+        Index("ix_mart_price_facts_sheet_id", "sheet_id"),
+        {"schema": "mart"},
+    )
+
+
+class SheetTemplate(Base):
+    """mart.sheet_templates — кэш подтверждённых LLM-схем листов.
+
+    Хранит отпечаток структуры листа (fingerprint) и распознанную LLM-схему.
+    При повторной загрузке файла того же формата схема применяется без вызова LLM.
+    Статус: pending_confirmation → confirmed (после ручного подтверждения в UI).
+    """
+
+    __tablename__ = "sheet_templates"
+    __table_args__ = {"schema": "mart"}
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    schema_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    sheet_name_pattern: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(String(30), default="pending_confirmation", index=True)
+    confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    confirmed_by: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    confirmed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_mart_sheet_templates_status", "status"),
+        Index("ix_mart_sheet_templates_fingerprint", "fingerprint"),
+    )

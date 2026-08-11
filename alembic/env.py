@@ -23,9 +23,11 @@ from src.core.db.models import (  # noqa: E402
     FactPrice,
     File,
     GoldenDataset,
+    PriceFact,
     QueryCache,
     QueryLog,
     Sheet,
+    SheetTemplate,
 )
 from src.core.config import settings  # noqa: E402
 

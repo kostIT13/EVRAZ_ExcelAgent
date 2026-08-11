@@ -1,8 +1,7 @@
 from __future__ import annotations
 import re
-from typing import List, Optional
+from typing import Any, List, Optional
 from loguru import logger
-from src.services.rag.hybrid import HybridSearchResult
 
 
 class VerificationResult:
@@ -47,9 +46,16 @@ class Verifier:
     def verify(
         self,
         response: str,
-        context_chunks: List[HybridSearchResult],
+        context_chunks: Optional[List[Any]] = None,
     ) -> VerificationResult:
-        context_text = " ".join(r.chunk for r in context_chunks).lower()
+        """Проверяет ответ. RAG-chunk-контекст удалён: принимаем любой список
+        объектов с атрибутом chunk для обратной совместимости, либо None."""
+        if context_chunks:
+            context_text = " ".join(
+                getattr(r, "chunk", str(r)) for r in context_chunks
+            ).lower()
+        else:
+            context_text = ""
 
         warnings: List[str] = []
         missing: List[str] = []

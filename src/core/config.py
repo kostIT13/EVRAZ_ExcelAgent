@@ -1,39 +1,60 @@
+from typing import Annotated, Any
+
+from pydantic import BeforeValidator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def _coerce_bool(v: Any) -> bool:
+    """Приводит строку из .env (например 'release'/'true'/'1') к bool."""
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, str):
+        s = v.strip().lower()
+        if s in ("1", "true", "yes", "on", "release"):
+            return True
+        if s in ("0", "false", "no", "off", ""):
+            return False
+    return bool(v)
+
+
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        # Позволяет игнорировать устаревшие ключи (.env), удалённые из схемы
+        # (Ollama/Qdrant/embedding), чтобы не ломать старт при неполной чистке .env.
+        extra="ignore",
+    )
     LOG_LEVEL: str = "INFO"
 
-    DEBUG: bool = False
+    # DEBUG ранее принимал bool; в .env присутствует 'release' (устаревшее значение).
+    # Приводим к bool безопасно, чтобы не ломать старт.
+    DEBUG: Annotated[bool, BeforeValidator(_coerce_bool)] = False
+
+    # Auth: API-ключ для /files/* и /ask/*. Пустой → auth отключён (dev).
+    API_KEY: str = ""
+    # Rate limiting (slowapi): "N/minute|hour|day" или пусто — отключено.
+    RATE_LIMIT_ASK: str = "30/minute"
+    RATE_LIMIT_UPLOAD: str = "10/minute"
 
     LLM_BASE_URL: str
     LLM_API_KEY: str
     LLM_MODEL_PRIMARY: str
     LLM_MODEL_CHEAP: str
 
-    OLLAMA_BASE_URL: str = "http://ollama:11434"
-
-    # Dense-эмбеддинг модель через fastembed (локально, ONNX Runtime).
-    # multilingual-e5-large — 1024 dim, хорошо работает с русским текстом на CPU.
-    # Модель скачивается один раз с HuggingFace Hub и кэшируется локально,
-    # после чего работает полностью офлайн без внешних HTTP-сервисов.
-    # Размерность 1024 ОБЯЗАНА совпадать с размерностью коллекции в Qdrant
-    # (EMBED_DIMENSION). После смены размерности пересоздайте коллекцию
-    # (scripts/recreate_qdrant_collection.py) и заново загрузите файлы.
-    # EMBED_MODEL оставлен для обратной совместимости; embedder использует FASTEMBED_MODEL.
-    EMBED_MODEL: str = "intfloat/multilingual-e5-large"
-    FASTEMBED_MODEL: str = "intfloat/multilingual-e5-large"
-    EMBED_DIMENSION: int = 1024
-
-    # Размер батча эмбеддингов (количество текстов на один вызов fastembed).
-    # Значение можно переопределить через .env (EMBED_BATCH_SIZE).
-    EMBED_BATCH_SIZE: int = 32
+    # Векторные эмбеддинги (fastembed), Qdrant и Ollama полностью удалены.
+    # Entity-resolution работает через Postgres pg_trgm (similarity()/%) по
+    # mart.price_facts.item_name/.supplier — без эмбеддинг-модели.
 
     LLM_TEMPERATURE: float = 0.1
     LLM_MAX_TOKENS: int = 2048
     REQUEST_TIMEOUT_S: int = 60
     MAX_RETRIES: int = 3
+
+    # Асинхронный ingestion: лёгкая in-process очередь (без внешнего брокера).
+    # Для прод-развёртывания замените на Celery/RQ/arq + Redis/Postgres LISTEN.
+    INGESTION_QUEUE_MODE: str = "inproc"  # inproc | celery | arq
+    INGESTION_STATUS_MAX_AGE_DAYS: int = 7
 
     POSTGRES_URL: str
     POSTGRES_DB: str
@@ -42,17 +63,14 @@ class Settings(BaseSettings):
     POSTGRES_USER: str
     POSTGRES_PORT: int = 5432
 
-    # Qdrant (векторное хранилище)
-    QDRANT_URL: str = "http://qdrant:6333"
-    QDRANT_API_KEY: str = ""
-    QDRANT_COLLECTION: str = "evraz_chunks"
-    QDRANT_EMBEDDING_MODEL: str = "BAAI/bge-small-en-v1.5"
-    QDRANT_SPARSE_MODEL: str = "Qdrant/bm25"
+    # Read-only роль для Executor-узла (GRANT SELECT только на mart.*).
+    # Безопасность на уровне БД в дополнение к keyword-blacklist валидации SQL.
+    READONLY_DB_USER: str = "app_readonly"
+    READONLY_DB_PASSWORD: str = ""
+    DB_STATEMENT_TIMEOUT_MS: int = 30000
 
-    # Реранкер (flashrank)
-    RERANKER_MODEL: str = "ms-marco-MiniLM-L-12-v2"
-    RERANKER_ENABLED: bool = True
-    RERANKER_TOP_K: int = 5
+    # Порог pg_trgm similarity для fuzzy-сопоставления сущностей (0..1).
+    TRIGRAM_THRESHOLD: float = 0.25
 
 
 settings = Settings()

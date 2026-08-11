@@ -4,6 +4,7 @@ import json
 import re
 from typing import Any, List, Optional
 
+from src.core.config import settings
 from src.core.logging_settings import logger
 from src.services.agent.graph_state import GraphState, NODE_CODEGEN
 from src.services.llm.llm_client import LLMClient
@@ -12,78 +13,78 @@ from src.services.llm.llm_client import LLMClient
 FEW_SHOT_EXAMPLES = [
     {
         "question": "Какая среднерыночная цена на лом меди в январе 2025?",
-        "sql": """SELECT fp.price_value
-FROM fact_prices fp
-WHERE fp.period = '2025-01'
-  AND fp.price_source = 'среднерыночная'
-  AND fp.item_name_normalized ILIKE '%медь%'
+        "sql": """SELECT fp.value
+FROM mart.price_facts fp
+WHERE fp.sheet_period = '2025-01'
+  AND fp.price_type = 'среднерыночная'
+  AND fp.item_name ILIKE '%медь%'
 LIMIT 1""",
     },
     {
         "question": "Сравни цены на латунь у всех поставщиков в декабре 2025",
-        "sql": """SELECT fp.price_source, fp.price_value
-FROM fact_prices fp
-WHERE fp.period = '2025-12'
-  AND fp.price_source NOT IN ('среднерыночная', 'аукцион_старт', 'аукцион_победитель')
-  AND fp.item_name_normalized ILIKE '%латун%'
-ORDER BY fp.price_source""",
+        "sql": """SELECT fp.supplier, fp.value
+FROM mart.price_facts fp
+WHERE fp.sheet_period = '2025-12'
+  AND fp.price_type = 'поставщик'
+  AND fp.item_name ILIKE '%латун%'
+ORDER BY fp.supplier""",
     },
     {
         "question": "Какая средняя цена на никель по всем месяцам?",
-        "sql": """SELECT fp.period, AVG(fp.price_value) as avg_price
-FROM fact_prices fp
-WHERE fp.price_source = 'среднерыночная'
-  AND fp.item_name_normalized ILIKE '%никел%'
-GROUP BY fp.period
-ORDER BY fp.period""",
+        "sql": """SELECT fp.sheet_period, AVG(fp.value) as avg_price
+FROM mart.price_facts fp
+WHERE fp.price_type = 'среднерыночная'
+  AND fp.item_name ILIKE '%никел%'
+GROUP BY fp.sheet_period
+ORDER BY fp.sheet_period""",
     },
     {
         "question": "На сколько изменилась цена на медь между январем и февралем 2025?",
         "sql": """SELECT
-  jan.price_value as цена_январь,
-  feb.price_value as цена_февраль,
-  (feb.price_value - jan.price_value) as изменение
+  jan.value as цена_январь,
+  feb.value as цена_февраль,
+  (feb.value - jan.value) as изменение
 FROM
-  (SELECT price_value FROM fact_prices
-   WHERE period = '2025-01' AND price_source = 'среднерыночная'
-     AND item_name_normalized ILIKE '%медь%' LIMIT 1) jan,
-  (SELECT price_value FROM fact_prices
-   WHERE period = '2025-02' AND price_source = 'среднерыночная'
-     AND item_name_normalized ILIKE '%медь%' LIMIT 1) feb""",
+  (SELECT value FROM mart.price_facts
+   WHERE sheet_period = '2025-01' AND price_type = 'среднерыночная'
+     AND item_name ILIKE '%медь%' LIMIT 1) jan,
+  (SELECT value FROM mart.price_facts
+   WHERE sheet_period = '2025-02' AND price_type = 'среднерыночная'
+     AND item_name ILIKE '%медь%' LIMIT 1) feb""",
     },
     {
         "question": "Какая стартовая цена аукциона на лом меди в марте 2025?",
-        "sql": """SELECT fp.price_value
-FROM fact_prices fp
-WHERE fp.period = '2025-03'
-  AND fp.price_source = 'аукцион_старт'
-  AND fp.item_name_normalized ILIKE '%медь%'
+        "sql": """SELECT fp.value
+FROM mart.price_facts fp
+WHERE fp.sheet_period = '2025-03'
+  AND fp.price_type = 'аукцион_старт'
+  AND fp.item_name ILIKE '%медь%'
 LIMIT 1""",
     },
     {
         "question": "Кто победил в аукционе по латуни в январе 2025 и по какой цене?",
-        "sql": """SELECT fp.price_source, fp.price_value
-FROM fact_prices fp
-WHERE fp.period = '2025-01'
-  AND fp.price_source = 'аукцион_победитель'
-  AND fp.item_name_normalized ILIKE '%латун%'
+        "sql": """SELECT fp.supplier, fp.value
+FROM mart.price_facts fp
+WHERE fp.sheet_period = '2025-01'
+  AND fp.price_type = 'аукцион_победитель'
+  AND fp.item_name ILIKE '%латун%'
 LIMIT 1""",
     },
     {
         "question": "Покажи все цены на бронзу в апреле 2025",
-        "sql": """SELECT fp.price_source, fp.price_value
-FROM fact_prices fp
-WHERE fp.period = '2025-04'
-  AND fp.item_name_normalized ILIKE '%бронз%'
-ORDER BY fp.price_source""",
+        "sql": """SELECT fp.price_type, fp.supplier, fp.value
+FROM mart.price_facts fp
+WHERE fp.sheet_period = '2025-04'
+  AND fp.item_name ILIKE '%бронз%'
+ORDER BY fp.price_type, fp.supplier""",
     },
     {
         "question": "Какая цена на лом меди кусок у поставщика ООО Металл в январе 2025?",
-        "sql": """SELECT fp.price_value
-FROM fact_prices fp
-WHERE fp.period = '2025-01'
-  AND fp.price_source ILIKE '%металл%'
-  AND fp.item_name_normalized ILIKE '%медь%'
+        "sql": """SELECT fp.value
+FROM mart.price_facts fp
+WHERE fp.sheet_period = '2025-01'
+  AND fp.supplier ILIKE '%металл%'
+  AND fp.item_name ILIKE '%медь%'
 LIMIT 1""",
     },
     {
@@ -99,56 +100,40 @@ FROM sheets""",
     },
 ]
 
-CODEGEN_SYSTEM_PROMPT = """Ты — генератор SQL-запросов для базы данных с ценами на металлы.
+CODEGEN_SYSTEM_PROMPT = """Ты — генератор SQL-запросов для нормализованной факт-таблицы цен на металлы.
 
-Схема базы данных (основная — нормализованная):
+Схема базы данных (единственная таблица для вопросов о ценах):
 
-Таблица fact_prices (НОРМАЛИЗОВАННАЯ ФАКТ-ТАБЛИЦА):
+Таблица mart.price_facts (НОРМАЛИЗОВАННАЯ LONG-ФАКТ-ТАБЛИЦА):
 - id: INTEGER PRIMARY KEY
-- sheet_id: INTEGER — ID листа (FK → sheets.id)
-- item_id: INTEGER — ID сущности (FK → entity_dictionary.id)
-- period: TEXT — период (например, '2025-01', '2025-12')
-- item_name_raw: TEXT — оригинальное название лома
-- item_name_normalized: TEXT — нормализованное название (для ILIKE-поиска)
-- price_source: TEXT — источник цены:
+- file_id: INTEGER — ID файла
+- sheet_id: INTEGER — ID листа (необязательно)
+- source_row_ref: TEXT — ссылка на исходную строку raw-таблицы
+- sheet_period: TEXT — период (например, '2025-01', '2025-12')
+- item_name: TEXT — нормализованное название лома (для ILIKE-поиска)
+- supplier: TEXT — название поставщика (или NULL)
+- price_type: TEXT — тип цены:
     * 'среднерыночная' — среднерыночная цена
     * 'аукцион_старт' — стартовая цена аукциона
     * 'аукцион_победитель' — цена победителя аукциона
-    * Другие значения — названия поставщиков (например, 'ООО Металл', 'ИП Иванов')
-- price_value: DOUBLE PRECISION — значение цены в руб/тн
-- row_num: INTEGER — номер строки в исходном листе
-
-Таблица entity_dictionary (СПРАВОЧНИК СУЩНОСТЕЙ):
-- id: INTEGER PRIMARY KEY
-- canonical_name: TEXT — каноническое название (уникальное)
-- aliases: JSONB — список алиасов (синонимов)
-- category: TEXT — категория (например, 'цветной_лом', 'черный_лом')
-
-Таблица sheets:
-- id: INTEGER PRIMARY KEY
-- normalized_name: TEXT — нормализованное название листа
-- period: TEXT — период листа
-- description: TEXT — описание
-
-Таблица excel_comments:
-- id: INTEGER PRIMARY KEY
-- sheet_id: INTEGER — ID листа
-- cell_ref: TEXT — ссылка на ячейку (например, 'B12')
-- author: TEXT — автор комментария
-- text: TEXT — текст комментария
+    * 'поставщик' — цена от конкретного поставщика (см. колонку supplier)
+- value: DOUBLE PRECISION — значение цены в руб/тн
+- currency: TEXT — валюта (обычно 'RUB')
+- unit: TEXT — единица измерения (обычно 'тн')
 
 ПРАВИЛА:
 1. Только SELECT запросы (read-only)
-2. Для вопросов о ценах используй fact_prices — она содержит все цены в плоском формате
-3. Для вопросов о количестве листов/месяцев используй sheets
-4. Для фильтрации по названию лома используй ILIKE с item_name_normalized
-5. Для фильтрации по периоду используй period (формат: 'YYYY-MM')
-6. Для фильтрации по источнику цены используй price_source
+2. Для вопросов о ценах используй mart.price_facts — единственная таблица
+3. Для фильтрации по названию лома используй ILIKE с item_name
+4. Для фильтрации по периоду используй sheet_period (формат: 'YYYY-MM')
+5. Для фильтрации по типу цены используй price_type
+6. Для фильтрации по поставщику используй supplier ILIKE '%текст%'
 7. Если нужна агрегация (AVG, SUM, MIN, MAX) — используй GROUP BY
-8. Если нужно сравнение между периодами — используй подзапросы или JOIN fact_prices
-9. Для поиска по названию поставщика используй price_source ILIKE '%текст%'
+8. Если нужно сравнение между периодами — используй подзапросы или JOIN mart.price_facts
+9. Не выдумывай значения item_name/supplier — используй сущности-кандидаты из вопроса
 10. Не используй SELECT *
 11. Используй понятные алиасы для колонок
+12. Схема всегда квалифицируется как mart.price_facts
 
 ПРИМЕРЫ ЗАПРОСОВ (few-shot):
 {few_shot_examples}
@@ -195,7 +180,7 @@ async def codegen_node(
     query_type = state.get("query_type")
     entities = state.get("entities", [])
     plan = state.get("plan", "")
-    rag_context = state.get("rag_context", "")
+    entity_candidates = state.get("entity_candidates", [])
     schema = state.get("schema", [])
     retry_count = state.get("retry_count", 0)
     retry_reason = state.get("retry_reason", "")
@@ -210,9 +195,10 @@ async def codegen_node(
     )
 
     schema_json = json.dumps(schema, ensure_ascii=False, indent=2)
-    rag_section = (
-        f"\nRAG-контекст (релевантные данные):\n{rag_context[:20000]}"
-        if rag_context
+    candidates_text = json.dumps(entity_candidates[:15], ensure_ascii=False, indent=2)
+    candidates_section = (
+        f"\nСущности-кандидаты (item_name/supplier/sheet_period):\n{candidates_text}"
+        if entity_candidates
         else ""
     )
 
@@ -238,7 +224,7 @@ async def codegen_node(
 - Если причина 'wrong_table' — используй правильную таблицу
 """
 
-    user_message = f"""Вопрос пользователя: {question}{rag_section}{retry_section}
+    user_message = f"""Вопрос пользователя: {question}{candidates_section}{retry_section}
 
 Тип запроса: {query_type.value if query_type else 'unknown'}
 Сущности: {', '.join(entities) if entities else 'не определены'}
@@ -246,31 +232,26 @@ async def codegen_node(
 План действий:
 {plan}
 
-Схема релевантных листов:
+Схема mart.price_facts:
 {schema_json}
 
 Сгенерируй SQL-запрос для получения ответа на вопрос.
 
-ВАЖНО: Выбери правильную таблицу в зависимости от вопроса:
-- Для вопросов о ценах, поставщиках, аукционах → используй fact_prices
-- Для вопросов о количестве листов/месяцев/периодов → используй sheets (SELECT COUNT(*) FROM sheets)
-- Для вопросов о сущностях/справочниках → используй entity_dictionary
+ВАЖНО: Для всех вопросов о ценах используй mart.price_facts — это единственная
+нормализованная факт-таблица. Не используй fact_prices, entity_dictionary или cells.
 
-Для поиска по названию лома используй ILIKE с item_name_normalized.
-
-ВАЖНО: В схеме релевантных листов есть поле "fact_prices_samples" — это реальные данные из fact_prices для этих листов. Используй их чтобы:
-1. Убедиться, что данные существуют (если fact_prices_samples пуст — данных нет)
-2. Посмотреть точный формат item_name_normalized для правильного ILIKE-поиска
-3. Посмотреть точный формат period для правильной фильтрации
-4. Посмотреть какие price_source доступны
+Для поиска по названию лома используй ILIKE с item_name.
+Для поиска по поставщику используй supplier ILIKE (если price_type = 'поставщик').
 
 КРИТИЧЕСКОЕ ПРАВИЛО ДЛЯ ILIKE:
-- Используй ТОЛЬКО те значения item_name_normalized, которые реально перечислены в fact_prices_samples
-- НЕ выдумывай свои ILIKE-маски — если в fact_prices_samples нет названия, не включай его в поиск
-- Если в fact_prices_samples есть "лом алюминия стружка", используй ILIKE '%лом алюминия стружка%' или ILIKE '%стружка%', но НЕ '%алюминия стружка%' если такого нет в samples
-- Для поиска по поставщику используй ILIKE с частью названия из price_source в fact_prices_samples
+- Используй ТОЛЬКО те значения item_name/supplier, которые реально перечислены
+  в сущностях-кандидатах (entity_candidates) в начале вопроса.
+- НЕ выдумывай свои ILIKE-маски — если в кандидатах нет названия, не включай его.
+- Если в кандидатах есть "лом алюминия стружка", используй ILIKE '%стружка%'
+  или '%лом алюминия%', но не выдумывай лишние фрагменты.
 
-Пример: если fact_prices_samples содержит item_name_normalized = "лом меди стружка", то ILIKE '%медь%' или ILIKE '%стружка%' сработает."""
+Пример: если entity_candidates содержит item_name = "лом меди стружка", то
+ILIKE '%медь%' или ILIKE '%стружка%' сработает."""
 
     messages = [
         {"role": "system", "content": CODEGEN_SYSTEM_PROMPT.format(
@@ -280,9 +261,11 @@ async def codegen_node(
     ]
 
     try:
+        # CodeGen — самый дорогой по цене ошибки узел для финансовых данных,
+        # поэтому всегда используем основную (primary) модель, без cheap-fallback.
         raw_sql = await llm.chat(
             messages=messages,
-            model=None,
+            model=settings.LLM_MODEL_PRIMARY,
             temperature=0.1,
             max_tokens=2048,
         )

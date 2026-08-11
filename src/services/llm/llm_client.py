@@ -118,6 +118,18 @@ class LLMClient:
             ),
             **kwargs,
         )
+        # Prometheus-метрики: token usage / стоимость LLM-вызовов.
+        try:
+            usage = getattr(response, "usage", None)
+            if usage is not None:
+                from src.core.metrics import observe_llm_tokens
+                node = kwargs.pop("_metric_node", "llm")
+                if getattr(usage, "prompt_tokens", None):
+                    observe_llm_tokens(node, "prompt", usage.prompt_tokens)
+                if getattr(usage, "completion_tokens", None):
+                    observe_llm_tokens(node, "completion", usage.completion_tokens)
+        except Exception:
+            pass
         return response.choices[0].message.content or ""
 
     @staticmethod

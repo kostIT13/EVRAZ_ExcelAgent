@@ -1,44 +1,19 @@
 from __future__ import annotations
 
-from typing import List
-
-from fastapi import APIRouter
-from src.api.schemas import AskRequest, AskResponse, SourceInfo
+from fastapi import APIRouter, Depends, Request
+from src.api.schemas import AskRequest, AskResponse
+from src.api.security import verify_api_key
 from src.core.logging_settings import logger
-from src.services.generation.pipeline import pipeline, GenerationResult
+from src.core.ratelimit import get_limiter, ask_limit
+from src.services.generation.pipeline import pipeline
 from src.services.agent.graph import AgentResult
-from src.services.rag.hybrid import HybridSearchResult
 
-
-router = APIRouter(prefix="/ask", tags=["rag"])
+router = APIRouter(prefix="/ask", tags=["agent"])
+_limiter = get_limiter()
 
 
 def _history_to_dicts(history):
     return [{"role": t.role, "content": t.content} for t in history]
-
-
-def _sources_from_chunks(chunks: List[HybridSearchResult]) -> List[SourceInfo]:
-    return [
-        SourceInfo(
-            chunk=s.chunk[:200],
-            score=s.score,
-            source_type=s.source_type,
-            source_id=s.source_id,
-            rank=s.rank,
-        )
-        for s in chunks
-    ]
-
-
-def _build_rag_response(result: GenerationResult, mode_used: str) -> AskResponse:
-    return AskResponse(
-        answer=result.answer,
-        confidence=result.verification.confidence,
-        sources=_sources_from_chunks(result.retrieved_chunks),
-        request_id=result.request_id,
-        latency_ms=result.latency_ms,
-        mode_used=mode_used,
-    )
 
 
 def _build_agent_response(result: AgentResult) -> AskResponse:
@@ -59,42 +34,52 @@ def _build_agent_response(result: AgentResult) -> AskResponse:
 
 
 @router.post("", response_model=AskResponse)
-async def ask_question(request: AskRequest) -> AskResponse:
-    history_dicts = _history_to_dicts(request.conversation_history)
+@_limiter.limit(ask_limit)
+async def ask_question(
+    request: Request,
+    body: AskRequest,
+    _key: str = Depends(verify_api_key),
+) -> AskResponse:
+    history_dicts = _history_to_dicts(body.conversation_history)
     is_retry = len(history_dicts) > 0
 
     logger.info(
         "Ask request: question='{}', top_k={}, mode={}, retry={}",
-        request.question[:100],
-        request.top_k,
-        request.mode,
+        body.question[:100],
+        body.top_k,
+        body.mode,
         is_retry,
     )
 
-    if request.mode == "rag":
-        result = await pipeline.run(
-            question=request.question,
-            top_k=request.top_k,
+    # RAG-only режим (mode=rag) и fallback пересобраны на entity-resolution:
+    # вместо chunk-retrieval через Qdrant агент проходит тот же граф
+    # (Classifier → Planner → CodeGen → Executor), который получает сущности из
+    # mart.price_facts + pg_trgm. Это fallback на случай, если полный agent
+    # по какой-то причине не отработал.
+    if body.mode == "rag":
+        rag_result = await pipeline.run_agent(
+            question=body.question,
+            top_k=body.top_k,
             conversation_history=history_dicts,
         )
-        return _build_rag_response(result, mode_used="rag")
+        return _build_agent_response(rag_result)
 
     agent_result = await pipeline.run_agent(
-        question=request.question,
-        top_k=request.top_k,
+        question=body.question,
+        top_k=body.top_k,
         conversation_history=history_dicts,
     )
 
-    if request.mode == "auto" and agent_result.status == "failed":
+    if body.mode == "auto" and agent_result.status == "failed":
         logger.info(
-            "Auto mode: agent failed, falling back to RAG for '{}'",
-            request.question[:80],
+            "Auto mode: agent failed, falling back to entity-resolution agent for '{}'",
+            body.question[:80],
         )
-        rag_result = await pipeline.run(
-            question=request.question,
-            top_k=request.top_k,
+        fallback_result = await pipeline.run_agent(
+            question=body.question,
+            top_k=body.top_k,
             conversation_history=history_dicts,
         )
-        return _build_rag_response(rag_result, mode_used="rag_fallback")
+        return _build_agent_response(fallback_result)
 
     return _build_agent_response(agent_result)

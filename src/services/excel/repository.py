@@ -8,7 +8,7 @@ from src.core.db.models import File, Sheet, ColumnMetadata, Cell, FactPrice, Ent
 from src.core.excel.schemas import ParsedFile
 from src.core.excel.table_structurer import FactPriceRow, TableStructurer
 from src.core.excel.comment_extractor import ParsedComment
-from src.services.rag.entity_resolver import EntityResolver, normalize_name
+from src.services.entity_resolution.entity_resolver import EntityResolver, entity_resolver
 from src.services.excel.base import ExcelRepository
 
 
@@ -18,11 +18,16 @@ class SQLAlchemyExcelRepository(ExcelRepository):
         self._entity_resolver = EntityResolver()
 
     async def process_file(self, file_path: Path) -> File:
-        """Полный цикл обработки Excel-файла: парсинг, нормализация, сохранение."""
+        """Полный цикл обработки Excel-файла: парсинг raw, нормализация в mart.
+
+        Тяжёлый RAG-over-cells (chunk/sheet/column эмбеддинги) НЕ строится.
+        Вместо него на этапе ingestion заполняется mart.price_facts и собираются
+        уникальные сущности (item/supplier/period) для pg_trgm-сопоставления.
+        Это делает индексацию секундами вместо минут.
+        """
         from src.core.excel.parser import ExcelParser
         from src.core.excel.normalize import ExcelNormalizer
         from src.core.excel.comment_extractor import extract_comments
-        from src.services.rag.rag_service import rag_service
 
         if not file_path.exists():
             raise FileNotFoundError(f"File not found: {file_path}")
@@ -44,7 +49,7 @@ class SQLAlchemyExcelRepository(ExcelRepository):
                 col_type = ExcelNormalizer.infer_column_type(header, sample_values)
                 logger.debug("Column '{}' → type={}, samples={}", header.col_name, col_type, sample_values[:3])
 
-        # 3. Сохраняем в БД
+        # 3. Сохраняем в БД (raw + fact_prices)
         file_record = await self.save_parsed_file(parsed)
 
         # 4. Извлекаем и сохраняем Excel-комментарии
@@ -63,9 +68,9 @@ class SQLAlchemyExcelRepository(ExcelRepository):
         except Exception as exc:
             logger.warning("Comment extraction failed (non-fatal): {}", exc)
 
-        # 5. Индексация в векторной БД
-        logger.info("Indexing file {} in vector database...", file_record.id)
-        await rag_service.build_index_for_file(file_record.id, session=self.session)
+        # 5. Нормализация в mart.price_facts и entity-resolution выполняются в
+        #    ingestion_service.process_file (после возврата file_record), чтобы
+        #    держать raw-парсинг и mart-нормализацию как отдельные идемпотентные шаги.
 
         logger.info("Ingestion complete: file_id={}, filename={}", file_record.id, file_record.filename)
         return file_record
@@ -94,14 +99,59 @@ class SQLAlchemyExcelRepository(ExcelRepository):
         logger.info("Deleted file id={}", file_id)
         return True
 
-    async def save_parsed_file(self, parsed: ParsedFile) -> File:
+    async def save_pending_file(self, parsed: ParsedFile) -> File:
+        """Создаёт запись File со статусом 'uploaded' до фоновой обработки.
+
+        Если файл с таким file_hash уже существует (например, повторная загрузка
+        одного и того же файла), не пытаемся вставить дубликат — возвращаем уже
+        существующую запись. Иначе повторная загрузка упадёт с unique constraint
+        ix_files_file_hash.
+        """
+        result = await self.session.execute(
+            select(File).where(File.file_hash == parsed.file_hash)
+        )
+        file_record = result.scalar_one_or_none()
+        if file_record is not None:
+            file_record.filename = parsed.filename
+            file_record.total_sheets = len(parsed.sheets)
+            file_record.status = "uploaded"
+            file_record.error_message = None
+            await self.session.commit()
+            return file_record
+
         file_record = File(
             filename=parsed.filename,
             file_hash=parsed.file_hash,
             total_sheets=len(parsed.sheets),
-            status="processed",
+            status="uploaded",
         )
         self.session.add(file_record)
+        await self.session.commit()
+        await self.session.refresh(file_record)
+        return file_record
+
+    async def save_parsed_file(self, parsed: ParsedFile) -> File:
+        # В асинхронном пайплайне запись File уже создана на этапе create_pending_file()
+        # (статус "uploaded"), и повторная вставка по тому же file_hash упрётся в
+        # unique constraint ix_files_file_hash. Поэтому переиспользуем существующую
+        # запись, обновляя её поля, либо создаём новую, если её ещё нет.
+        result = await self.session.execute(
+            select(File).where(File.file_hash == parsed.file_hash)
+        )
+        file_record = result.scalar_one_or_none()
+        if file_record is None:
+            file_record = File(
+                filename=parsed.filename,
+                file_hash=parsed.file_hash,
+                total_sheets=len(parsed.sheets),
+                status="processed",
+            )
+            self.session.add(file_record)
+        else:
+            file_record.filename = parsed.filename
+            file_record.total_sheets = len(parsed.sheets)
+            file_record.status = "processed"
+            file_record.error_message = None
         await self.session.flush()
 
         for sheet in parsed.sheets:
@@ -199,21 +249,18 @@ class SQLAlchemyExcelRepository(ExcelRepository):
             logger.debug("No fact rows for sheet '{}'", parsed_sheet.sheet_name)
             return
         
-        unique_names = list(set(r.item_name_raw for r in fact_rows))
-        resolved = await self._entity_resolver.resolve_batch(unique_names, session=self.session)
-
         for fact_row in fact_rows:
-            entity_id, canonical_name = resolved.get(
-                fact_row.item_name_raw,
-                (None, fact_row.item_name_normalized),
-            )
-
+            # Entity-resolution (item_id в entity_dictionary) выполняется отдельно
+            # на этапе index_entities() после сохранения mart.price_facts, а поиск
+            # сущностей в рантайме — через pg_trgm (resolve_candidates). Поэтому
+            # здесь item_id не проставляем (None), а item_name_normalized используем
+            # как каноническое имя для pg_trgm-сопоставления.
             record = FactPrice(
                 sheet_id=sheet_record.id,
-                item_id=entity_id,
+                item_id=None,
                 period=fact_row.period,
                 item_name_raw=fact_row.item_name_raw,
-                item_name_normalized=canonical_name,
+                item_name_normalized=fact_row.item_name_normalized,
                 price_source=fact_row.price_source,
                 price_value=fact_row.price_value,
                 row_num=fact_row.row_num,
@@ -225,6 +272,60 @@ class SQLAlchemyExcelRepository(ExcelRepository):
             len(fact_rows),
             parsed_sheet.sheet_name,
             structurer.period,
+        )
+
+    async def index_entities(self, file_id: int) -> Dict[str, int]:
+        """Собирает уникальные значения сущностей (item/supplier/period) из mart.price_facts.
+
+        Без эмбеддингов: уникальные значения трёх справочников (десятки–сотни
+        записей) кэшируются в памяти для pg_trgm-резолюции и передачи в промпт.
+        """
+        items: List[str] = []
+        suppliers: List[str] = []
+        periods: List[str] = []
+
+        sheets_result = await self.session.execute(
+            select(Sheet).where(Sheet.file_id == file_id)
+        )
+        sheets = list(sheets_result.scalars().all())
+
+        for sheet in sheets:
+            if sheet.period:
+                periods.append(sheet.period)
+
+            facts_result = await self.session.execute(
+                select(FactPrice).where(FactPrice.sheet_id == sheet.id)
+            )
+            for fp in facts_result.scalars().all():
+                if fp.item_name_normalized:
+                    items.append(fp.item_name_normalized)
+                if fp.price_source:
+                    suppliers.append(fp.price_source)
+
+        # Fallback: если fact_prices пусты, берём item-колонку из cells.
+        if not items:
+            for sheet in sheets:
+                cols_result = await self.session.execute(
+                    select(ColumnMetadata)
+                    .where(ColumnMetadata.sheet_id == sheet.id)
+                    .order_by(ColumnMetadata.col_index)
+                )
+                item_col = next((c for c in cols_result.scalars().all() if c.col_index == 2), None)
+                if item_col:
+                    cells_result = await self.session.execute(
+                        select(Cell)
+                        .where(Cell.sheet_id == sheet.id, Cell.col_index == item_col.col_index)
+                    )
+                    for cell in cells_result.scalars().all():
+                        val = cell.value_text or str(cell.value_number or "")
+                        if val.strip():
+                            items.append(val.strip())
+
+        return await entity_resolver.index_entities(
+            items=items,
+            suppliers=suppliers,
+            periods=periods,
+            session=self.session,
         )
 
     async def _get_column_by_name(self, sheet_id: int, col_name: str) -> Optional[ColumnMetadata]:
