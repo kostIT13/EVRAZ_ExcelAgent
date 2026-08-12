@@ -8,7 +8,6 @@ Create Date: 2026-08-11 07:25:00.000000
 - schema ``mart`` и таблицу ``mart.price_facts`` (нормализованная long-таблица).
 - таблицу ``mart.sheet_templates`` (кэш подтверждённых LLM-схем листов).
 - расширение ``pg_trgm`` и GIN-индексы для fuzzy-поиска по item_name/supplier.
-- read-only роль ``app_readonly`` с GRANT SELECT на mart.*.
 """
 from typing import Sequence, Union
 
@@ -87,18 +86,6 @@ def upgrade() -> None:
     op.create_index('ix_mart_sheet_templates_fingerprint', 'sheet_templates', ['fingerprint'], schema='mart')
     op.create_index(op.f('ix_mart_sheet_templates_id'), 'sheet_templates', ['id'], unique=False, schema='mart')
 
-    # Read-only роль для Executor-узла: доступ только на чтение mart.*.
-    bind.execute(sa.text(
-        "DO $$ BEGIN "
-        " IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_readonly') THEN "
-        "   CREATE ROLE app_readonly NOLOGIN; "
-        " END IF; "
-        "END $$;"
-    ))
-    bind.execute(sa.text("GRANT USAGE ON SCHEMA mart TO app_readonly"))
-    bind.execute(sa.text("GRANT SELECT ON ALL TABLES IN SCHEMA mart TO app_readonly"))
-    bind.execute(sa.text("ALTER DEFAULT PRIVILEGES IN SCHEMA mart GRANT SELECT ON TABLES TO app_readonly"))
-
 
 def downgrade() -> None:
     bind = op.get_bind()
@@ -107,4 +94,3 @@ def downgrade() -> None:
     op.drop_table('sheet_templates', schema='mart')
     op.drop_table('price_facts', schema='mart')
     op.execute(sa.text("DROP SCHEMA IF EXISTS mart"))
-    bind.execute(sa.text("DROP ROLE IF EXISTS app_readonly"))

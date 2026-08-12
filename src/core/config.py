@@ -63,10 +63,7 @@ class Settings(BaseSettings):
     POSTGRES_USER: str
     POSTGRES_PORT: int = 5432
 
-    # Read-only роль для Executor-узла (GRANT SELECT только на mart.*).
-    # Безопасность на уровне БД в дополнение к keyword-blacklist валидации SQL.
-    READONLY_DB_USER: str = "app_readonly"
-    READONLY_DB_PASSWORD: str = ""
+    # statement_timeout для SQL, выполняемого Executor-узлом.
     DB_STATEMENT_TIMEOUT_MS: int = 30000
 
     # Порог pg_trgm similarity для fuzzy-сопоставления сущностей (0..1).

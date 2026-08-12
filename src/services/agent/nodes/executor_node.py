@@ -243,19 +243,18 @@ async def _execute_sql(
     session: Optional[AsyncSession],
     request_id: str,
 ) -> tuple[List[Dict[str, Any]], Optional[str]]:
-    """Выполняет SQL через read-only роль app_readonly (защита на уровне БД).
+    """Выполняет SQL под основной ролью БД.
 
-    Помимо keyword-blacklist валидации в codegen, Executor подключается к БД
-    через отдельную роль с GRANT SELECT только на mart.*, поэтому любые попытки
-    INSERT/UPDATE/DELETE/DROP и доступ к не-mart таблицам блокируются сервером.
+    Executor использует основной async_session_maker (роль user). Безопасность
+    SQL обеспечивается keyword-blacklist валидацией в codegen_node.
     statement_timeout задаётся на уровне сессии в дополнение к REQUEST_TIMEOUT_S
     для LLM.
     """
-    from src.core.db.database import readonly_session_maker
+    from src.core.db.database import async_session_maker
     from src.core.config import settings
 
     try:
-        async with (session or readonly_session_maker()) as s:
+        async with (session or async_session_maker()) as s:
             async with s.begin():
                 await s.execute(
                     text(f"SET LOCAL statement_timeout = '{settings.DB_STATEMENT_TIMEOUT_MS}'")

@@ -51,7 +51,7 @@ Entity Resolution (item_name/supplier/sheet_period из mart.price_facts)
 LangGraph агент: Classifier → Planner → CodeGen → Executor → Verifier → Answer
     │  (без RAG-узла, без Qdrant, без pgvector — сущности передаются в промпт)
     ▼
-PostgreSQL (read-only роль app_readonly: GRANT SELECT на mart.*)
+PostgreSQL (mart.* — SQL выполняет Executor-узел)
 ```
 
 Ключевые изменения по сравнению с прежней (RAG-over-cells) архитектурой:
@@ -72,7 +72,7 @@ PostgreSQL (read-only роль app_readonly: GRANT SELECT на mart.*)
 - Загрузка Excel-файлов (`.xlsx`/`.xls`) с асинхронной фоновой обработкой и опросом статуса.
 - Нормализация в `mart.price_facts` (идемпотентная, перезалив файла не дублирует факты).
 - LangGraph-агент: Classifier → Planner → CodeGen → Executor → Verifier → Answer.
-- Генерация безопасного SQL с read-only ролью `app_readonly` (защита на уровне БД).
+- Генерация безопасного SQL с keyword-blacklist валидацией в `codegen_node`.
 - Entity-resolution по справочникам + pg_trgm fuzzy-поиск.
 - Schema Inference (LLM) + Template Fingerprint для разнородных форматов таблиц.
 - API-key auth + rate limiting (slowapi).
@@ -118,7 +118,6 @@ docker compose exec service alembic upgrade head
 |---|---|
 | `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL_PRIMARY`, `LLM_MODEL_CHEAP` | LLM-клиент |
 | `EMBED_PREFIX_MODE` | `e5` / `nomic` / `none` — префиксы эмбеддинга (для nomic — `search_query:`/`search_document:`) |
-| `READONLY_DB_USER`, `READONLY_DB_PASSWORD` | read-only роль Executor-узла |
 | `DB_STATEMENT_TIMEOUT_MS` | statement_timeout для БД (отдельно от `REQUEST_TIMEOUT_S`) |
 | `API_KEY` | API-ключ для `/files/*` и `/ask/*` (пусто = dev) |
 | `RATE_LIMIT_ASK`, `RATE_LIMIT_UPLOAD` | rate limiting (slowapi) |
@@ -180,11 +179,12 @@ docker compose exec service alembic upgrade head
 
 ---
 
-## Безопасность БД (read-only роль)
+## Безопасность SQL
 
-Executor-узел подключается к PostgreSQL через роль `app_readonly` с `GRANT SELECT` только на
-`mart.*`. Это защита на уровне БД в дополнение к keyword-blacklist валидации SQL в `codegen_node`.
-`statement_timeout` задаётся на уровне сессии (`DB_STATEMENT_TIMEOUT_MS`).
+Executor-узел выполняет сгенерированный SQL под основной ролью БД. Защита от опасных
+запросов обеспечивается keyword-blacklist валидацией SQL в `codegen_node` (блокировка
+INSERT/UPDATE/DELETE/DROP и не-mart сущностей). `statement_timeout` задаётся на уровне
+сессии (`DB_STATEMENT_TIMEOUT_MS`).
 
 ---
 
@@ -217,11 +217,10 @@ pytest --golden tests/   # интеграционные golden-тесты (тр�
 
 ## Секреты
 
-Прод-секреты (LLM API-ключ, пароли БД, `READONLY_DB_PASSWORD`, `API_KEY`) не должны лежать в
-`.env` в пайплайне деплоя. Интеграция с secrets-менеджером (Hashicorp Vault / облачный аналог):
+Прод-секреты (LLM API-ключ, пароли БД, `API_KEY`) не должны лежать в `.env` в пайплайне
+деплоя. Интеграция с secrets-менеджером (Hashicorp Vault / облачный аналог):
 
 - Секреты загружаются в рантайм из Vault (или env-injection в CI/CD).
-- `READONLY_DB_PASSWORD` создаётся в БД отдельной операцией и не коммитится.
 - Пример (Vault): приложение читает секреты по пути
   `secret/evraz/prod` и передаёт их в `Settings` до создания движков БД.
 

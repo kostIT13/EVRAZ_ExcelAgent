@@ -6,7 +6,7 @@
 > **Обновление (рефакторинг):** целевая архитектура больше не использует тяжёлый
 > RAG-over-cells (chunk-эмбеддинги, BM25, Qdrant, pgvector как обязательные). Вместо этого —
 > лёгкое entity-resolution по справочникам, нормализованная факт-таблица `mart.price_facts`
-> и read-only доступ к БД для генерации SQL.
+> и генерация SQL с keyword-blacklist валидацией.
 
 ---
 
@@ -37,8 +37,8 @@
 3. **Agent Orchestrator** — LangGraph StateGraph:
    `Classifier → Planner → CodeGen → Executor → Verifier → Answer`
    (без RAG-узла; без LangChain-обёртки).
-4. **Sandbox/Read-only** — SQL-исполнение через read-only роль `app_readonly`
-   (GRANT SELECT на `mart.*`) + statement_timeout.
+4. **SQL-исполнение** — Executor-узел выполняет SQL под основной ролью БД
+   с keyword-blacklist валидацией + statement_timeout.
 5. **Traceability** — маппинг результата на конкретные ячейки, полный trace запроса.
 6. **API** — FastAPI, endpoints `upload` / `ask` / `trace/{request_id}`,
    auth (API-key) + rate limiting (slowapi), Prometheus `/metrics`.
@@ -51,7 +51,7 @@
 **Deliverables:**
 - Ingestion: парсинг → нормализация в `mart.price_facts`.
 - Entity-resolution по справочникам (без chunk-retrieval).
-- SQL-based code generation с read-only валидацией (app_readonly).
+- SQL-based code generation с keyword-blacklist валидацией.
 - FastAPI с endpoints `upload`/`ask`.
 - Бенчмарк на 30 кейсах (6 на каждый тип запроса).
 - Traceability: ответ + список использованных листов/ячеек.
@@ -92,7 +92,8 @@
 **Индексы:** pg_trgm GIN на `mart.price_facts.item_name`/`.supplier`, B-tree на
 `(sheet_period)`, `(file_id)`, `(price_type)`.
 
-**Роли:** `app_readonly` (GRANT SELECT на `mart.*`) для Executor-узла.
+**Безопасность SQL:** keyword-blacklist валидация в codegen_node; Executor
+подключается под основной ролью БД с `statement_timeout`.
 
 ---
 
