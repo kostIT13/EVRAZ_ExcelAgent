@@ -3,11 +3,6 @@
 Система, отвечающая на вопросы по Excel-файлам с полным объяснением источника ответа
 (traceability), без утечки коммерческой тайны (цены на металлы) наружу.
 
-> **Обновление (рефакторинг):** целевая архитектура больше не использует тяжёлый
-> RAG-over-cells (chunk-эмбеддинги, BM25, Qdrant, pgvector как обязательные). Вместо этого —
-> лёгкое entity-resolution по справочникам, нормализованная факт-таблица `mart.price_facts`
-> и генерация SQL с keyword-blacklist валидацией.
-
 ---
 
 ## 1. Цели и ограничения
@@ -33,10 +28,10 @@
    (кэш схем) → нормализация в `mart.price_facts` (идемпотентно). Фоновая очередь задач.
 2. **Entity Resolution** — уникальные значения справочников (`item_name`, `supplier`,
    `sheet_period`) собираются напрямую из `mart.price_facts` + pg_trgm fuzzy-поиск
-   (`similarity()`/`%`), без эмбеддингов, без Qdrant/BM25/vector.
+   (`similarity()`/`%`), без эмбеддингов.
 3. **Agent Orchestrator** — LangGraph StateGraph:
-   `Classifier → Planner → CodeGen → Executor → Verifier → Answer`
-   (без RAG-узла; без LangChain-обёртки).
+   `Classifier → Disambiguation → Planner → CodeGen → Executor → Verifier → Answer`
+   (entity-resolution выполняется внутри Classifier/Planner; без LangChain-обёртки).
 4. **SQL-исполнение** — Executor-узел выполняет SQL под основной ролью БД
    с keyword-blacklist валидацией + statement_timeout.
 5. **Traceability** — маппинг результата на конкретные ячейки, полный trace запроса.
@@ -86,8 +81,10 @@
 - `mart.sheet_templates` — кэш подтверждённых LLM-схем
   `(fingerprint, schema_json, status, confidence, confirmed_by, confirmed_at)`.
 
-**entity_embeddings** — компактный справочник эмбеддингов сущностей
-`(id, entity_type [item/supplier/period], entity_value, embedding, created_at)`.
+**entity_dictionary** — справочник канонических сущностей
+`(id, canonical_name, aliases, category, description, created_at, updated_at)`.
+
+**query_cache** — кэш «нормализованный вопрос → SQL → результат».
 
 **Индексы:** pg_trgm GIN на `mart.price_facts.item_name`/`.supplier`, B-tree на
 `(sheet_period)`, `(file_id)`, `(price_type)`.
@@ -100,10 +97,10 @@
 ## 5. Миграционный путь
 
 - `raw.*` сохраняется для аудита/переиндексации.
-- Старые embedding-таблицы (`chunk_embeddings`, `sheet_embeddings`, `col_emb`) оставлены как
-  deprecated на один релиз (миграция добавляет `mart.*`/`entity_embeddings`, не удаляет старые).
-- Qdrant/Ollama переведены в опциональный compose-профиль `legacy-vector`.
-- RAG-only режим (`mode=rag`) пересобран на entity-resolution (не chunk-retrieval).
+- Устаревшие embedding-таблицы удалены (миграция `remove_vector_tables`).
+- Векторные сервисы и таблицы (`chunk_embeddings`, `sheet_embeddings`, `col_emb`,
+  `entity_embeddings`) больше не используются и удалены из схемы.
+- Agent-режим пересобран на entity-resolution (без chunk-retrieval).
 
 ---
 
@@ -112,4 +109,4 @@
 - Accuracy golden-dataset (по SQL-сигнатуре и результату).
 - Доля `failed` / `low_confidence`.
 - Latency per-node и общий RPS.
-- Время индексации файла (до рефакторинга — минуты; после — секунды).
+- Время индексации файла (секунды).

@@ -6,8 +6,8 @@
 факт-таблицу (`mart.price_facts`) и отвечать на вопросы на естественном языке через
 LangGraph-агент с генерацией SQL.
 
-Архитектура ориентирована на prod-ready: без тяжёлого RAG-over-cells, с лёгким entity-resolution,
-read-only доступом к БД для генерации SQL, асинхронным ingestion, наблюдаемостью (Prometheus),
+Архитектура ориентирована на prod-ready: лёгкое entity-resolution по справочникам,
+read-only доступом к БД для генерации SQL, асинхронный ingestion, наблюдаемость (Prometheus),
 auth и rate limiting.
 
 ---
@@ -49,21 +49,21 @@ Entity Resolution (item_name/supplier/sheet_period из mart.price_facts)
     │  + pg_trgm fuzzy-поиск (similarity()/%) по item_name/supplier
     ▼
 LangGraph агент: Classifier → Planner → CodeGen → Executor → Verifier → Answer
-    │  (без RAG-узла, без Qdrant, без pgvector — сущности передаются в промпт)
+    │  (entity-resolution выполняется внутри Classifier/Planner)
     ▼
 PostgreSQL (mart.* — SQL выполняет Executor-узел)
 ```
 
-Ключевые изменения по сравнению с прежней (RAG-over-cells) архитектурой:
+Архитектура построена вокруг нормализованной факт-таблицы и генерации SQL без тяжёлых
+векторных поисков:
 
-- **Удалён RAG-узел** из начала графа. Теперь граф начинается с `Classifier`.
-- **Удалены Qdrant, Ollama, pgvector** полностью. Расширение `pg_trgm` включено в Postgres.
 - **Entity-resolution**: на ingestion собираются уникальные значения справочников
   (`item_name`, `supplier`, `sheet_period`) напрямую из `mart.price_facts` (десятки–сотни записей).
   В рантайме вопрос сопоставляется с кандидатами через pg_trgm `similarity()`/`%`
   (без эмбеддинг-модели, без BM25-индекса, без RU-лемматизации).
 - **Нормализованная схема**: `raw.*` (files/sheets/columns/cells — аудит) и `mart.price_facts`
   (long-таблица фактов), на которой агент генерирует SQL.
+- **Кэш ответов**: нормализованный вопрос → SQL → результат хранится в `query_cache`.
 
 ---
 
@@ -71,7 +71,7 @@ PostgreSQL (mart.* — SQL выполняет Executor-узел)
 
 - Загрузка Excel-файлов (`.xlsx`/`.xls`) с асинхронной фоновой обработкой и опросом статуса.
 - Нормализация в `mart.price_facts` (идемпотентная, перезалив файла не дублирует факты).
-- LangGraph-агент: Classifier → Planner → CodeGen → Executor → Verifier → Answer.
+- LangGraph-агент: Classifier → Disambiguation → Planner → CodeGen → Executor → Verifier → Answer.
 - Генерация безопасного SQL с keyword-blacklist валидацией в `codegen_node`.
 - Entity-resolution по справочникам + pg_trgm fuzzy-поиск.
 - Schema Inference (LLM) + Template Fingerprint для разнородных форматов таблиц.
@@ -85,9 +85,8 @@ PostgreSQL (mart.* — SQL выполняет Executor-узел)
 
 - **FastAPI** — веб-фреймворк.
 - **LangGraph** — явный StateGraph агента (без LangChain-обёртки).
-- **PostgreSQL** (pgvector image, но без обязательного vector-расширения) + `pg_trgm`.
+- **PostgreSQL** + `pg_trgm` (fuzzy-поиск для entity-resolution).
 - **SQLAlchemy 2.0** (async, asyncpg) + **Alembic**.
-- **fastembed** — локальные dense-эмбеддинги (модель через `FASTEMBED_MODEL`).
 - **prometheus-client**, **slowapi**, **pytest**.
 
 ---
@@ -105,9 +104,6 @@ docker compose exec service alembic upgrade head
 
 Сервис поднимется на `:8000`, фронтенд — на `:8080`.
 
-> Примечание: Qdrant и Ollama запускаются только с профилем `legacy-vector`:
-> `docker compose --profile legacy-vector up`. Для нового пайплайна они не нужны.
-
 ---
 
 ## Конфигурация
@@ -117,7 +113,7 @@ docker compose exec service alembic upgrade head
 | Переменная | Описание |
 |---|---|
 | `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL_PRIMARY`, `LLM_MODEL_CHEAP` | LLM-клиент |
-| `EMBED_PREFIX_MODE` | `e5` / `nomic` / `none` — префиксы эмбеддинга (для nomic — `search_query:`/`search_document:`) |
+| `TRIGRAM_THRESHOLD` | порог pg_trgm similarity для fuzzy-сопоставления сущностей |
 | `DB_STATEMENT_TIMEOUT_MS` | statement_timeout для БД (отдельно от `REQUEST_TIMEOUT_S`) |
 | `API_KEY` | API-ключ для `/files/*` и `/ask/*` (пусто = dev) |
 | `RATE_LIMIT_ASK`, `RATE_LIMIT_UPLOAD` | rate limiting (slowapi) |
@@ -134,13 +130,13 @@ docker compose exec service alembic upgrade head
 - `GET /files` — список.
 - `GET /files/{id}` — детали.
 - `GET /files/{id}/sheets`, `/columns`, `/cells` — просмотр raw-структуры.
-- `POST /files/{id}/reindex` — пересоздание сущностей.
+- `POST /files/{id}/reindex` — повторная нормализация raw.cells → mart.price_facts.
 - `POST /files/{id}/sheets/{sheet_id}/infer-schema` — Schema Inference (LLM).
 - `POST /files/{id}/sheets/{sheet_id}/confirm-schema` — подтверждение схемы.
 
 ### Agent (`/ask/*`)
 
-- `POST /ask` — вопрос к агенту (`mode`: `agent` | `rag` | `auto`).
+- `POST /ask` — вопрос к агенту (`mode`: `auto` | `agent`).
 
 ### Traceability
 
@@ -233,18 +229,18 @@ src/
   main.py                    # FastAPI app, lifespan, /metrics, /health
   api/                       # роутеры (files, agent, trace, schema, security, ratelimit)
   core/
-    config.py                # настройки (включая read-only роль, rate limits)
-    db/                      # engine, session, models (raw + mart + entity_embeddings)
+    config.py                # настройки (rate limits, timeout, trgm threshold)
+    db/                      # engine, session, models (raw + mart)
     excel/                   # parser, normalize, schema_inference, template_fingerprint
     metrics.py               # Prometheus-метрики
   services/
     agent/                   # LangGraph: graph.py, nodes (classifier/planner/codegen/executor/verifier)
     mart/                    # normalizer raw->mart
     excel/                   # ingestion_service, ingestion_queue, repository
-    rag/                     # entity_embeddings (лёгкий entity-resolution), embedder
+    entity_resolution/       # entity-resolver, query_cache (pg_trgm, без эмбеддингов)
 tests/                       # golden dataset + pytest
 alembic/                     # миграции
-scripts/init-db/             # расширения Postgres (pg_trgm, vector legacy)
+scripts/init-db/             # расширения Postgres (pg_trgm)
 ```
 
 ---
