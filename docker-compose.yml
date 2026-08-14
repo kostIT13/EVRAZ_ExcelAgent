@@ -34,9 +34,6 @@ services:
     volumes:
       - ./data:/app/data
       - ./src:/app/src
-    # Без --reload: WatchFiles (reload-воркер) потребляет много памяти в контейнере
-    # и падал с WatchfilesRustInternalError: Cannot allocate memory. Для прод —
-    # образ пересобирается, для dev — код монтируется, но без hot-reload.
     command: uvicorn src.main:app --host 0.0.0.0 --port 8000
     networks:
       - app_network

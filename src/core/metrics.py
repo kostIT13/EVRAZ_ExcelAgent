@@ -11,8 +11,6 @@ from prometheus_client import (
 )
 from fastapi import Response
 
-
-# RPS и статусы ответов агента.
 ASK_REQUESTS = Counter(
     "evraz_ask_requests_total",
     "Всего запросов /ask по статусу",
