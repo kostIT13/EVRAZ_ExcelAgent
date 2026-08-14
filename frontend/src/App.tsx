@@ -7,6 +7,7 @@ import ChatPage from '@/pages/ChatPage';
 import FilesPage from '@/pages/FilesPage';
 import TracePage from '@/pages/TracePage';
 import DashboardPage from '@/pages/DashboardPage';
+import MetricsPage from '@/pages/MetricsPage';
 
 export default function App() {
   const location = useLocation();
@@ -47,6 +48,14 @@ export default function App() {
               element={
                 <AnimatedPage>
                   <TracePage />
+                </AnimatedPage>
+              }
+            />
+            <Route
+              path="/metrics"
+              element={
+                <AnimatedPage>
+                  <MetricsPage />
                 </AnimatedPage>
               }
             />

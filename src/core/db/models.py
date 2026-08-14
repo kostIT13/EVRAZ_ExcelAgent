@@ -44,18 +44,22 @@ class Sheet(Base):
     row_count: Mapped[int] = mapped_column(Integer, default=0)
     col_count: Mapped[int] = mapped_column(Integer, default=0)
     period: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)
+    # Типизация листа: prices (цены лома) / matrix (план-факт-отклонение) / generic.
+    sheet_kind: Mapped[str] = mapped_column(String(30), nullable=False, default="generic", index=True)
+    # Признак, что тип определён автоматическим детектором (а не вручную).
+    sheet_kind_auto: Mapped[bool] = mapped_column(Integer, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     file: Mapped["File"] = relationship("File", back_populates="sheets")
     columns: Mapped[List["ColumnMetadata"]] = relationship("ColumnMetadata", back_populates="sheet", cascade="all, delete-orphan")
     cells: Mapped[List["Cell"]] = relationship("Cell", back_populates="sheet", cascade="all, delete-orphan")
-    fact_prices: Mapped[List["FactPrice"]] = relationship("FactPrice", back_populates="sheet", cascade="all, delete-orphan")
 
     __table_args__ = (
         Index("ix_sheets_file_id", "file_id"),
         Index("ix_sheets_normalized_name", "normalized_name"),
         Index("ix_sheets_original_name", "original_name"),
         Index("ix_sheets_period", "period"),
+        Index("ix_sheets_sheet_kind", "sheet_kind"),
     )
 
 
@@ -70,6 +74,8 @@ class ColumnMetadata(Base):
     data_type: Mapped[str] = mapped_column(String(50), nullable=False, default="text")
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     sample_values: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    # Семантическая роль колонки: item / price / supplier / percent / metric_type / other.
+    role: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)
 
     sheet: Mapped["Sheet"] = relationship("Sheet", back_populates="columns")
 
@@ -103,32 +109,6 @@ class Cell(Base):
     )
 
 
-class FactPrice(Base):
-    __tablename__ = "fact_prices"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    sheet_id: Mapped[int] = mapped_column(Integer, ForeignKey("sheets.id", ondelete="CASCADE"), nullable=False, index=True)
-    item_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("entity_dictionary.id", ondelete="SET NULL"), nullable=True, index=True)
-    period: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
-    item_name_raw: Mapped[str] = mapped_column(Text, nullable=False)
-    item_name_normalized: Mapped[str] = mapped_column(Text, nullable=False, index=True)
-    price_source: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
-    price_value: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    row_num: Mapped[int] = mapped_column(Integer, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-
-    sheet: Mapped["Sheet"] = relationship("Sheet", back_populates="fact_prices")
-    entity: Mapped[Optional["EntityDictionary"]] = relationship("EntityDictionary", back_populates="fact_prices")
-
-    __table_args__ = (
-        Index("ix_fact_prices_period", "period"),
-        Index("ix_fact_prices_item_name", "item_name_normalized"),
-        Index("ix_fact_prices_price_source", "price_source"),
-        Index("ix_fact_prices_sheet_item", "sheet_id", "item_name_normalized"),
-        Index("ix_fact_prices_period_source", "period", "price_source"),
-    )
-
-
 class EntityDictionary(Base):
     __tablename__ = "entity_dictionary"
 
@@ -140,8 +120,6 @@ class EntityDictionary(Base):
     embedding: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, onupdate=func.now())
-
-    fact_prices: Mapped[List["FactPrice"]] = relationship("FactPrice", back_populates="entity")
 
     __table_args__ = (
         Index("ix_entity_dictionary_canonical_name", "canonical_name"),
@@ -256,6 +234,9 @@ class PriceFact(Base):
     value: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     currency: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, default="RUB")
     unit: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    # Признак, что в исходной ячейке не было значения (пусто). Позволяет SQL-агенту
+    # корректно считать средние — делить на заполненные, а не на все.
+    is_blank: Mapped[bool] = mapped_column(Integer, default=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (
@@ -264,6 +245,7 @@ class PriceFact(Base):
         Index("ix_mart_price_facts_sheet_period", "sheet_period"),
         Index("ix_mart_price_facts_file_id", "file_id"),
         Index("ix_mart_price_facts_sheet_id", "sheet_id"),
+        Index("ix_mart_price_facts_is_blank", "is_blank"),
         {"schema": "mart"},
     )
 
@@ -292,4 +274,68 @@ class SheetTemplate(Base):
     __table_args__ = (
         Index("ix_mart_sheet_templates_status", "status"),
         Index("ix_mart_sheet_templates_fingerprint", "fingerprint"),
+        {"schema": "mart"},
+    )
+
+
+class Metric(Base):
+    """mart.metrics — универсальная long-таблица для любых числовых таблиц.
+
+    Покрывает формат 'matrix' (шихта/план/факт/отклонение/проценты), который
+    mart.price_facts не может описать. Колонки:
+    - dimension_type/dimension: семантическое измерение (например, 'item'/'медь')
+    - metric_type: тип метрики ('план' / 'факт' / 'отклонение' / 'percent' / ...)
+    - metric: наименование метрики (например, 'состав шихты')
+    """
+
+    __tablename__ = "metrics"
+    __table_args__ = {"schema": "mart"}
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    file_id: Mapped[int] = mapped_column(Integer, ForeignKey("files.id", ondelete="CASCADE"), nullable=False, index=True)
+    sheet_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    source_row_ref: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    dimension_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
+    dimension: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    period: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)
+    metric_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
+    metric: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    value: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    unit: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    is_blank: Mapped[bool] = mapped_column(Integer, default=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_mart_metrics_dimension", "dimension"),
+        Index("ix_mart_metrics_metric_type", "metric_type"),
+        Index("ix_mart_metrics_period", "period"),
+        Index("ix_mart_metrics_file_id", "file_id"),
+        Index("ix_mart_metrics_sheet_id", "sheet_id"),
+        Index("ix_mart_metrics_metric", "metric"),
+        {"schema": "mart"},
+    )
+
+
+class SupplierAlias(Base):
+    """mart.supplier_aliases — маппинг поставщиков (канонические имена и алиасы).
+
+    Один поставщик может появляться в шапке по-разному:
+    'северо-запад ВторМет * (921)341-19-36 (Алла)' vs 'Северо-запад' vs 'ЦветМет'.
+    canonical_name — каноническое имя, alias — синоним (добавляется из шапки).
+    """
+
+    __tablename__ = "supplier_aliases"
+    __table_args__ = {"schema": "mart"}
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    canonical_name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    alias: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
+    source_sheet_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_mart_supplier_aliases_canonical_name", "canonical_name"),
+        Index("ix_mart_supplier_aliases_alias", "alias"),
+        Index("ix_mart_supplier_aliases_source_sheet_id", "source_sheet_id"),
+        {"schema": "mart"},
     )

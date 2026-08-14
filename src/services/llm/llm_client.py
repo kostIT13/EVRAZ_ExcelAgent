@@ -36,6 +36,8 @@ class LLMClient:
         **kwargs,
     ) -> str:
         target = model or settings.LLM_MODEL_PRIMARY
+        node_name = kwargs.pop("_metric_node", "llm")
+
 
         result, error = await self._try_with_retries(
             client=self._chat,

@@ -4,9 +4,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import insert, select
 from loguru import logger
 from typing import Any, Dict, List, Optional
-from src.core.db.models import File, Sheet, ColumnMetadata, Cell, FactPrice, EntityDictionary, ExcelComment
+from src.core.db.models import File, Sheet, ColumnMetadata, Cell, EntityDictionary, ExcelComment, PriceFact
 from src.core.excel.schemas import ParsedFile
-from src.core.excel.table_structurer import FactPriceRow, TableStructurer
+from src.core.excel.table_structurer import TableStructurer
 from src.core.excel.comment_extractor import ParsedComment
 from src.services.entity_resolution.entity_resolver import EntityResolver, entity_resolver
 from src.services.excel.base import ExcelRepository
@@ -49,7 +49,7 @@ class SQLAlchemyExcelRepository(ExcelRepository):
                 col_type = ExcelNormalizer.infer_column_type(header, sample_values)
                 logger.debug("Column '{}' → type={}, samples={}", header.col_name, col_type, sample_values[:3])
 
-        # 3. Сохраняем в БД (raw + fact_prices)
+        # 3. Сохраняем в БД (raw)
         file_record = await self.save_parsed_file(parsed)
 
         # 4. Извлекаем и сохраняем Excel-комментарии
@@ -157,6 +157,13 @@ class SQLAlchemyExcelRepository(ExcelRepository):
         for sheet in parsed.sheets:
             period = TableStructurer(sheet).period
 
+            # Определяем тип листа (prices / matrix / generic) по имени и шапке.
+            from src.core.excel.sheet_kind_detector import detect_sheet_kind
+            sheet_kind = detect_sheet_kind(
+                sheet.sheet_name,
+                [h.col_name for h in sheet.headers],
+            )
+
             sheet_record = Sheet(
                 file_id=file_record.id,
                 sheet_index=sheet.sheet_index,
@@ -165,6 +172,8 @@ class SQLAlchemyExcelRepository(ExcelRepository):
                 period=period,
                 row_count=len(sheet.data),
                 col_count=len(sheet.headers),
+                sheet_kind=sheet_kind,
+                sheet_kind_auto=True,
             )
             self.session.add(sheet_record)
             await self.session.flush()
@@ -180,6 +189,7 @@ class SQLAlchemyExcelRepository(ExcelRepository):
                     original_name=header.full_name,
                     normalized_name=header.col_name,
                     data_type="text",
+                    role=_column_role(header.col_name),
                 )
                 self.session.add(col_record)
                 col_by_name[header.col_name] = col_record
@@ -205,13 +215,11 @@ class SQLAlchemyExcelRepository(ExcelRepository):
             if cell_rows:
                 await self.session.execute(insert(Cell), cell_rows)
 
-            await self._save_fact_prices(sheet_record, sheet)
-
         await self.session.commit()
         await self.session.refresh(file_record)
 
         logger.info(
-            "Saved file id={}, sheets={}, fact_prices=auto",
+            "Saved file id={}, sheets={}",
             file_record.id,
             file_record.total_sheets,
         )
@@ -237,43 +245,6 @@ class SQLAlchemyExcelRepository(ExcelRepository):
             await self.session.commit()
             logger.info("Saved {} comments for sheet_id={}", len(comments), sheet_id)
 
-    async def _save_fact_prices(
-        self,
-        sheet_record: Sheet,
-        parsed_sheet: Any,
-    ) -> None:
-        structurer = TableStructurer(parsed_sheet)
-        fact_rows: List[FactPriceRow] = structurer.structure()
-
-        if not fact_rows:
-            logger.debug("No fact rows for sheet '{}'", parsed_sheet.sheet_name)
-            return
-        
-        for fact_row in fact_rows:
-            # Entity-resolution (item_id в entity_dictionary) выполняется отдельно
-            # на этапе index_entities() после сохранения mart.price_facts, а поиск
-            # сущностей в рантайме — через pg_trgm (resolve_candidates). Поэтому
-            # здесь item_id не проставляем (None), а item_name_normalized используем
-            # как каноническое имя для pg_trgm-сопоставления.
-            record = FactPrice(
-                sheet_id=sheet_record.id,
-                item_id=None,
-                period=fact_row.period,
-                item_name_raw=fact_row.item_name_raw,
-                item_name_normalized=fact_row.item_name_normalized,
-                price_source=fact_row.price_source,
-                price_value=fact_row.price_value,
-                row_num=fact_row.row_num,
-            )
-            self.session.add(record)
-
-        logger.info(
-            "Saved {} fact prices for sheet '{}' (period={})",
-            len(fact_rows),
-            parsed_sheet.sheet_name,
-            structurer.period,
-        )
-
     async def index_entities(self, file_id: int) -> Dict[str, int]:
         """Собирает уникальные значения сущностей (item/supplier/period) из mart.price_facts.
 
@@ -284,25 +255,26 @@ class SQLAlchemyExcelRepository(ExcelRepository):
         suppliers: List[str] = []
         periods: List[str] = []
 
+        # Периоды берём из метаданных листов.
         sheets_result = await self.session.execute(
             select(Sheet).where(Sheet.file_id == file_id)
         )
         sheets = list(sheets_result.scalars().all())
-
         for sheet in sheets:
             if sheet.period:
                 periods.append(sheet.period)
 
-            facts_result = await self.session.execute(
-                select(FactPrice).where(FactPrice.sheet_id == sheet.id)
-            )
-            for fp in facts_result.scalars().all():
-                if fp.item_name_normalized:
-                    items.append(fp.item_name_normalized)
-                if fp.price_source:
-                    suppliers.append(fp.price_source)
+        # Сущности item/supplier собираем напрямую из mart.price_facts.
+        facts_result = await self.session.execute(
+            select(PriceFact).where(PriceFact.file_id == file_id)
+        )
+        for pf in facts_result.scalars().all():
+            if pf.item_name:
+                items.append(pf.item_name)
+            if pf.supplier:
+                suppliers.append(pf.supplier)
 
-        # Fallback: если fact_prices пусты, берём item-колонку из cells.
+        # Fallback: если mart.price_facts пуст, берём item-колонку из cells.
         if not items:
             for sheet in sheets:
                 cols_result = await self.session.execute(
@@ -342,3 +314,22 @@ class SQLAlchemyExcelRepository(ExcelRepository):
         name = re.sub(r'\s+', '_', name)
         name = name.lower().strip('_')
         return name or "unknown"
+
+
+def _column_role(col_name: str) -> str:
+    """Определяет семантическую роль колонки по нормализованному имени.
+
+    Возможные роли: item / price / supplier / percent / metric_type / other.
+    """
+    key = (col_name or "").lower()
+    if any(k in key for k in ("наименован", "материал", "лом", "вид", "товар", "продукц")):
+        return "item"
+    if any(k in key for k in ("цена", "руб", "тн", "аукцион", "среднерыночн", "стоимост")):
+        return "price"
+    if any(k in key for k in ("поставщик", "контрагент", "организац", "фирм")):
+        return "supplier"
+    if "%" in key or "процент" in key or "доля" in key:
+        return "percent"
+    if any(k in key for k in ("план", "факт", "отклон")):
+        return "metric_type"
+    return "other"

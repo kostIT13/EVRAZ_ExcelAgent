@@ -61,6 +61,7 @@ async def ask_question(
             question=body.question,
             top_k=body.top_k,
             conversation_history=history_dicts,
+            conversation_id=body.conversation_id,
         )
         return _build_agent_response(rag_result)
 
@@ -68,6 +69,7 @@ async def ask_question(
         question=body.question,
         top_k=body.top_k,
         conversation_history=history_dicts,
+        conversation_id=body.conversation_id,
     )
 
     if body.mode == "auto" and agent_result.status == "failed":
@@ -79,6 +81,7 @@ async def ask_question(
             question=body.question,
             top_k=body.top_k,
             conversation_history=history_dicts,
+            conversation_id=body.conversation_id,
         )
         return _build_agent_response(fallback_result)
 

@@ -97,8 +97,8 @@ async def get_sheet_schema(sheet_ids: List[int]) -> List[Dict[str, Any]]:
                 "description": sheet.description or "",
                 "period": sheet.period,
                 "columns": sheet_columns,
-                "fact_prices_samples": fact_samples,
-                "fact_prices_schema": {
+                "samples": fact_samples,
+                "schema": {
                     "table": "mart.price_facts",
                     "columns": [
                         {"name": "sheet_period", "type": "TEXT", "description": "период (например, '2025-11')"},
@@ -110,6 +110,28 @@ async def get_sheet_schema(sheet_ids: List[int]) -> List[Dict[str, Any]]:
                 },
             })
         return schema
+
+
+def _default_columns(table: str) -> List[Dict[str, str]]:
+    """Возвращает колонки по умолчанию для mart-таблицы."""
+    if table == "mart.metrics":
+        return [
+            {"name": "period", "type": "TEXT", "description": "период (например, '2025-05')"},
+            {"name": "dimension", "type": "TEXT", "description": "измерение (материал/шихта)"},
+            {"name": "dimension_type", "type": "TEXT", "description": "тип измерения"},
+            {"name": "metric_type", "type": "TEXT", "description": "план / факт / отклонение / percent"},
+            {"name": "metric", "type": "TEXT", "description": "наименование метрики"},
+            {"name": "value", "type": "FLOAT", "description": "значение метрики"},
+            {"name": "is_blank", "type": "BOOL", "description": "пустая ячейка (не считать в средних)"},
+        ]
+    return [
+        {"name": "sheet_period", "type": "TEXT", "description": "период (например, '2025-11')"},
+        {"name": "item_name", "type": "TEXT", "description": "нормализованное название лома"},
+        {"name": "supplier", "type": "TEXT", "description": "поставщик или None"},
+        {"name": "price_type", "type": "TEXT", "description": "среднерыночная / аукцион_старт / аукцион_победитель / поставщик"},
+        {"name": "value", "type": "FLOAT", "description": "значение цены в руб/тн"},
+        {"name": "is_blank", "type": "BOOL", "description": "пустая ячейка (не считать в средних)"},
+    ]
 
 
 async def planner_node(
@@ -136,25 +158,22 @@ async def planner_node(
     schema = await get_sheet_schema(sheet_ids)
 
     if not schema:
-        # Планируем по mart.price_facts даже без листов (fallback на факт-таблицу).
+        # Планируем по mart-таблице даже без листов (fallback на факт-таблицу).
+        domain = state.get("domain")
+        table = "mart.metrics" if domain and getattr(domain, "value", None) == "metrics" else "mart.price_facts"
         logger.warning(
-            "Planner Node [{}]: no schema for sheets {}, falling back to price_facts",
+            "Planner Node [{}]: no schema for sheets {}, falling back to {}",
             request_id,
             sheet_ids,
+            table,
         )
         schema = [
             {
                 "id": None,
-                "name": "price_facts",
-                "fact_prices_schema": {
-                    "table": "mart.price_facts",
-                    "columns": [
-                        {"name": "sheet_period", "type": "TEXT", "description": "период (например, '2025-11')"},
-                        {"name": "item_name", "type": "TEXT", "description": "нормализованное название лома"},
-                        {"name": "supplier", "type": "TEXT", "description": "поставщик или None"},
-                        {"name": "price_type", "type": "TEXT", "description": "среднерыночная / аукцион_старт / аукцион_победитель / поставщик"},
-                        {"name": "value", "type": "FLOAT", "description": "значение цены в руб/тн"},
-                    ],
+                "name": table,
+                "schema": {
+                    "table": table,
+                    "columns": _default_columns(table),
                 },
             }
         ]

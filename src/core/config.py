@@ -69,5 +69,4 @@ class Settings(BaseSettings):
     # Порог pg_trgm similarity для fuzzy-сопоставления сущностей (0..1).
     TRIGRAM_THRESHOLD: float = 0.25
 
-
 settings = Settings()

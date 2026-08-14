@@ -74,3 +74,10 @@ async def metrics():
     """Prometheus-метрики: латентность, доля failed/low_confidence, RPS, token usage."""
     from src.core.metrics import metrics_response
     return metrics_response()
+
+
+@app.get("/metrics/summary")
+async def metrics_summary_endpoint():
+    """Агрегированные метрики (JSON) для фронтенд-страницы 'Метрики'."""
+    from src.core.metrics import metrics_summary
+    return metrics_summary()

@@ -50,20 +50,125 @@ def _extract_price_source_from_sql(sql: str) -> Optional[str]:
 
 
 def _collect_samples_from_schema(schema: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Собирает все fact_prices_samples из схемы в единый список.
+    """Собирает все samples из схемы в единый список.
 
     Колонка item_name берётся из mart.price_facts (нормализованная long-таблица).
     """
     all_samples: List[Dict[str, Any]] = []
     seen_items: Set[str] = set()
     for sheet in schema:
-        samples = sheet.get("fact_prices_samples", [])
+        samples = sheet.get("samples", [])
         for s in samples:
             item = s.get("item_name") or s.get("item_name_normalized", "")
             if item and item not in seen_items:
                 seen_items.add(item)
                 all_samples.append(s)
     return all_samples
+
+
+def _split_sql_list(content: str) -> List[str]:
+    """Разбивает содержимое SQL IN-списка на литералы по запятым вне кавычек.
+
+    Названия могут содержать запятые внутри кавычек (например, 'Лом меди трубка с
+    оребрением медь 87,2%'). Поэтому не делим по запятым, находящимся внутри '...'.
+    """
+    items = []
+    buf = []
+    in_quote = False
+    for ch in content:
+        if ch == "'":
+            in_quote = not in_quote
+            buf.append(ch)
+            continue
+        if ch == "," and not in_quote:
+            items.append("".join(buf))
+            buf = []
+            continue
+        buf.append(ch)
+    if buf:
+        items.append("".join(buf))
+    return [x for x in items if x.strip()]
+
+
+def _norm_token(value: str) -> str:
+    """Нормализует имя для сопоставления: lower + кириллизация похожих латинских букв.
+
+    Кириллические 'с'/'о'/'е'/'а'/'р'/'к' визуально неотличимы от латинских
+    c/o/e/a/p/k, и LLM иногда подставляет латиницу. Здесь приводим их к кириллице,
+    чтобы сопоставление с реальными item_name было устойчивым.
+    """
+    repl = {
+        "c": "с", "o": "о", "e": "е", "a": "а", "p": "р", "k": "к",
+        "x": "х", "t": "т", "y": "у", "h": "н", "m": "м", "b": "в",
+    }
+    out = []
+    for ch in (value or "").lower():
+        out.append(repl.get(ch, ch))
+    return "".join(out)
+
+
+def _match_item_exact(value: str, real_items: List[str]) -> Optional[str]:
+    """Возвращает реальное item_name, совпадающее с value после нормализации."""
+    target = _norm_token(value)
+    for real in real_items:
+        if _norm_token(real) == target:
+            return real
+    return None
+
+
+def _fix_item_in_list(
+    original_sql: str,
+    samples: List[Dict[str, Any]],
+) -> Optional[str]:
+    """Заменяет элементы item_name IN/='...' на точные реальные названия из samples.
+
+    LLM может написать имя с латиницей вместо кириллицы (например, 'трубка c оребрением'
+    вместо 'трубка с оребрением'). Здесь каждый литерал IN/= сопоставляется с реальным
+    item_name по нормализованному подобию и заменяется на точный.
+    """
+    if not samples:
+        return None
+    real_items = []
+    for s in samples:
+        it = s.get("item_name") or s.get("item_name_normalized", "")
+        if it:
+            real_items.append(str(it))
+    if not real_items:
+        return None
+
+    changed = False
+    # Заменяем значения в IN (...). Разбиваем по запятым, но НЕ внутри кавычек
+    # (названия могут содержать запятую, например 'медь 87,2%').
+    def _repl_in(m: "re.Match") -> str:
+        nonlocal changed
+        items = [x.strip().strip("'") for x in _split_sql_list(m.group(2))]
+        fixed = []
+        for it in items:
+            exact = _match_item_exact(it, real_items) or it
+            if exact != it:
+                changed = True
+            fixed.append(f"'{exact}'")
+        return f"{m.group(1)}{', '.join(fixed)})"
+
+    # Применяем только один паттерн IN (fp.item_name покрывает и item_name).
+    new_sql = re.sub(r"(fp\.item_name\s+IN\s*\()([^)]*)\)", _repl_in, original_sql, flags=re.IGNORECASE)
+    if new_sql == original_sql:
+        new_sql = re.sub(r"(item_name\s+IN\s*\()([^)]*)\)", _repl_in, original_sql, flags=re.IGNORECASE)
+
+    # Заменяем значения '=' по item_name.
+    def _repl_eq(m: "re.Match") -> str:
+        nonlocal changed
+        lit = m.group(1)
+        it = lit.strip("'")
+        exact = _match_item_exact(it, real_items) or it
+        if exact != it:
+            changed = True
+        return f"item_name = '{exact}'"
+
+    new_sql = re.sub(r"item_name\s*=\s*'([^']*)'", _repl_eq, new_sql, flags=re.IGNORECASE)
+    new_sql = re.sub(r"fp\.item_name\s*=\s*'([^']*)'", _repl_eq, new_sql, flags=re.IGNORECASE)
+
+    return new_sql if changed else None
 
 
 def _build_samples_fallback_sql(
@@ -238,6 +343,26 @@ def _build_fallback_sql(original_sql: str) -> Optional[str]:
     return fallback_sql
 
 
+# Проверка схемы: запросы должны обращаться только к mart.* (read-only).
+# Запрещаем raw.cells, information_schema и pg_catalog напрямую.
+_SCHEMA_ALLOW_PATTERN = re.compile(r"FROM\s+(mart\.\w+)", re.IGNORECASE)
+_SCHEMA_FORBIDDEN = ("raw.cells", "information_schema", "pg_catalog", "entity_dictionary")
+
+
+def _check_schema(sql: str) -> List[str]:
+    """Возвращает ошибки схемы (пусто — если запрос безопасный)."""
+    errors: List[str] = []
+    sql_lower = sql.lower()
+    for bad in _SCHEMA_FORBIDDEN:
+        if bad in sql_lower:
+            errors.append(f"Запрос обращается к запрещённой таблице/схеме: {bad}")
+    tables = _SCHEMA_ALLOW_PATTERN.findall(sql)
+    if not tables:
+        # Если нет ни одного mart.* FROM — запрос не корректен для агента.
+        errors.append("Запрос не обращается ни к одной mart.* таблице")
+    return errors
+
+
 async def _execute_sql(
     sql_query: str,
     session: Optional[AsyncSession],
@@ -246,12 +371,21 @@ async def _execute_sql(
     """Выполняет SQL под основной ролью БД.
 
     Executor использует основной async_session_maker (роль user). Безопасность
-    SQL обеспечивается keyword-blacklist валидацией в codegen_node.
-    statement_timeout задаётся на уровне сессии в дополнение к REQUEST_TIMEOUT_S
-    для LLM.
+    SQL обеспечивается keyword-blacklist валидацией в codegen_node + проверкой
+    схемы (только mart.*). statement_timeout задаётся на уровне сессии.
     """
     from src.core.db.database import async_session_maker
     from src.core.config import settings
+
+    # Жёсткая проверка схемы перед выполнением.
+    schema_errors = _check_schema(sql_query)
+    if schema_errors:
+        logger.error(
+            "Executor Node [{}]: schema check failed: {}",
+            request_id,
+            schema_errors,
+        )
+        return [], "; ".join(schema_errors)
 
     try:
         async with (session or async_session_maker()) as s:
@@ -375,6 +509,12 @@ async def executor_node(
         fb2 = _build_samples_fallback_sql(sql_query, samples)
         if fb2 and fb2 != sql_query:
             fallback_chain.append(("с реальными названиями из samples", fb2))
+
+    # Fallback 2a: исправить литералы item_name IN/='...' (кириллица vs латиница).
+    if samples:
+        fb2a = _fix_item_in_list(sql_query, samples)
+        if fb2a and fb2a != sql_query:
+            fallback_chain.append(("исправленные названия item_name (IN/=)", fb2a))
 
     # Fallback 3: убрать price_source + заменить ILIKE на реальные названия
     if samples and fb1 and fb1 != sql_query:

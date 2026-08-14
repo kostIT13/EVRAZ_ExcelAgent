@@ -6,6 +6,7 @@ from src.core.db.database import async_session_maker
 from src.core.db.models import Sheet
 from src.core.logging_settings import logger
 from src.services.agent.graph_state import (
+    Domain,
     GraphState,
     QueryType,
     NODE_CLASSIFIER,
@@ -18,23 +19,30 @@ CLASSIFIER_SYSTEM_PROMPT = """Ты — классификатор запросо
 
 У тебя есть:
 1. Вопрос пользователя
-2. Контекст из RAG (релевантные фрагменты данных)
-3. Список листов (таблиц) в формате JSON
+2. Список листов (таблиц) в формате JSON
 
 Твоя задача — проанализировать вопрос и вернуть JSON с полями:
-1. query_type — тип запроса (lookup, aggregate, cross_sheet, delta, unknown)
-2. entities — список сущностей (например, ["медь", "январь 2025"])
-3. relevant_sheet_ids — список ID листов, релевантных вопросу
+1. query_type — тип запроса (lookup, aggregate, cross_sheet, delta, sum_by_supplier, find_period, unknown)
+2. domain — домен (prices | metrics | generic):
+   - prices: вопрос о ценах на лом металлов (цена, аукцион, поставщик, руб/тн)
+   - metrics: вопрос о плане/факте/отклонении/процентах/составе шихты
+   - generic: если неясно
+3. entities — список сущностей (например, ["медь", "январь 2025"])
+4. relevant_sheet_ids — список ID листов, релевантных вопросу
 
 Правила определения query_type:
-- lookup: вопрос про конкретное значение ("какая цена меди в январе?", "сколько стоит никель?")
-- aggregate: вопрос про сумму, среднее, минимум, максимум
+- lookup: конкретное значение ("какая цена меди в январе?", "сколько стоит никель?")
+- aggregate: сумма, среднее, минимум, максимум
 - cross_sheet: сравнение между разными листами/месяцами
 - delta: разница между значениями во времени
+- sum_by_supplier: сумма по поставщикам
+- find_period: поиск цены/значения во всех месяцах
 - unknown: если не подходит ни под один из вышеперечисленных
 
-Используй RAG-контекст для уточнения: если в контексте есть данные,
-которые явно отвечают на вопрос — отметь это.
+Правила domain:
+- prices: если в вопросе есть цена/лом/медь/латунь/аукцион/поставщик/руб/тн
+- metrics: если в вопросе есть план/факт/отклонение/процент/шихта/бюджет
+- generic: иначе
 
 Верни ТОЛЬКО JSON без дополнительного текста.
 """
@@ -134,10 +142,18 @@ async def classifier_node(
         result = json.loads(cleaned)
 
         query_type_str = result.get("query_type", "unknown")
-        if query_type_str not in ("lookup", "aggregate", "cross_sheet", "delta", "unknown"):
+        valid_types = {t.value for t in QueryType}
+        if query_type_str not in valid_types:
             query_type_str = "unknown"
 
         state["query_type"] = QueryType(query_type_str)
+
+        # Домен (prices/metrics/generic) — определяет таблицу для SQL.
+        domain_str = result.get("domain", "generic")
+        if domain_str not in {d.value for d in Domain}:
+            domain_str = _heuristic_domain(question)
+        state["domain"] = Domain(domain_str)
+
         state["entities"] = result.get("entities", [])
 
         sheet_map = {s["id"]: s for s in sheets}
@@ -167,8 +183,19 @@ async def classifier_node(
     state["trace"] = state.get("trace", {})
     state["trace"][NODE_CLASSIFIER] = {
         "query_type": state["query_type"].value,
+        "domain": state.get("domain", Domain.GENERIC).value,
         "entities": state["entities"],
         "relevant_sheets": state["relevant_sheets"],
     }
 
     return state
+
+
+def _heuristic_domain(question: str) -> str:
+    """Fallback-определение домена по ключевым словам вопроса."""
+    q = (question or "").lower()
+    if any(k in q for k in ("план", "факт", "отклонен", "шихт", "процент", "бюджет", "доля")):
+        return "metrics"
+    if any(k in q for k in ("цена", "медь", "латун", "бронз", "лом", "руб", "поставщик", "аукцион")):
+        return "prices"
+    return "generic"

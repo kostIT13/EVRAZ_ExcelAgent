@@ -27,6 +27,9 @@ export interface SheetResponse {
   description?: string | null;
   row_count: number;
   col_count: number;
+  period?: string | null;
+  sheet_kind?: string | null;
+  sheet_kind_auto?: boolean | null;
   created_at: string;
 }
 
@@ -91,6 +94,7 @@ export interface AskResponse {
   retry_count: number;
   status: string;
   self_corrected: boolean;
+  trace_id?: string | null;
 }
 
 export interface AskRequest {
@@ -98,6 +102,7 @@ export interface AskRequest {
   top_k?: number;
   mode?: 'auto' | 'rag' | 'agent';
   conversation_history?: ConversationTurn[];
+  conversation_id?: string | null;
 }
 
 export interface TraceStepInfo {
@@ -121,6 +126,16 @@ export interface TraceListItem {
   status: string;
   latency_ms: number;
   created_at?: string | null;
+}
+
+export interface MetricsSummary {
+  total_requests: number;
+  requests_by_status: Record<string, number>;
+  avg_latency_ms: number;
+  total_tokens: number;
+  tokens_by_node: Record<string, Record<string, number>>;
+  total_cost_rub: number;
+  cost_by_node: Record<string, number>;
 }
 
 export type HealthResponse = {

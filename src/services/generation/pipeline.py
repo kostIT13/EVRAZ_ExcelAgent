@@ -95,6 +95,7 @@ class GenerationPipeline:
         top_k: int = 30,
         session: Optional[AsyncSession] = None,
         conversation_history: Optional[List[Dict[str, str]]] = None,
+        conversation_id: Optional[str] = None,
     ) -> AgentResult:
         """Запустить агента (Classifier → Planner → CodeGen → Executor → Verifier)
         с автоматическим Self-Correction при низком качестве ответа.
@@ -124,6 +125,7 @@ class GenerationPipeline:
             question=question,
             top_k=top_k,
             conversation_history=conversation_history,
+            conversation_id=conversation_id,
         )
 
         # --- Self-Correction: если ответ низкого качества, пробуем ещё раз ---
@@ -169,6 +171,7 @@ class GenerationPipeline:
                 question=question,
                 top_k=top_k,
                 conversation_history=correction_history,
+                conversation_id=conversation_id,
             )
             result.self_corrected = True
 

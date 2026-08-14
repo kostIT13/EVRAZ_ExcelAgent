@@ -99,5 +99,5 @@ def test_sql_signature_helper():
         "price_type='среднерыночная' AND item_name ILIKE '%медь%' AND sheet_period='2025-01'",
     )
     assert not _check_sql_signature(
-        "SELECT * FROM fact_prices", "item_name ILIKE '%медь%'"
+        "SELECT * FROM raw.cells", "item_name ILIKE '%медь%'"
     )

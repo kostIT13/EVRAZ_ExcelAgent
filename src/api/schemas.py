@@ -33,6 +33,9 @@ class SheetResponse(BaseModel):
     description: Optional[str] = None
     row_count: int
     col_count: int
+    period: Optional[str] = None
+    sheet_kind: Optional[str] = None
+    sheet_kind_auto: Optional[bool] = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -48,6 +51,7 @@ class ColumnResponse(BaseModel):
     data_type: str
     description: Optional[str] = None
     sample_values: Optional[List[Any]] = None
+    role: Optional[str] = None
 
     model_config = {"from_attributes": True}
 
@@ -103,6 +107,10 @@ class AskRequest(BaseModel):
     conversation_history: List[ConversationTurn] = Field(
         default_factory=list,
         description="История предыдущих попыток для self-correction",
+    )
+    conversation_id: Optional[str] = Field(
+        default=None,
+        description="ID диалога для сохранения памяти между вопросами",
     )
 
 

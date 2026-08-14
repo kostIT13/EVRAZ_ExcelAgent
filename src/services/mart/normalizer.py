@@ -1,9 +1,13 @@
-"""Нормализация raw.cells -> mart.price_facts (итеративный, идемпотентный).
+"""Нормализация raw.cells -> mart.price_facts / mart.metrics (идемпотентный).
 
-Вместо генерации SQL по EAV cells агент работает по нормализованной long-таблице
-``mart.price_facts``. Нормализация использует подтверждённую LLM-схему листа
-(``mart.sheet_templates``) для интерпретации многострочных/вложенных заголовков,
-сдвинутых шапок и слитых ячеек (см. src/core/excel/schema_inference.py).
+Вместо генерации SQL по EAV cells агент работает по нормализованным long-таблицам:
+- ``mart.price_facts`` — для листов формата ``prices`` (цены лома по месяцам).
+- ``mart.metrics`` — для листов формата ``matrix`` (шихта/план/факт/отклонение).
+
+Тип листа (sheet_kind) определяется детектором (src/core/excel/sheet_kind_detector.py).
+Нормализация использует подтверждённую LLM-схему листа (``mart.sheet_templates``)
+для интерпретации многострочных/вложенных заголовков, сдвинутых шапок и слитых
+ячеек (см. src/core/excel/schema_inference.py).
 
 Идемпотентность: перезалив файла (тот же file_id) удаляет существующие факты
 файла и пересоздаёт их — без дублирования.
@@ -17,9 +21,18 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.db.database import async_session_maker
-from src.core.db.models import Cell, ColumnMetadata, FactPrice, PriceFact, Sheet, SheetTemplate
+from src.core.db.models import (
+    Cell,
+    ColumnMetadata,
+    Metric,
+    PriceFact,
+    Sheet,
+    SheetTemplate,
+    SupplierAlias,
+)
 from src.core.excel.schemas import ParsedSheet
 from src.core.excel.schema_inference import ColumnInference, SheetSchema
+from src.core.excel.sheet_kind_detector import SheetKind, detect_sheet_kind
 from src.core.logging_settings import logger
 
 # Специальные price_source, распознаваемые табличным структуратором.
@@ -46,28 +59,63 @@ async def normalize_file_to_mart(
         # 1. Удаляем старые факты файла (идемпотентность при перезаливе).
         result = await s.execute(delete(PriceFact).where(PriceFact.file_id == file_id))
         deleted = result.rowcount or 0
-
-        # 2. Собираем факты из raw.
-        fact_rows: List[PriceFact] = []
-        sheets_result = await s.execute(
+        # Чистим также metrics и aliases файла/листов.
+        sheets_for_cleanup = list((await s.execute(
             select(Sheet).where(Sheet.file_id == file_id)
-        )
-        for sheet in list(sheets_result.scalars().all()):
+        )).scalars().all())
+        sheet_ids = [sh.id for sh in sheets_for_cleanup]
+        if sheet_ids:
+            await s.execute(delete(Metric).where(Metric.file_id == file_id))
+            await s.execute(delete(SupplierAlias).where(SupplierAlias.source_sheet_id.in_(sheet_ids)))
+
+        # 2. Определяем sheet_kind для каждого листа и собираем факты.
+        fact_rows: List[PriceFact] = []
+        metric_rows: List[Metric] = []
+        alias_rows: List[SupplierAlias] = []
+        # Глобальная дедупликация alias внутри одного прохода нормализации:
+        # alias уникален в mart.supplier_aliases, а листы повторяют одни и те же
+        # колонки-поставщики, поэтому не должно быть дублей даже между листами.
+        seen_aliases_global: set = set((await s.execute(
+            select(SupplierAlias.alias)
+        )).scalars().all())
+        for sheet in sheets_for_cleanup:
+            await _assign_sheet_kind(s, sheet)
             fact_rows.extend(await _fact_rows_for_sheet(s, sheet, file_id))
+            metric_rows.extend(await _metric_rows_for_sheet(s, sheet, file_id))
+            sheet_aliases = await _supplier_alias_rows_for_sheet(s, sheet, file_id)
+            deduped = []
+            for a in sheet_aliases:
+                if a.alias.lower() not in seen_aliases_global:
+                    seen_aliases_global.add(a.alias.lower())
+                    deduped.append(a)
+            alias_rows.extend(deduped)
 
         if fact_rows:
             s.add_all(fact_rows)
-            await s.commit()
+        if metric_rows:
+            s.add_all(metric_rows)
+        if alias_rows:
+            s.add_all(alias_rows)
+        await s.commit()
 
         elapsed_ms = int((time.monotonic() - start) * 1000)
         logger.info(
-            "normalize_file_to_mart: file_id={}, deleted={}, inserted={}, elapsed={}ms",
+            "normalize_file_to_mart: file_id={}, deleted={}, inserted={} (facts), "
+            "metrics={}, aliases={}, elapsed={}ms",
             file_id,
             deleted,
             len(fact_rows),
+            len(metric_rows),
+            len(alias_rows),
             elapsed_ms,
         )
-        return {"deleted": deleted, "inserted": len(fact_rows), "elapsed_ms": elapsed_ms}
+        return {
+            "deleted": deleted,
+            "inserted": len(fact_rows),
+            "metrics": len(metric_rows),
+            "aliases": len(alias_rows),
+            "elapsed_ms": elapsed_ms,
+        }
     except Exception:
         await s.rollback()
         raise
@@ -76,45 +124,233 @@ async def normalize_file_to_mart(
             await s.close()
 
 
+async def _assign_sheet_kind(s: AsyncSession, sheet: Sheet) -> None:
+    """Определяет sheet_kind листа по имени, шапке и примерам значений."""
+    headers = list((await s.execute(
+        select(ColumnMetadata)
+        .where(ColumnMetadata.sheet_id == sheet.id)
+        .order_by(ColumnMetadata.col_index)
+    )).scalars().all())
+    header_names = [h.normalized_name for h in headers]
+
+    sample_values: List[Optional[str]] = []
+    if headers:
+        sample_result = await s.execute(
+            select(Cell)
+            .where(Cell.sheet_id == sheet.id, Cell.row_num >= 2)
+            .order_by(Cell.row_num)
+            .limit(100)
+        )
+        sample_values = [
+            (c.value_text or (str(c.value_number) if c.value_number is not None else None))
+            for c in sample_result.scalars().all()
+        ]
+
+    kind = detect_sheet_kind(sheet.original_name, header_names, sample_values)
+    if sheet.sheet_kind != kind:
+        sheet.sheet_kind = kind
+        sheet.sheet_kind_auto = True
+        await s.flush()
+
+
 async def _fact_rows_for_sheet(
     s: AsyncSession,
     sheet: Sheet,
     file_id: int,
 ) -> List[PriceFact]:
-    """Строит список mart.price_facts для одного листа из raw."""
-    # Пытаемся использовать табличный структуратор из уже сохранённых FactPrice
-    # (fact_prices) как источник фактов — он уже учитывает merged cells и шапку.
-    fact_result = await s.execute(
-        select(FactPrice).where(FactPrice.sheet_id == sheet.id)
-    )
-    legacy = list(fact_result.scalars().all())
+    """Строит список mart.price_facts для одного листа из raw.
 
-    rows: List[PriceFact] = []
-    if legacy:
-        for fp in legacy:
-            price_type, supplier = _split_source(fp.price_source)
-            rows.append(PriceFact(
-                file_id=file_id,
-                sheet_id=sheet.id,
-                source_row_ref=f"sheet:{sheet.id}:row:{fp.row_num}",
-                sheet_period=fp.period,
-                item_name=fp.item_name_normalized,
-                supplier=supplier,
-                price_type=price_type,
-                value=fp.price_value,
-                currency=DEFAULT_CURRENCY,
-                unit=DEFAULT_UNIT,
-            ))
-        return rows
-
-    # Schema-driven нормализация: если для листа есть подтверждённый шаблон
-    # (mart.sheet_templates), используем его для интерпретации колонок.
+    Работает только для листов формата ``prices``/``generic``. Для ``matrix``
+    факты цен не строятся (используется mart.metrics).
+    Порядок источников:
+    1. Schema-driven нормализация (mart.sheet_templates).
+    2. Fallback: прямой парсинг raw.cells.
+    """
+    if sheet.sheet_kind == SheetKind.MATRIX:
+        return []
     schema_rows = await _fact_rows_from_schema(s, sheet, file_id)
     if schema_rows:
         return schema_rows
-
-    # Fallback: если факты не сохранены, парсим из cells.
     return await _fact_rows_from_cells(s, sheet, file_id)
+
+
+async def _metric_rows_for_sheet(
+    s: AsyncSession,
+    sheet: Sheet,
+    file_id: int,
+) -> List[Metric]:
+    """Строит список mart.metrics для листов формата ``matrix``.
+
+    Интерпретирует числовые колонки как метрики (план/факт/отклонение/процент),
+    а строки — как измерения (шихта/материал). Пустые ячейки помечаются is_blank.
+    """
+    if sheet.sheet_kind != SheetKind.MATRIX:
+        return []
+
+    cols_result = await s.execute(
+        select(ColumnMetadata)
+        .where(ColumnMetadata.sheet_id == sheet.id)
+        .order_by(ColumnMetadata.col_index)
+    )
+    columns = list(cols_result.scalars().all())
+    if not columns:
+        return []
+
+    # Первая колонка — измерение (наименование/шихта).
+    dimension_col = min(c.col_index for c in columns)
+    metric_cols = [c for c in columns if c.col_index != dimension_col]
+
+    cells_result = await s.execute(
+        select(Cell)
+        .where(Cell.sheet_id == sheet.id)
+        .order_by(Cell.row_num, Cell.col_index)
+    )
+    rows_by_num: Dict[int, Dict[int, Any]] = {}
+    for cell in cells_result.scalars().all():
+        rows_by_num.setdefault(cell.row_num, {})[cell.col_index] = cell
+
+    out: List[Metric] = []
+    for row_num, row_cells in sorted(rows_by_num.items()):
+        dim_cell = row_cells.get(dimension_col)
+        if dim_cell is None:
+            continue
+        dim_value = dim_cell.value_text if dim_cell.value_text is not None else (
+            str(dim_cell.value_number) if dim_cell.value_number is not None else None
+        )
+        if not dim_value or dim_value.strip().lower() in ("итого", "итог", "всего", "сумма", ""):
+            continue
+
+        for col in metric_cols:
+            cell = row_cells.get(col.col_index)
+            if cell is None:
+                continue
+            number = cell.value_number if cell.value_number is not None else _to_number(cell.value_text)
+            is_blank = number is None
+            if not is_blank:
+                metric_type = _metric_type_from_name(col.normalized_name)
+                out.append(Metric(
+                    file_id=file_id,
+                    sheet_id=sheet.id,
+                    source_row_ref=f"sheet:{sheet.id}:row:{row_num}:col:{col.col_index}",
+                    dimension_type="item",
+                    dimension=str(dim_value).strip(),
+                    period=sheet.period,
+                    metric_type=metric_type,
+                    metric=col.normalized_name,
+                    value=float(number),
+                    unit="%",
+                    is_blank=False,
+                ))
+            else:
+                # Сохраняем признак пустой ячейки явно.
+                metric_type = _metric_type_from_name(col.normalized_name)
+                out.append(Metric(
+                    file_id=file_id,
+                    sheet_id=sheet.id,
+                    source_row_ref=f"sheet:{sheet.id}:row:{row_num}:col:{col.col_index}",
+                    dimension_type="item",
+                    dimension=str(dim_value).strip(),
+                    period=sheet.period,
+                    metric_type=metric_type,
+                    metric=col.normalized_name,
+                    value=None,
+                    unit="%",
+                    is_blank=True,
+                ))
+    return out
+
+
+async def _supplier_alias_rows_for_sheet(
+    s: AsyncSession,
+    sheet: Sheet,
+    file_id: int,
+) -> List[SupplierAlias]:
+    """Собирает алиасы поставщиков из шапки листа (для mart.supplier_aliases).
+
+    Каждая колонка-поставщик (колонка цен) добавляет алиас. Каноническое имя —
+    первое короткое слово (первый значимый токен), остальные — алиасы.
+
+    alias уникален в mart.supplier_aliases (unique-constraint), поэтому глобально
+    дедуплицируем: уже существующие в БД алиасы пропускаем, чтобы один и тот же
+    поставщик/заголовок, повторяющийся на разных листах, не давал дублей.
+    """
+    if sheet.sheet_kind != SheetKind.PRICES:
+        return []
+
+    # Загружаем существующие alias (глобальный unique-констрейнт).
+    existing = set((await s.execute(
+        select(SupplierAlias.alias)
+    )).scalars().all())
+
+    cols_result = await s.execute(
+        select(ColumnMetadata)
+        .where(ColumnMetadata.sheet_id == sheet.id)
+        .order_by(ColumnMetadata.col_index)
+    )
+    columns = list(cols_result.scalars().all())
+    if not columns:
+        return []
+
+    out: List[SupplierAlias] = []
+    seen_aliases: set = set()
+    for col in columns:
+        name = col.normalized_name or col.original_name
+        if not name or name.strip().lower() in ("", "наименование", "наименован"):
+            continue
+        canonical = _canonical_supplier(name)
+        if not canonical:
+            continue
+        alias_key = name.strip().lower()
+        if alias_key in existing or alias_key in seen_aliases:
+            continue
+        seen_aliases.add(alias_key)
+        out.append(SupplierAlias(
+            canonical_name=canonical,
+            alias=name.strip(),
+            source_sheet_id=sheet.id,
+        ))
+    return out
+
+
+def _to_number(value: Optional[str]) -> Optional[float]:
+    """Пытается привести строку к числу (русский формат с запятой)."""
+    if value is None:
+        return None
+    try:
+        return float(value.replace(",", ".").replace(" ", "").replace("%", ""))
+    except (ValueError, TypeError):
+        return None
+
+
+def _metric_type_from_name(name: str) -> str:
+    """Определяет тип метрики по имени колонки."""
+    key = (name or "").lower()
+    if "отклон" in key:
+        return "отклонение"
+    if "факт" in key:
+        return "факт"
+    if "план" in key:
+        return "план"
+    if "%" in key or "процент" in key or "доля" in key:
+        return "percent"
+    return "value"
+
+
+def _canonical_supplier(name: str) -> str:
+    """Вычисляет каноническое имя поставщика из сырого названия колонки.
+
+    Например 'северо-запад ВторМет * (921)341-19-36 (Алла)' -> 'северо-запад'.
+    Убирает телефоны, звёздочки, скобки, имена в скобках.
+    """
+    import re
+    cleaned = re.sub(r"[*()]", " ", name)
+    cleaned = re.sub(r"\+?\(?\d[\d\s\-().]{4,}\)?", " ", cleaned)  # телефоны
+    cleaned = re.sub(r"\([^)]*\)", " ", cleaned)  # всё в скобках
+    tokens = [t for t in cleaned.split() if len(t) > 1]
+    if not tokens:
+        return ""
+    # Каноническое имя — первые 1-2 значимых слова.
+    return " ".join(tokens[:2]).strip().lower()
 
 
 async def _find_confirmed_template(
@@ -232,7 +468,24 @@ async def _fact_rows_from_schema(
             col_def = col_map.get(col_index)
             if col_def is None:
                 continue
+            # Пустая ячейка (NULL) — сохраняем признак is_blank, не превращаем в 0.
             if not isinstance(value, (int, float)):
+                price_type, supplier = _price_from_path(col_def["path"])
+                if price_type is None:
+                    continue
+                out.append(PriceFact(
+                    file_id=file_id,
+                    sheet_id=sheet.id,
+                    source_row_ref=f"sheet:{sheet.id}:row:{row_num}:col:{col_index}",
+                    sheet_period=sheet.period,
+                    item_name=str(item_name).strip(),
+                    supplier=supplier,
+                    price_type=price_type,
+                    value=None,
+                    currency=DEFAULT_CURRENCY,
+                    unit=DEFAULT_UNIT,
+                    is_blank=True,
+                ))
                 continue
             # Определяем тип цены и поставщика из пути вложенного заголовка.
             price_type, supplier = _price_from_path(col_def["path"])
@@ -249,6 +502,7 @@ async def _fact_rows_from_schema(
                 value=float(value),
                 currency=DEFAULT_CURRENCY,
                 unit=DEFAULT_UNIT,
+                is_blank=False,
             ))
     return out
 
@@ -321,13 +575,31 @@ async def _fact_rows_from_cells(
             continue
 
         for col_index in sorted(row_cells):
-            if col_index <= 4 or col_index > max_price_col:
+            # Пропускаем служебные/нечисловые колонки (№ п/п = индекс 1, наименование = 2),
+            # но НЕ исключаем колонки поставщиков по жёсткому индексу (например, ВРП У = 3).
+            if col_index == 1 or col_index == 2 or col_index > max_price_col:
                 continue
             value = row_cells[col_index]
-            if not isinstance(value, (int, float)):
-                continue
             supplier_raw = col_index_to_name.get(col_index, f"поставщик_{col_index}")
             price_type, supplier = _split_source(supplier_raw)
+            if price_type is None:
+                continue
+            # Пустая ячейка (NULL) сохраняется явно через is_blank, не как 0.
+            if not isinstance(value, (int, float)):
+                out.append(PriceFact(
+                    file_id=file_id,
+                    sheet_id=sheet.id,
+                    source_row_ref=f"sheet:{sheet.id}:row:{row_num}:col:{col_index}",
+                    sheet_period=sheet.period,
+                    item_name=str(item_name).strip(),
+                    supplier=supplier,
+                    price_type=price_type,
+                    value=None,
+                    currency=DEFAULT_CURRENCY,
+                    unit=DEFAULT_UNIT,
+                    is_blank=True,
+                ))
+                continue
             out.append(PriceFact(
                 file_id=file_id,
                 sheet_id=sheet.id,
@@ -339,6 +611,7 @@ async def _fact_rows_from_cells(
                 value=float(value),
                 currency=DEFAULT_CURRENCY,
                 unit=DEFAULT_UNIT,
+                is_blank=False,
             ))
     return out
 
@@ -349,10 +622,22 @@ def _split_source(source: str) -> tuple[Optional[str], Optional[str]]:
     Внутренние источники ('среднерыночная', 'аукцион_старт', 'аукцион_победитель')
     относятся к price_type, supplier остаётся None. Всё остальное — это имя
     поставщика (колонка цены), price_type= 'поставщик'.
+
+    Проверка идёт по подстроке, т.к. реальные имена колонок нормализуются вроде
+    'среднерыночная_цена_рубтн' или 'результаты_аукциона_050225_предлож_победителя',
+    которые не совпадают с точными ключами INTERNAL_SOURCES.
     """
     key = (source or "").strip().lower()
+    if not key:
+        return None, None
+    # Подстрока-детекция внутренних типов (аналог _price_from_path).
+    if "среднерыночн" in key or ("средн" in key and "рыночн" in key):
+        return "среднерыночная", None
+    if "предлож_победител" in key or "победител" in key:
+        return "аукцион_победитель", None
+    if "стартовая" in key or "старт" in key or "стартов" in key:
+        return "аукцион_старт", None
     if key in INTERNAL_SOURCES:
         return source.strip(), None
-    if source and source.strip():
-        return "поставщик", source.strip()
-    return None, None
+    # Всё остальное — колонка поставщика.
+    return "поставщик", source.strip()

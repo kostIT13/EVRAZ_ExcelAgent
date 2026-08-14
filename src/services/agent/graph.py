@@ -141,9 +141,9 @@ class AgentResult:
     sql_query: str
     sql_result: List[Dict[str, Any]]
     retry_count: int
-    status: str  
-    self_corrected: bool = False  
-    from_cache: bool = False  
+    status: str
+    self_corrected: bool = False
+    from_cache: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -172,6 +172,7 @@ class LangGraphAgent:
         question: str,
         top_k: int = 30,
         conversation_history: Optional[List[Dict[str, str]]] = None,
+        conversation_id: Optional[str] = None,
     ) -> AgentResult:
         request_id = str(uuid.uuid4())
         start_time = time.monotonic()
@@ -215,6 +216,8 @@ class LangGraphAgent:
             "question": question,
             "request_id": request_id,
             "top_k": top_k,
+            "conversation_id": conversation_id,
+            "conversation_history": conversation_history or [],
             "entity_candidates": [],
             "entities_for_prompt": None,
             "query_type": None,

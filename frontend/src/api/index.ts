@@ -6,6 +6,7 @@ import type {
   FileDetailResponse,
   FileListResponse,
   HealthResponse,
+  MetricsSummary,
   SheetDetailResponse,
   SheetResponse,
   TraceListItem,
@@ -123,6 +124,7 @@ export function askQuestion(req: AskRequest) {
       top_k: req.top_k ?? 10,
       mode: req.mode ?? 'auto',
       conversation_history: req.conversation_history ?? [],
+      conversation_id: req.conversation_id ?? null,
     },
   });
 }
@@ -134,6 +136,11 @@ export function listTraces(params: { limit?: number } = {}) {
 
 export function getTrace(requestId: string) {
   return get<TraceResponse>(`/trace/${requestId}`);
+}
+
+// ---------- Metrics ----------
+export function getMetricsSummary() {
+  return get<MetricsSummary>('/metrics/summary');
 }
 
 export const api = {
@@ -150,6 +157,7 @@ export const api = {
   askQuestion,
   listTraces,
   getTrace,
+  getMetricsSummary,
 };
 
 export default api;

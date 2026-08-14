@@ -1694,6 +1694,70 @@ body {
 .spin { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* ---------- Metrics page ---------- */
+.metrics {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  flex: 1;
+  min-width: 0;
+}
+
+.metrics__header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.metrics__title {
+  margin: 0;
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: var(--color-text);
+}
+.metrics__subtitle {
+  font-size: 0.82rem;
+  color: var(--color-text-muted);
+  flex: 1;
+  min-width: 160px;
+}
+.metrics__refresh { flex-shrink: 0; }
+
+.metrics__stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 14px;
+}
+
+.metrics__row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 14px;
+  flex: 1;
+  min-height: 0;
+}
+
+.metrics__panel {
+  padding: 16px;
+  min-height: 320px;
+}
+.metrics__panel-title {
+  margin: 0 0 12px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--evraz-gold);
+}
+.metrics__chart {
+  position: relative;
+  height: 260px;
+}
+
+.stat-card__sub {
+  font-size: 0.7rem;
+  color: var(--color-text-muted);
+  margin-top: 2px;
+}
+
 /* ---------- Responsive ---------- */
 @media (max-width: 1100px) {
   .dashboard__row { grid-template-columns: 1fr; }

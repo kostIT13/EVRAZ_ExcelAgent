@@ -8,13 +8,29 @@ class QueryType(str, Enum):
     AGGREGATE = "aggregate"
     CROSS_SHEET = "cross_sheet"
     DELTA = "delta"
+    SUM_BY_SUPPLIER = "sum_by_supplier"
+    FIND_PERIOD = "find_period"
     UNKNOWN = "unknown"
+
+
+class Domain(str, Enum):
+    """Домен вопроса определяет mart-таблицу и схему."""
+    PRICES = "prices"
+    METRICS = "metrics"
+    GENERIC = "generic"
 
 
 class GraphState(TypedDict, total=False):
     question: str
     request_id: str
     top_k: int
+
+    # Память диалога: история предыдущих вопросов/ответов (последние ~5 оборотов).
+    conversation_id: Optional[str]
+    conversation_history: List[Dict[str, Any]]
+
+    # Домен (prices / metrics / generic) — определяет таблицу и схему.
+    domain: Domain
 
     # Entity-resolution (вместо тяжёлого RAG-over-cells).
     # Список top-N кандидатов item/supplier/period, найденных по вопросу.
@@ -30,6 +46,9 @@ class GraphState(TypedDict, total=False):
 
     plan: str
     schema: List[Dict[str, Any]]
+
+    # Структурированный spec для детерминированного SQL-компилятора.
+    sql_spec: Optional[Dict[str, Any]]
 
     sql_query: str
     validation_errors: List[str]

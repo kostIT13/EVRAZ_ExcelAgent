@@ -97,10 +97,10 @@
 ## 5. Миграционный путь
 
 - `raw.*` сохраняется для аудита/переиндексации.
-- Устаревшие embedding-таблицы удалены (миграция `remove_vector_tables`).
-- Векторные сервисы и таблицы (`chunk_embeddings`, `sheet_embeddings`, `col_emb`,
-  `entity_embeddings`) больше не используются и удалены из схемы.
-- Agent-режим пересобран на entity-resolution (без chunk-retrieval).
+- Устаревшая таблица `fact_prices` (промежуточный источник) удалена — факты пишутся
+  напрямую в `mart.price_facts` (миграция `drop_fact_prices`).
+- Устаревшие embedding-таблицы (`chunk_embeddings`, `sheet_embeddings`, `col_emb`,
+  `entity_embeddings`) удалены из схемы.
 
 ---
 

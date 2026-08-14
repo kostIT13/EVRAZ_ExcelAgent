@@ -6,7 +6,8 @@ from typing import Any, List, Optional
 
 from src.core.config import settings
 from src.core.logging_settings import logger
-from src.services.agent.graph_state import GraphState, NODE_CODEGEN
+from src.services.agent.graph_state import Domain, GraphState, NODE_CODEGEN
+from src.services.agent.sql_compiler import compile_spec, validate_generated_sql
 from src.services.llm.llm_client import LLMClient
 
 
@@ -195,6 +196,7 @@ async def codegen_node(
     )
 
     schema_json = json.dumps(schema, ensure_ascii=False, indent=2)
+    domain = state.get("domain")
     candidates_text = json.dumps(entity_candidates[:15], ensure_ascii=False, indent=2)
     candidates_section = (
         f"\nСущности-кандидаты (item_name/supplier/sheet_period):\n{candidates_text}"
@@ -238,20 +240,37 @@ async def codegen_node(
 Сгенерируй SQL-запрос для получения ответа на вопрос.
 
 ВАЖНО: Для всех вопросов о ценах используй mart.price_facts — это единственная
-нормализованная факт-таблица. Не используй fact_prices, entity_dictionary или cells.
+нормализованная факт-таблица. Не используй entity_dictionary или cells.
 
 Для поиска по названию лома используй ILIKE с item_name.
 Для поиска по поставщику используй supplier ILIKE (если price_type = 'поставщик').
 
-КРИТИЧЕСКОЕ ПРАВИЛО ДЛЯ ILIKE:
-- Используй ТОЛЬКО те значения item_name/supplier, которые реально перечислены
-  в сущностях-кандидатах (entity_candidates) в начале вопроса.
-- НЕ выдумывай свои ILIKE-маски — если в кандидатах нет названия, не включай его.
-- Если в кандидатах есть "лом алюминия стружка", используй ILIKE '%стружка%'
-  или '%лом алюминия%', но не выдумывай лишние фрагменты.
+КРИТИЧЕСКОЕ ПРАВИЛО РАЗЛИЧЕНИЯ ВИДОВ ЛОМА:
+- item_name — ЭТО ТОЧНОЕ название конкретного вида лома (например, "Лом меди кусок",
+  "Лом меди трубка с оребрением медь 87,2%", "Лом алюминия (блоки УБРС)" — это
+  РАЗНЫЕ виды с разными ценами).
+- Используй ТОЛЬКО ТОЧНЫЕ значения item_name из entity_candidates, СИМВОЛ-В-СИМВОЛ.
+  НЕ сокращай, НЕ переставляй и НЕ переписывай названия. Даже если в кандидате есть
+  спецсимволы (запятые, %, скобки, пробелы) — копируй название целиком.
+- Если вопрос перечисляет несколько видов (IN-список) — каждый элемент IN берётся
+  РОВНО из entity_candidates, а не выдумывается.
+- Для каждого вида выбирай ТОЧНОЕ совпадение с конкретным кандидатом:
+    WHERE fp.item_name = 'Лом меди кусок'
+  или для нескольких:
+    WHERE fp.item_name IN ('Лом меди кусок', 'Лом меди микс', 'Лом меди трубка с оребрением медь 87,2%')
+- ILIKE '%...%' применяй ТОЛЬКО если пользователь явно просит "все виды"/"любой"/обобщение.
+- НЕ выдумывай название вида, которого нет в entity_candidates — если его нет, значит
+  такого вида в данных нет, и его не нужно включать в запрос.
 
-Пример: если entity_candidates содержит item_name = "лом меди стружка", то
-ILIKE '%медь%' или ILIKE '%стружка%' сработает."""
+ПРИМЕРЫ:
+- "цена на лом алюминия" → item_name = 'Лом алюминия'
+- "цена на трубку 87,2%" → item_name = 'Лом меди трубка с оребрением медь 87,2%'
+  (берём ТОЧНОЕ имя из кандидатов, даже если в вопросе оно сокращено)
+- "все виды алюминия" → item_name ILIKE '%алюмин%'
+
+Выбирай из entity_candidates РОВНО те значения, которые соответствуют словам
+пользователя, и применяй к ним точное сравнение (не ILIKE) во всех случаях,
+кроме явного запроса на все виды."""
 
     messages = [
         {"role": "system", "content": CODEGEN_SYSTEM_PROMPT.format(
@@ -294,6 +313,34 @@ ILIKE '%медь%' или ILIKE '%стружка%' сработает."""
         state["trace"] = state.get("trace", {})
         state["trace"][NODE_CODEGEN] = {"error": str(exc)}
         return state
+
+    # --- Детерминированный SQL-компилятор ---
+    # Если Classifier/Planner дал структурированный spec (строку JSON), компилируем
+    # его в безопасный SELECT напрямую, что надёжнее LLM-генерации текстом.
+    compiled_spec = state.get("sql_spec") or state.get("compiled_spec")
+    if compiled_spec:
+        try:
+            spec = compiled_spec if isinstance(compiled_spec, dict) else json.loads(compiled_spec)
+            state["sql_query"] = compile_spec(spec)
+            state["validation_errors"] = validate_generated_sql(state["sql_query"])
+            logger.info(
+                "CodeGen Node [{}]: SQL compiled from spec ({} chars)",
+                request_id,
+                len(state["sql_query"]),
+            )
+            state["trace"] = state.get("trace", {})
+            state["trace"][NODE_CODEGEN] = {
+                "sql_query": state["sql_query"],
+                "validation_errors": state["validation_errors"],
+                "compiled_from_spec": True,
+            }
+            return state
+        except Exception as exc:
+            logger.warning(
+                "CodeGen Node [{}]: spec compile failed ({}), falling back to LLM SQL",
+                request_id,
+                exc,
+            )
 
     if state["sql_query"]:
         state["validation_errors"] = validate_sql(state["sql_query"])

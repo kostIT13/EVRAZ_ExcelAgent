@@ -34,7 +34,10 @@ services:
     volumes:
       - ./data:/app/data
       - ./src:/app/src
-    command: uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
+    # Без --reload: WatchFiles (reload-воркер) потребляет много памяти в контейнере
+    # и падал с WatchfilesRustInternalError: Cannot allocate memory. Для прод —
+    # образ пересобирается, для dev — код монтируется, но без hot-reload.
+    command: uvicorn src.main:app --host 0.0.0.0 --port 8000
     networks:
       - app_network
 
@@ -45,13 +48,44 @@ services:
     container_name: evraz_frontend
     ports:
       - "8080:80"
+      - "80:80"
     depends_on:
       - service
     networks:
       - app_network
 
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: evraz_prometheus
+    volumes:
+      - ./scripts/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      - service
+    networks:
+      - app_network
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: evraz_grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./scripts/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    ports:
+      - "3001:3000"
+    depends_on:
+      - prometheus
+    networks:
+      - app_network
+
 volumes:
   pgdata:
+  grafana_data:
 
 networks:
   app_network:

@@ -20,7 +20,6 @@ from src.core.db.models import (  # noqa: E402
     ColumnMetadata,
     EntityDictionary,
     ExcelComment,
-    FactPrice,
     File,
     GoldenDataset,
     PriceFact,
