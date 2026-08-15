@@ -1,24 +1,14 @@
 """
-Generation module: RAG-powered answer generation pipeline.
+Generation module: agent-based answer generation pipeline.
 
-Components
-----------
-- ``rag_prompt`` — Prompt templates and context formatting
-- ``verifier`` — Response verification (hallucination detection)
-- ``pipeline`` — End-to-end generation pipeline (retrieve → generate → verify)
+RAG-over-cells и векторные эмбеддинги удалены из архитектуры. Здесь
+остался только пайплайн ``run_agent`` (запуск агента с Self-Correction
+и логированием в БД).
 """
 
-from src.services.generation.rag_prompt import build_rag_prompt, format_context, SYSTEM_PROMPT
-from src.services.generation.verifier import Verifier, VerificationResult
-from src.services.generation.pipeline import GenerationPipeline, GenerationResult, pipeline
+from src.services.generation.pipeline import GenerationPipeline, pipeline
 
 __all__ = [
-    "build_rag_prompt",
-    "format_context",
-    "SYSTEM_PROMPT",
-    "Verifier",
-    "VerificationResult",
     "GenerationPipeline",
-    "GenerationResult",
     "pipeline",
 ]
