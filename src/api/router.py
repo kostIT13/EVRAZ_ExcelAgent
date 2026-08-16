@@ -51,8 +51,6 @@ async def upload_file(
             f"Invalid file type '{suffix}'. Allowed: {', '.join(ALLOWED_EXTENSIONS)}"
         )
 
-    # Читаем только MAX_FILE_SIZE + 1 байт, чтобы не загружать огромный файл в память.
-    # Если файл больше лимита — сразу отклоняем, не читая его целиком.
     content = await file.read(MAX_FILE_SIZE + 1)
     if len(content) > MAX_FILE_SIZE:
         raise FileTooLargeError(
@@ -64,8 +62,6 @@ async def upload_file(
         tmp_path = Path(tmp.name)
 
     try:
-        # Асинхронный ingestion: парсинг+нормализация уходят в фоновую очередь.
-        # Клиент сразу получает file_id и опрашивает статус через GET /files/{id}.
         from src.services.excel.ingestion_queue import ingestion_queue
         file_id = await ingestion_queue.enqueue(tmp_path)
         file_record = await service.get_file(file_id)
@@ -84,14 +80,12 @@ async def get_ingestion_status(
     file_id: int,
     service: FileServiceDependency,
 ):
-    """Опрос статуса асинхронной обработки файла (uploaded/processing/ready/failed)."""
     from src.services.excel.ingestion_queue import ingestion_queue
     file_record = await service.get_by_id(file_id)
     status = ingestion_queue.get_status(file_id)
     if file_record and file_record.status == "ready":
         return FileDetailResponse.model_validate(file_record)
     if file_record:
-        # Возвращаем текущий статус обработки.
         data = FileDetailResponse.model_validate(file_record).model_dump()
         data["status"] = status.get("status", file_record.status)
         return FileDetailResponse(**data)
@@ -176,12 +170,6 @@ async def reindex_file(
     file_id: int,
     service: FileServiceDependency,
 ):
-    """Пересоздаёт mart.price_facts и справочники сущностей для файла.
-
-    Векторный RAG-индекс (Qdrant) удалён из архитектуры, поэтому переиндексация
-    означает повторную нормализацию raw.cells -> mart.price_facts и пересборку
-    списка сущностей для pg_trgm-сопоставления.
-    """
     await service.get_by_id(file_id)
 
     from src.services.mart.normalizer import normalize_file_to_mart

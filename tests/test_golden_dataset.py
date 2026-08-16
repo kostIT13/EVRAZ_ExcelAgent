@@ -1,10 +1,3 @@
-"""Golden dataset: прогон вопросов через агента и сверка с ожиданиями.
-
-Запуск в CI при каждом изменении промптов/схемы. Сравнивает сгенерированный
-SQL (по сигнатуре: таблица mart.price_facts, колонки, фильтры) и статус
-результата с ожидаемыми. Полная числовая сверка выполняется при наличии
-реальных данных (pytest marker 'golden').
-"""
 from __future__ import annotations
 
 import json
@@ -22,13 +15,10 @@ def _load_golden() -> List[Dict[str, Any]]:
 
 
 def _check_sql_signature(sql: str, hint: str) -> bool:
-    """Проверяет, что SQL содержит ключевые фрагменты ожидания."""
     sql_lower = sql.lower()
     hint_lower = hint.lower()
-    # Проверяем обязательную таблицу mart.price_facts.
     if "price_facts" not in sql_lower:
         return False
-    # Разбиваем hint по логическим маркерам и проверяем вхождение каждого.
     required_parts = [p.strip() for p in hint_lower.split(" AND ") if p.strip()]
     return all(part in sql_lower for part in required_parts)
 
@@ -46,19 +36,12 @@ def _check_result_type(result: List[Dict[str, Any]], expected: str) -> bool:
 @pytest.mark.golden
 @pytest.mark.parametrize("item", _load_golden(), ids=lambda it: it["id"])
 def test_golden_question(item: Dict[str, Any]):
-    """Проверяет генерацию SQL по golden-вопросу (без прогона агента).
-
-    Требует LLM-модель. Для CI можно подменить агент заглушкой, возвращающей
-    SQL из expected_sql_hint — тогда тест проверяет только сигнатуру.
-    """
-    # Реальная интеграция с агентом (LLM) — включается отдельным флагом.
     if not pytest.mark.golden:
         pytest.skip("LLM integration disabled")
 
     from src.services.agent.graph import langgraph_agent
 
-    result = pytest.mark.anyio  # noqa: F841
-    # Используем asyncio-обёртку pytest.
+    result = pytest.mark.anyio  
     import asyncio
 
     async def _run():
@@ -82,7 +65,6 @@ def test_golden_question(item: Dict[str, Any]):
 
 
 def test_golden_json_valid():
-    """Проверяет валидность самого golden-файла (без LLM)."""
     items = _load_golden()
     assert 30 <= len(items) <= 50 or len(items) >= 10, (
         f"Golden dataset должен содержать 30-50 вопросов, сейчас {len(items)}"
@@ -92,7 +74,6 @@ def test_golden_json_valid():
 
 
 def test_sql_signature_helper():
-    """Юнит-тест помощника проверки сигнатуры SQL."""
     assert _check_sql_signature(
         "SELECT value FROM mart.price_facts WHERE price_type='среднерыночная' "
         "AND item_name ILIKE '%медь%' AND sheet_period='2025-01'",

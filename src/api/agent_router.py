@@ -50,12 +50,6 @@ async def ask_question(
         body.mode,
         is_retry,
     )
-
-    # RAG-only режим (mode=rag) и fallback пересобраны на entity-resolution:
-    # вместо chunk-retrieval через Qdrant агент проходит тот же граф
-    # (Classifier → Planner → CodeGen → Executor), который получает сущности из
-    # mart.price_facts + pg_trgm. Это fallback на случай, если полный agent
-    # по какой-то причине не отработал.
     if body.mode == "rag":
         rag_result = await pipeline.run_agent(
             question=body.question,

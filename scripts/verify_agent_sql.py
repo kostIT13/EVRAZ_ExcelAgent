@@ -1,4 +1,3 @@
-"""Проверка SQL, который генерировал агент, напрямую в БД."""
 import asyncio
 
 from sqlalchemy import text
@@ -19,7 +18,6 @@ WHERE fp.item_name ILIKE '%алюмин%'
         rows = (await s.execute(text(sql))).fetchall()
         print("MIN result:", rows)
 
-        # Контроль: сколько строк с price_type='аукцион_победитель' по алюминию.
         cnt = (await s.execute(text(
             "SELECT count(*) FROM mart.price_facts "
             "WHERE item_name ILIKE '%алюмин%' AND price_type='аукцион_победитель'"

@@ -56,9 +56,6 @@ def build_agent_graph() -> StateGraph:
     workflow.add_node(NODE_ANSWER, answer_node)
     workflow.add_node(NODE_FAILED, failed_node)
 
-    # Тяжёлый RAG-узел удалён из начала графа. Вместо него entity-resolution
-    # выполняется внутри Classifier/Planner (см. classifier_node/planner_node),
-    # которые заполняют state['entity_candidates'] и передают его в CodeGen.
     workflow.set_entry_point(NODE_CLASSIFIER)
 
     workflow.add_conditional_edges(
@@ -272,7 +269,6 @@ class LangGraphAgent:
         else:
             status = "low_confidence"
 
-        # Prometheus-наблюдаемость: RPS, статус, латентность.
         try:
             from src.core.metrics import observe_ask
             observe_ask(status, latency_ms / 1000.0)

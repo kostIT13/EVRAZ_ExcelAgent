@@ -1,20 +1,9 @@
-"""API для Schema Inference / Template Fingerprint: подтверждение LLM-схем листов.
-
-Реализует:
-- POST /files/{file_id}/sheets/{sheet_id}/infer-schema — вызвать LLM-распознавание.
-- POST /files/{file_id}/sheets/{sheet_id}/confirm-schema — подтвердить схему
-  (пользователь принял/исправил распознанную структуру), сохранить в
-  mart.sheet_templates как confirmed и переиспользовать для похожих файлов.
-"""
 from __future__ import annotations
-
 from typing import Any, Dict, Optional
-
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from src.core.db.database import get_db
 from src.core.db.models import Sheet, SheetTemplate
 from src.core.excel.schema_inference import (
@@ -36,7 +25,6 @@ class ConfirmSchemaRequest(BaseModel):
 
 
 async def _load_sheet_context(session: AsyncSession, file_id: int, sheet_id: int) -> Dict[str, Any]:
-    """Загружает сырую сетку ячеек листа и merged cells для fingerprint/inference."""
     sheet_result = await session.execute(
         select(Sheet).where(Sheet.id == sheet_id, Sheet.file_id == file_id)
     )
@@ -103,7 +91,6 @@ async def infer_schema(
         sheet_name=sheet.original_name,
     )
 
-    # Сохраняем результат со статусом pending_confirmation, не пишем в mart.price_facts.
     if template is None:
         session.add(SheetTemplate(
             fingerprint=fingerprint,

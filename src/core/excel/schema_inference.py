@@ -1,19 +1,6 @@
-"""Schema Inference — LLM-распознавание структуры разнородных таблиц.
-
-Проблема: жёсткие эвристики normalize.py не покрывают сдвинутые шапки,
-вложенные заголовки, слитые ячейки и "мусорные" числовые артефакты. Этот модуль
-передаёт сырую сетку ячеек листа (координаты + значения, первые ~30 строк) LLM
-и получает структурированную схему с Pydantic-валидацией.
-
-Схема применяется только после подтверждения пользователем (status=confirmed в
-mart.sheet_templates), либо используется как fallback-подсказка для агента.
-"""
 from __future__ import annotations
-
 from typing import Any, Dict, List, Optional
-
 from pydantic import BaseModel, Field
-
 from src.core.logging_settings import logger
 from src.services.llm.llm_client import LLMClient
 
@@ -33,7 +20,6 @@ class SheetSchema(BaseModel):
 
 
 def serialize_cells_grid(cells: Dict[str, Any], max_rows: int = 30) -> str:
-    """Сериализует сырую сетку ячеек для LLM (координата → значение)."""
     lines = []
     for coord in sorted(cells.keys()):
         row_num = _row_index(coord)
@@ -51,8 +37,6 @@ def _row_index(coord: str) -> int:
 
 
 class SchemaInferenceService:
-    """Вызывает LLM для распознавания структуры листа."""
-
     SYSTEM_PROMPT = """Ты — эксперт по распознаванию структуры Excel-таблиц.
 Получаешь сырую сетку ячеек (координата: значение). Определи:
 - какие строки — заголовки (могут быть многострочными/вложенными),
@@ -77,7 +61,6 @@ class SchemaInferenceService:
             "Распознай схему листа и верни JSON."
         )
         try:
-            # parse_structured — модульная функция из llm_client, а не метод LLMClient.
             from src.services.llm.llm_client import parse_structured
 
             schema = await parse_structured(
@@ -98,5 +81,4 @@ class SchemaInferenceService:
             )
 
 
-# Singleton
 schema_inference_service = SchemaInferenceService()

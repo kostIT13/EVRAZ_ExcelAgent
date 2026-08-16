@@ -1,31 +1,14 @@
-"""Асинхронный ingestion через лёгкую in-process очередь.
-
-Выносит парсинг + нормализацию + entity-resolution из синхронного /files/upload
-в фоновую задачу. Клиент сразу получает file_id и опрашивает статус через
-GET /files/{file_id}.
-
-Статусы обработки: uploaded → processing → ready | failed.
-(При использовании schema inference дополнительно появляется
-schema_pending_confirmation, но базовый поток остаётся upload → ready.)
-
-Для прод-развёртывания замените INGESTION_QUEUE_MODE на "celery"/"arq" —
-интерфейс enqueue()/get_status() сохраняется, под капотом меняется только
-брокер задач.
-"""
 from __future__ import annotations
-
 import asyncio
 import time
 from pathlib import Path
 from typing import Dict, Optional
-
 from src.core.config import settings
 from src.core.logging_settings import logger
 from src.services.excel.ingestion_service import ExcelIngestionService
 
 
 class IngestionQueue:
-    """In-process очередь фоновой обработки файлов."""
 
     def __init__(self) -> None:
         self._queue: "asyncio.Queue[int]" = asyncio.Queue()
@@ -45,18 +28,10 @@ class IngestionQueue:
                 pass
 
     async def enqueue(self, file_path: Path) -> int:
-        """Ставит файл в очередь, возвращает file_id-маркер для опроса.
-
-        Примечание: чтобы вернуть реальный file_id, сначала создаём запись File
-        (status=uploaded) через ingestion_service, затем обрабатываем в фоне.
-        """
         service = ExcelIngestionService()
         file_record = await service.create_pending_file(file_path)
         file_id = file_record.id
         self._status[file_id] = {"status": "uploaded", "path": str(file_path)}
-
-        # Гарантируем, что фоновый воркер запущен (lifespan мог не стартовать его
-        # при определённых путях запуска, напр. uvicorn без lifespan или reload).
         await self.start()
         await self._queue.put(file_id)
         return file_id
@@ -80,8 +55,6 @@ class IngestionQueue:
                 self._queue.task_done()
 
     async def _process(self, file_id: int) -> None:
-        # Сохраняем путь ДО перезаписи словаря статуса, иначе ключ "path"
-        # теряется и обработка уходит в process_existing (без реального парсинга).
         path = self._status[file_id].get("path")
         self._status[file_id] = {"status": "processing", "started_at": time.time()}
 

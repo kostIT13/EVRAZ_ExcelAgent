@@ -48,7 +48,6 @@ MIN_CONFIDENCE_PASS = 0.5
 
 
 def _format_result_deterministically(sql_result: List[Dict[str, Any]], max_rows: int = 10) -> str:
-    """Форматирует результат SQL-запроса в читаемый русский текст."""
     if not sql_result:
         return "Данные не найдены."
 

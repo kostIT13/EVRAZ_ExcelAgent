@@ -1,10 +1,3 @@
-"""Generation pipeline (agent-only, RAG-режим удалён).
-
-RAG-over-cells и векторные эмбеддинги полностью удалены из архитектуры.
-Здесь остался только путь ``run_agent()``: запуск агента
-(Classifier → Planner → CodeGen → Executor → Verifier) с автоматическим
-Self-Correction и логированием результата в БД.
-"""
 from __future__ import annotations
 from typing import List, Optional, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,22 +25,6 @@ class GenerationPipeline:
         conversation_history: Optional[List[Dict[str, str]]] = None,
         conversation_id: Optional[str] = None,
     ) -> AgentResult:
-        """Запустить агента (Classifier → Planner → CodeGen → Executor → Verifier)
-        с автоматическим Self-Correction при низком качестве ответа.
-
-        Если после первого прохода confidence < 0.5 или статус failed/low_confidence,
-        агент автоматически делает второй проход с контекстом предыдущей ошибки.
-
-        Args:
-            question: Вопрос пользователя.
-            top_k: Количество сущностей для поиска.
-            session: Опциональная асинхронная сессия.
-            conversation_history: История предыдущих попыток для self-correction.
-            conversation_id: Идентификатор диалога.
-
-        Returns:
-            AgentResult с ответом и полным trace.
-        """
         is_retry = bool(conversation_history)
         logger.info(
             "Pipeline [{}]: running agent for '{}' (retry={})",
@@ -56,7 +33,6 @@ class GenerationPipeline:
             is_retry,
         )
 
-        # --- Первый проход ---
         result = await self._agent.run(
             question=question,
             top_k=top_k,
@@ -64,7 +40,6 @@ class GenerationPipeline:
             conversation_id=conversation_id,
         )
 
-        # --- Self-Correction: если ответ низкого качества, пробуем ещё раз ---
         needs_correction = (
             result.status in ("failed", "low_confidence")
             or result.confidence < 0.5
@@ -81,13 +56,11 @@ class GenerationPipeline:
                 result.confidence,
             )
 
-            # Формируем историю из предыдущей попытки
             correction_history = [
                 {"role": "user", "content": question},
                 {"role": "assistant", "content": result.answer or "Не удалось получить ответ"},
             ]
 
-            # Добавляем информацию об ошибке, если есть
             if result.trace:
                 error_details = []
                 for step_name in ["rag", "classifier", "planner", "codegen", "executor", "verifier"]:
@@ -102,7 +75,6 @@ class GenerationPipeline:
                         "content": f"Ошибки при выполнении: {'; '.join(error_details)}",
                     })
 
-            # Второй проход с историей
             result = await self._agent.run(
                 question=question,
                 top_k=top_k,
@@ -118,7 +90,6 @@ class GenerationPipeline:
                 result.confidence,
             )
 
-        # Логируем в БД
         await self._log_agent_to_db(
             result=result,
             session=session,
@@ -131,7 +102,6 @@ class GenerationPipeline:
         result: AgentResult,
         session: Optional[AsyncSession],
     ) -> None:
-        """Persist agent query log to the database."""
         trace = {
             "agent_trace": result.trace,
             "query_type": result.query_type,

@@ -1,19 +1,7 @@
-"""Детерминированный SQL-компилятор: структурированный JSON -> SQL.
-
-Вместо генерации SQL текстом LLM (ненадёжно), агент выдаёт структурированный
-JSON (таблица, колонки, фильтры, агрегация), который этот модуль компилирует
-в безопасный SELECT. Поддерживает обе mart-таблицы (price_facts, metrics),
-агрегации AVG/SUM/MIN/MAX, группировку, сортировку и лимит.
-
-Безопасность: компилятор не позволяет никакие операции кроме SELECT и строго
-ограничивает схему (только mart.*) и имена колонок белым списком.
-"""
 from __future__ import annotations
-
 import re
 from enum import Enum
 from typing import Any, Dict, List, Optional
-
 from src.core.logging_settings import logger
 
 
@@ -27,34 +15,28 @@ class QueryType(str, Enum):
     FIND_PERIOD = "find_period"
 
 
-# Белый список колонок для mart.price_facts.
 _PRICE_FACTS_COLUMNS = {
     "id", "file_id", "sheet_id", "source_row_ref", "sheet_period", "item_name",
     "supplier", "price_type", "value", "currency", "unit", "is_blank",
 }
 
-# Белый список колонок для mart.metrics.
 _METRICS_COLUMNS = {
     "id", "file_id", "sheet_id", "source_row_ref", "dimension_type", "dimension",
     "period", "metric_type", "metric", "value", "unit", "is_blank",
 }
 
-# Допустимые таблицы (только mart-схема, read-only).
 ALLOWED_TABLES = {
     "mart.price_facts": _PRICE_FACTS_COLUMNS,
     "mart.metrics": _METRICS_COLUMNS,
 }
 
-# Допустимые агрегатные функции.
 AGG_FUNCS = {"AVG", "SUM", "MIN", "MAX", "COUNT"}
 
-# Допустимые операторы сравнения для фильтров.
 _COMPARE_OPS = {"=", "!=", "<>", "<", "<=", ">", ">="}
 _LIKE_OPS = {"ILIKE", "LIKE"}
 
 
 def _quote(value: Any) -> str:
-    """Безопасно экранирует строковый литерал."""
     if isinstance(value, bool):
         return "TRUE" if value else "FALSE"
     if isinstance(value, (int, float)):
@@ -71,7 +53,6 @@ def _validate_column(table: str, column: str) -> None:
 
 
 def compile_filter(table: str, cond: Dict[str, Any]) -> str:
-    """Компилирует одно условие фильтра в SQL-выражение."""
     column = cond.get("column")
     op = (cond.get("op") or "=").upper()
     value = cond.get("value")
@@ -97,11 +78,9 @@ def compile_filter(table: str, cond: Dict[str, Any]) -> str:
 
 
 def compile_filters(table: str, filters: List[Dict[str, Any]]) -> List[str]:
-    """Компилирует список фильтров (AND-связка)."""
     out = []
     for f in filters or []:
         if "condition" in f and isinstance(f["condition"], (list, tuple)):
-            # Несколько условий в одной группе — объединяем через OR.
             group = " OR ".join(compile_filter(table, c) for c in f["condition"])
             out.append(f"({group})")
         elif "or" in f and isinstance(f["or"], list):
@@ -113,25 +92,10 @@ def compile_filters(table: str, filters: List[Dict[str, Any]]) -> List[str]:
 
 
 def compile_select(spec: Dict[str, Any]) -> str:
-    """Компилирует структурированный запрос в SELECT SQL.
-
-    Ожидаемая структура spec:
-    {
-      "table": "mart.price_facts" | "mart.metrics",
-      "columns": ["item_name", "value"],          # колонки для SELECT
-      "filters": [{column, op, value}, ...],
-      "aggregation": {func: "AVG", column: "value", group_by: ["supplier"]},
-      "order_by": [{"column": "value", "desc": true}],
-      "limit": 50,
-      "distinct": false,
-      "join": { ... }   # опционально (для delta / cross_sheet) — не реализуется
-    }
-    """
     table = spec.get("table")
     if table not in ALLOWED_TABLES:
         raise ValueError(f"Таблица должна быть одной из: {list(ALLOWED_TABLES)}")
 
-    # SELECT-часть.
     columns = spec.get("columns") or ["*"]
     select_items: List[str] = []
     aggregation = spec.get("aggregation")
@@ -159,13 +123,11 @@ def compile_select(spec: Dict[str, Any]) -> str:
                 _validate_column(table, c)
                 select_items.append(f"{table}.{c}")
 
-    # WHERE-часть.
     where = compile_filters(table, spec.get("filters") or [])
     where_sql = f" WHERE {' AND '.join(where)}" if where else ""
 
     group_sql = f" GROUP BY {', '.join(table + '.' + g for g in group_by)}" if group_by else ""
 
-    # ORDER BY.
     order_sql = ""
     order_by = spec.get("order_by") or []
     if order_by:
@@ -177,7 +139,6 @@ def compile_select(spec: Dict[str, Any]) -> str:
             parts.append(f"{table}.{col}{direction}")
         order_sql = f" ORDER BY {', '.join(parts)}"
 
-    # LIMIT.
     limit = spec.get("limit")
     if limit is None:
         limit = 100  # безопасный дефолт
@@ -194,11 +155,6 @@ def compile_select(spec: Dict[str, Any]) -> str:
 
 
 def compile_spec(spec: Dict[str, Any]) -> str:
-    """Высокоуровневый компилятор по типу запроса.
-
-    Дополнительно обрабатывает типы CROSS_SHEET / DELTA (сравнение по периодам),
-    строя подзапросы по двух периодам.
-    """
     qtype = spec.get("query_type")
     try:
         if qtype in (QueryType.CROSS_SHEET, QueryType.DELTA):
@@ -210,7 +166,6 @@ def compile_spec(spec: Dict[str, Any]) -> str:
 
 
 def _compile_period_compare(spec: Dict[str, Any]) -> str:
-    """Строит сравнение между двумя периодами (подзапросы)."""
     table = spec.get("table")
     period_from = spec.get("period_from")
     period_to = spec.get("period_to")

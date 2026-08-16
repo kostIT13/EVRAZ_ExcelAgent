@@ -24,27 +24,13 @@ class ExcelIngestionService:
             return result
 
     async def process_file(self, file_path: Path) -> File:
-        """Полный цикл ingestion: raw-парсинг + нормализация в mart.price_facts.
-
-        Шаги:
-        1. Парсинг raw (files/sheets/columns/cells) — выполняется репозиторием.
-        2. Нормализация raw.cells -> mart.price_facts (идемпотентно).
-        3. Entity-resolution: извлечение списка сущностей item/supplier/period
-           (без эмбеддинга) для pg_trgm-сопоставления и промпта.
-        """
         async def _process(repo):
             file_record = await repo.process_file(file_path)
 
-            # Шаг 2: нормализация в mart.price_facts.
             stats = await normalize_file_to_mart(file_record.id, session=repo.session)
 
-            # Шаг 3: entity-resolution — сбор уникальных сущностей
-            # (item_name/supplier/sheet_period) напрямую из mart.price_facts
-            # (без эмбеддингов) для pg_trgm-сопоставления и передачи в промпт.
             entity_stats = await repo.index_entities(file_record.id)
 
-            # Логируем время индексации (до/после), чтобы подтвердить,
-            # что ingestion теперь занимает секунды, а не минуты.
             logger.info(
                 "Ingestion timing: mart={}ms, entities={}, previous=RAG-over-cells (minutes)",
                 stats.get("elapsed_ms", 0),
@@ -55,7 +41,6 @@ class ExcelIngestionService:
         return await self._run_with_session(_process)
 
     async def create_pending_file(self, file_path: Path) -> File:
-        """Создаёт запись File со статусом 'uploaded' до фоновой обработки."""
         from src.core.excel.parser import ExcelParser
 
         async def _create(repo):
@@ -65,7 +50,6 @@ class ExcelIngestionService:
         return await self._run_with_session(_create)
 
     async def process_existing(self, file_id: int) -> File:
-        """Обрабатывает уже созданную запись File (для очереди, без повторного парсинга)."""
         from src.core.excel.parser import ExcelParser
         from src.core.db.models import File as FileModel
         from sqlalchemy import select

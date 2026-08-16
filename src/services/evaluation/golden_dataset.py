@@ -1,30 +1,15 @@
-"""Golden Dataset Service — для регрессионного тестирования.
-
-Хранит эталонные вопросы с правильными SQL/ответами.
-Позволяет объективно оценивать качество системы.
-"""
-
 from __future__ import annotations
-
 import json
 import re
 from typing import Any, Dict, List, Optional
-
 from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from src.core.db.database import async_session_maker
 from src.core.db.models import GoldenDataset
 from src.core.logging_settings import logger
 
 
 class GoldenDatasetService:
-    """Сервис для работы с golden dataset."""
-
-    # ------------------------------------------------------------------
-    # CRUD
-    # ------------------------------------------------------------------
-
     async def add_entry(
         self,
         question: str,
@@ -37,7 +22,6 @@ class GoldenDatasetService:
         tags: Optional[List[str]] = None,
         session: Optional[AsyncSession] = None,
     ) -> GoldenDataset:
-        """Добавляет эталонный вопрос в golden dataset."""
         async with session or async_session_maker() as s:
             entry = GoldenDataset(
                 question=question,
@@ -64,7 +48,6 @@ class GoldenDatasetService:
         entry_id: int,
         session: Optional[AsyncSession] = None,
     ) -> Optional[GoldenDataset]:
-        """Получает запись по ID."""
         async with session or async_session_maker() as s:
             result = await s.execute(
                 select(GoldenDataset).where(GoldenDataset.id == entry_id)
@@ -77,7 +60,6 @@ class GoldenDatasetService:
         active_only: bool = True,
         session: Optional[AsyncSession] = None,
     ) -> List[GoldenDataset]:
-        """Получает все записи, опционально фильтруя по категории."""
         async with session or async_session_maker() as s:
             query = select(GoldenDataset)
             if active_only:
@@ -93,7 +75,6 @@ class GoldenDatasetService:
         entry_id: int,
         session: Optional[AsyncSession] = None,
     ) -> bool:
-        """Удаляет запись."""
         async with session or async_session_maker() as s:
             result = await s.execute(
                 select(GoldenDataset).where(GoldenDataset.id == entry_id)
@@ -106,9 +87,6 @@ class GoldenDatasetService:
             logger.info("Golden dataset: deleted entry #{}", entry_id)
             return True
 
-    # ------------------------------------------------------------------
-    # Evaluation
-    # ------------------------------------------------------------------
 
     async def evaluate(
         self,
@@ -117,17 +95,6 @@ class GoldenDatasetService:
         actual_result: Optional[List[Dict[str, Any]]] = None,
         session: Optional[AsyncSession] = None,
     ) -> Dict[str, Any]:
-        """Сравнивает фактический SQL/результат с эталоном.
-
-        Args:
-            entry_id: ID записи в golden dataset.
-            actual_sql: Фактический SQL.
-            actual_result: Фактический результат.
-            session: Опциональная сессия БД.
-
-        Returns:
-            Dict с результатами сравнения.
-        """
         entry = await self.get_entry(entry_id, session)
         if not entry:
             return {"error": f"Entry #{entry_id} not found"}
@@ -158,15 +125,6 @@ class GoldenDatasetService:
         category: Optional[str] = None,
         session: Optional[AsyncSession] = None,
     ) -> Dict[str, Any]:
-        """Запускает полную оценку по всем записям.
-
-        Args:
-            category: Опциональная категория для фильтрации.
-            session: Опциональная сессия БД.
-
-        Returns:
-            Dict с агрегированными результатами.
-        """
         entries = await self.get_all_entries(category=category, session=session)
 
         if not entries:
@@ -187,13 +145,8 @@ class GoldenDatasetService:
             "entries": results,
         }
 
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
-
     @staticmethod
     def _normalize_sql(sql: str) -> str:
-        """Нормализует SQL для сравнения."""
         if not sql:
             return ""
         sql = sql.strip().lower()
@@ -206,7 +159,6 @@ class GoldenDatasetService:
         actual: List[Dict[str, Any]],
         expected: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
-        """Сравнивает два набора результатов."""
         if not actual and not expected:
             return {"match": True, "detail": "both empty"}
 
@@ -216,7 +168,6 @@ class GoldenDatasetService:
                 "detail": f"row count mismatch: actual={len(actual)}, expected={len(expected)}",
             }
 
-        # Сравниваем первые N строк
         match = True
         for i, (a, e) in enumerate(zip(actual, expected)):
             if a != e:
@@ -230,5 +181,4 @@ class GoldenDatasetService:
         }
 
 
-# Singleton
 golden_dataset_service: GoldenDatasetService = GoldenDatasetService()

@@ -1,8 +1,3 @@
-"""Централизованная обработка ошибок FastAPI.
-
-Сервисы могут кидать любые исключения, а здесь мы формируем
-корректный HTTP-ответ. Это избавляет эндпоинты от try/except.
-"""
 from __future__ import annotations
 
 from fastapi import FastAPI, Request
@@ -12,7 +7,6 @@ from src.core.logging_settings import logger
 
 
 class AppError(Exception):
-    """Базовое бизнес-исключение приложения."""
 
     status_code = 400
 
@@ -40,7 +34,6 @@ class ProcessingError(AppError):
 
 
 def register_exception_handlers(app: FastAPI) -> None:
-    """Регистрирует глобальные обработчики исключений."""
 
     @app.exception_handler(AppError)
     async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:

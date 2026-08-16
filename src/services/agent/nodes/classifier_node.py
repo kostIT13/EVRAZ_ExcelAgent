@@ -192,7 +192,6 @@ async def classifier_node(
 
 
 def _heuristic_domain(question: str) -> str:
-    """Fallback-определение домена по ключевым словам вопроса."""
     q = (question or "").lower()
     if any(k in q for k in ("план", "факт", "отклонен", "шихт", "процент", "бюджет", "доля")):
         return "metrics"

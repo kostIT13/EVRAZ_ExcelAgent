@@ -1,18 +1,5 @@
-"""Шаг entity-resolution внутри графа (pg_trgm, без векторных эмбеддингов).
-
-По вопросу пользователя находит top-N похожих item_name/supplier/period из
-mart.price_facts через Postgres pg_trgm (similarity()/%) и сохраняет их как
-список кандидатов в state['entity_candidates']. Кандидаты передаются в
-Planner/CodeGen как контекст вместо RAG-контекста.
-
-Если pg_trgm не дал результатов — в state кладётся полный список сущностей
-для промпта (fallback), чтобы LLM сам сопоставил вопрос с существующими
-наименованиями.
-"""
 from __future__ import annotations
-
 from typing import Any, List
-
 from src.core.logging_settings import logger
 from src.services.agent.graph_state import GraphState
 from src.services.entity_resolution.entity_resolver import (

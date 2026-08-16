@@ -1,7 +1,5 @@
 from __future__ import annotations
-
 from typing import Dict, List
-
 from prometheus_client import (
     Counter,
     Gauge,
@@ -30,23 +28,19 @@ NODE_LATENCY = Histogram(
     buckets=(0.1, 0.5, 1, 2, 5, 10, 30, 60),
 )
 
-# Доля failed / low_confidence.
 FAILED_TOTAL = Counter("evraz_failed_total", "Число запросов со статусом failed")
 LOW_CONFIDENCE_TOTAL = Counter(
     "evraz_low_confidence_total", "Число запросов со статусом low_confidence"
 )
 
-# LLM token usage / стоимость.
 LLM_TOKENS = Counter(
     "evraz_llm_tokens_total", "Потреблённые токены LLM", ["node", "kind"]
 )
 
-# Стоимость LLM (в рублях) по узлам. Считается как суммарные токены * цена за токен.
 LLM_COST_RUB = Counter(
     "evraz_llm_cost_rub_total", "Оценочная стоимость LLM-вызовов (руб.)", ["node"]
 )
 
-# Цены за токен (руб./1К токенов) — оценочные. При желании вынести в .env.
 RUB_PER_1K_PROMPT = 0.15
 RUB_PER_1K_COMPLETION = 0.60
 
@@ -66,7 +60,6 @@ def observe_node(node: str, latency_s: float) -> None:
 
 def observe_llm_tokens(node: str, kind: str, count: float) -> None:
     LLM_TOKENS.labels(node=node, kind=kind).inc(count)
-    # Оцениваем стоимость: prompt и completion считаем по разным тарифам.
     if kind == "prompt":
         LLM_COST_RUB.labels(node=node).inc((count / 1000.0) * RUB_PER_1K_PROMPT)
     elif kind == "completion":
@@ -74,11 +67,9 @@ def observe_llm_tokens(node: str, kind: str, count: float) -> None:
 
 
 def _counter_values(metric) -> List[tuple]:
-    """Возвращает [(labels_dict, value)] из прометиуса-метрики через collect()."""
     out: List[tuple] = []
     for m in metric.collect():
         for s in m.samples:
-            # Отбрасываем *_created.
             if s.name.endswith("_created"):
                 continue
             out.append((dict(s.labels), float(s.value)))
@@ -86,7 +77,6 @@ def _counter_values(metric) -> List[tuple]:
 
 
 def _histogram_sum_count(metric) -> tuple[float, float]:
-    """Возвращает (sum, count) гистограммы через collect()."""
     s = 0.0
     c = 0.0
     for m in metric.collect():
@@ -99,11 +89,6 @@ def _histogram_sum_count(metric) -> tuple[float, float]:
 
 
 def metrics_summary() -> dict:
-    """Агрегированные метрики для фронтенд-страницы 'Метрики'.
-
-    Снимает значения с prometheus-счётчиков/гистограмм через collect(),
-    чтобы фронт мог показать токены, стоимость, RPS и статусы.
-    """
     ask_by_status: Dict[str, float] = {}
     for labels, value in _counter_values(ASK_REQUESTS):
         ask_by_status[labels.get("status", "unknown")] = value

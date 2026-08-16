@@ -13,17 +13,11 @@ QUERY_TIMEOUT_SECONDS = 30
 
 
 def _extract_iliase_from_sql(sql: str) -> List[str]:
-    """Извлекает все ILIKE-паттерны из SQL-запроса.
-    
-    Возвращает список строк, которые ищутся через ILIKE.
-    Например: '%медь%' → 'медь', '%лом алюминия%' → 'лом алюминия'
-    """
     patterns = re.findall(r"ILIKE\s+'%([^']+)%'", sql, re.IGNORECASE)
     return [p.strip() for p in patterns]
 
 
 def _extract_periods_from_sql(sql: str) -> List[str]:
-    """Извлекает все условия по period из SQL-запроса."""
     periods = re.findall(r"period\s*=\s*'([^']+)'", sql, re.IGNORECASE)
     periods += re.findall(r"period\s+IN\s*\(([^)]+)\)", sql, re.IGNORECASE)
     # Разбираем IN-список
@@ -37,8 +31,6 @@ def _extract_periods_from_sql(sql: str) -> List[str]:
 
 
 def _extract_price_source_from_sql(sql: str) -> Optional[str]:
-    """Извлекает условие по price_source из SQL."""
-    # ILIKE по price_source
     match = re.search(r"price_source\s+ILIKE\s+'%([^']+)%'", sql, re.IGNORECASE)
     if match:
         return match.group(1)
@@ -50,10 +42,6 @@ def _extract_price_source_from_sql(sql: str) -> Optional[str]:
 
 
 def _collect_samples_from_schema(schema: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Собирает все samples из схемы в единый список.
-
-    Колонка item_name берётся из mart.price_facts (нормализованная long-таблица).
-    """
     all_samples: List[Dict[str, Any]] = []
     seen_items: Set[str] = set()
     for sheet in schema:
@@ -67,11 +55,6 @@ def _collect_samples_from_schema(schema: List[Dict[str, Any]]) -> List[Dict[str,
 
 
 def _split_sql_list(content: str) -> List[str]:
-    """Разбивает содержимое SQL IN-списка на литералы по запятым вне кавычек.
-
-    Названия могут содержать запятые внутри кавычек (например, 'Лом меди трубка с
-    оребрением медь 87,2%'). Поэтому не делим по запятым, находящимся внутри '...'.
-    """
     items = []
     buf = []
     in_quote = False
@@ -91,12 +74,6 @@ def _split_sql_list(content: str) -> List[str]:
 
 
 def _norm_token(value: str) -> str:
-    """Нормализует имя для сопоставления: lower + кириллизация похожих латинских букв.
-
-    Кириллические 'с'/'о'/'е'/'а'/'р'/'к' визуально неотличимы от латинских
-    c/o/e/a/p/k, и LLM иногда подставляет латиницу. Здесь приводим их к кириллице,
-    чтобы сопоставление с реальными item_name было устойчивым.
-    """
     repl = {
         "c": "с", "o": "о", "e": "е", "a": "а", "p": "р", "k": "к",
         "x": "х", "t": "т", "y": "у", "h": "н", "m": "м", "b": "в",
@@ -108,7 +85,6 @@ def _norm_token(value: str) -> str:
 
 
 def _match_item_exact(value: str, real_items: List[str]) -> Optional[str]:
-    """Возвращает реальное item_name, совпадающее с value после нормализации."""
     target = _norm_token(value)
     for real in real_items:
         if _norm_token(real) == target:
@@ -120,12 +96,6 @@ def _fix_item_in_list(
     original_sql: str,
     samples: List[Dict[str, Any]],
 ) -> Optional[str]:
-    """Заменяет элементы item_name IN/='...' на точные реальные названия из samples.
-
-    LLM может написать имя с латиницей вместо кириллицы (например, 'трубка c оребрением'
-    вместо 'трубка с оребрением'). Здесь каждый литерал IN/= сопоставляется с реальным
-    item_name по нормализованному подобию и заменяется на точный.
-    """
     if not samples:
         return None
     real_items = []
@@ -137,8 +107,6 @@ def _fix_item_in_list(
         return None
 
     changed = False
-    # Заменяем значения в IN (...). Разбиваем по запятым, но НЕ внутри кавычек
-    # (названия могут содержать запятую, например 'медь 87,2%').
     def _repl_in(m: "re.Match") -> str:
         nonlocal changed
         items = [x.strip().strip("'") for x in _split_sql_list(m.group(2))]
@@ -150,12 +118,10 @@ def _fix_item_in_list(
             fixed.append(f"'{exact}'")
         return f"{m.group(1)}{', '.join(fixed)})"
 
-    # Применяем только один паттерн IN (fp.item_name покрывает и item_name).
     new_sql = re.sub(r"(fp\.item_name\s+IN\s*\()([^)]*)\)", _repl_in, original_sql, flags=re.IGNORECASE)
     if new_sql == original_sql:
         new_sql = re.sub(r"(item_name\s+IN\s*\()([^)]*)\)", _repl_in, original_sql, flags=re.IGNORECASE)
 
-    # Заменяем значения '=' по item_name.
     def _repl_eq(m: "re.Match") -> str:
         nonlocal changed
         lit = m.group(1)
@@ -175,23 +141,16 @@ def _build_samples_fallback_sql(
     original_sql: str,
     samples: List[Dict[str, Any]],
 ) -> Optional[str]:
-    """Строит fallback SQL, заменяя ILIKE-маски на реальные item_name из samples.
-
-    Работает по март-таблице mart.price_facts: заменяет ILIKE-маски по item_name
-    на точные значения через IN (если LLM выдумал маску, а в БД реальное название).
-    """
     sql_lower = original_sql.lower().strip()
     if "price_facts" not in sql_lower:
         return None
     if not samples:
         return None
 
-    # Извлекаем ILIKE-паттерны из оригинального SQL
     ilike_patterns = _extract_iliase_from_sql(original_sql)
     if not ilike_patterns:
         return None
 
-    # Для каждого паттерна ищем подходящие реальные названия
     matched_items: Set[str] = set()
     for pattern in ilike_patterns:
         pattern_lower = pattern.lower()
@@ -203,12 +162,9 @@ def _build_samples_fallback_sql(
     if not matched_items:
         return None
 
-    # Строим новый SQL, заменяя ILIKE на IN
-    # Находим первое ILIKE-условие и заменяем его на IN
     items_list = sorted(matched_items)
     items_formatted = ", ".join(f"'{item}'" for item in items_list)
     
-    # Заменяем все ILIKE по item_name (колонка mart.price_facts) на IN.
     new_sql = re.sub(
         r"AND\s+fp\.item_name\s+ILIKE\s+'[^']+'\s*",
         f"AND fp.item_name IN ({items_formatted})",
@@ -221,7 +177,6 @@ def _build_samples_fallback_sql(
         new_sql,
         flags=re.IGNORECASE,
     )
-    # Вариант без префикса fp.
     new_sql = re.sub(
         r"AND\s+item_name\s+ILIKE\s+'[^']+'\s*",
         f"AND item_name IN ({items_formatted})",
@@ -242,16 +197,10 @@ def _build_samples_fallback_sql(
 
 
 def _build_no_item_filter_sql(original_sql: str) -> Optional[str]:
-    """Строит fallback SQL, полностью убирая фильтрацию по item_name (mart.price_facts).
-
-    Используется как крайняя мера, когда даже с реальными названиями из samples
-    ничего не нашлось. Оставляет только фильтры по period и price_source.
-    """
     sql_lower = original_sql.lower().strip()
     if "price_facts" not in sql_lower:
         return None
 
-    # Убираем все строки, содержащие item_name
     lines = original_sql.split('\n')
     filtered_lines = []
     item_filter_removed = False
@@ -283,12 +232,6 @@ def _build_no_item_filter_sql(original_sql: str) -> Optional[str]:
 
 
 def _build_fallback_sql(original_sql: str) -> Optional[str]:
-    """Строит fallback SQL, убирая price_source и смягчая ILIKE-условия.
-    
-    Если оригинальный SQL не нашёл данных, пробуем:
-    1. Убрать условие по price_source
-    2. Сохранить ORDER BY и LIMIT (если были)
-    """
     sql_lower = original_sql.lower().strip()
     
     # Проверяем, что это SELECT из mart.price_facts
@@ -343,14 +286,11 @@ def _build_fallback_sql(original_sql: str) -> Optional[str]:
     return fallback_sql
 
 
-# Проверка схемы: запросы должны обращаться только к mart.* (read-only).
-# Запрещаем raw.cells, information_schema и pg_catalog напрямую.
 _SCHEMA_ALLOW_PATTERN = re.compile(r"FROM\s+(mart\.\w+)", re.IGNORECASE)
 _SCHEMA_FORBIDDEN = ("raw.cells", "information_schema", "pg_catalog", "entity_dictionary")
 
 
 def _check_schema(sql: str) -> List[str]:
-    """Возвращает ошибки схемы (пусто — если запрос безопасный)."""
     errors: List[str] = []
     sql_lower = sql.lower()
     for bad in _SCHEMA_FORBIDDEN:
@@ -368,12 +308,6 @@ async def _execute_sql(
     session: Optional[AsyncSession],
     request_id: str,
 ) -> tuple[List[Dict[str, Any]], Optional[str]]:
-    """Выполняет SQL под основной ролью БД.
-
-    Executor использует основной async_session_maker (роль user). Безопасность
-    SQL обеспечивается keyword-blacklist валидацией в codegen_node + проверкой
-    схемы (только mart.*). statement_timeout задаётся на уровне сессии.
-    """
     from src.core.db.database import async_session_maker
     from src.core.config import settings
 

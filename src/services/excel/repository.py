@@ -18,13 +18,6 @@ class SQLAlchemyExcelRepository(ExcelRepository):
         self._entity_resolver = EntityResolver()
 
     async def process_file(self, file_path: Path) -> File:
-        """Полный цикл обработки Excel-файла: парсинг raw, нормализация в mart.
-
-        Тяжёлый RAG-over-cells (chunk/sheet/column эмбеддинги) НЕ строится.
-        Вместо него на этапе ingestion заполняется mart.price_facts и собираются
-        уникальные сущности (item/supplier/period) для pg_trgm-сопоставления.
-        Это делает индексацию секундами вместо минут.
-        """
         from src.core.excel.parser import ExcelParser
         from src.core.excel.normalize import ExcelNormalizer
         from src.core.excel.comment_extractor import extract_comments
@@ -36,12 +29,10 @@ class SQLAlchemyExcelRepository(ExcelRepository):
 
         logger.info("Starting ingestion for file: {}", file_path)
 
-        # 1. Парсим Excel
         parser = ExcelParser(file_path)
         parsed: ParsedFile = parser.parse()
         logger.info("Parsed {} sheets from {}", len(parsed.sheets), file_path.name)
 
-        # 2. Нормализуем заголовки
         for sheet in parsed.sheets:
             sheet.headers = [ExcelNormalizer.normalize_header(h) for h in sheet.headers]
             for header in sheet.headers:
@@ -49,10 +40,8 @@ class SQLAlchemyExcelRepository(ExcelRepository):
                 col_type = ExcelNormalizer.infer_column_type(header, sample_values)
                 logger.debug("Column '{}' → type={}, samples={}", header.col_name, col_type, sample_values[:3])
 
-        # 3. Сохраняем в БД (raw)
         file_record = await self.save_parsed_file(parsed)
 
-        # 4. Извлекаем и сохраняем Excel-комментарии
         try:
             comments = extract_comments(file_path)
             if comments:
@@ -67,10 +56,6 @@ class SQLAlchemyExcelRepository(ExcelRepository):
                     await self.save_comments(sheet_record.id, comments)
         except Exception as exc:
             logger.warning("Comment extraction failed (non-fatal): {}", exc)
-
-        # 5. Нормализация в mart.price_facts и entity-resolution выполняются в
-        #    ingestion_service.process_file (после возврата file_record), чтобы
-        #    держать raw-парсинг и mart-нормализацию как отдельные идемпотентные шаги.
 
         logger.info("Ingestion complete: file_id={}, filename={}", file_record.id, file_record.filename)
         return file_record
@@ -100,13 +85,6 @@ class SQLAlchemyExcelRepository(ExcelRepository):
         return True
 
     async def save_pending_file(self, parsed: ParsedFile) -> File:
-        """Создаёт запись File со статусом 'uploaded' до фоновой обработки.
-
-        Если файл с таким file_hash уже существует (например, повторная загрузка
-        одного и того же файла), не пытаемся вставить дубликат — возвращаем уже
-        существующую запись. Иначе повторная загрузка упадёт с unique constraint
-        ix_files_file_hash.
-        """
         result = await self.session.execute(
             select(File).where(File.file_hash == parsed.file_hash)
         )
@@ -131,10 +109,6 @@ class SQLAlchemyExcelRepository(ExcelRepository):
         return file_record
 
     async def save_parsed_file(self, parsed: ParsedFile) -> File:
-        # В асинхронном пайплайне запись File уже создана на этапе create_pending_file()
-        # (статус "uploaded"), и повторная вставка по тому же file_hash упрётся в
-        # unique constraint ix_files_file_hash. Поэтому переиспользуем существующую
-        # запись, обновляя её поля, либо создаём новую, если её ещё нет.
         result = await self.session.execute(
             select(File).where(File.file_hash == parsed.file_hash)
         )
@@ -178,9 +152,6 @@ class SQLAlchemyExcelRepository(ExcelRepository):
             self.session.add(sheet_record)
             await self.session.flush()
 
-            # Предзагружаем маппинг "нормализованное имя колонки → ColumnMetadata".
-            # Раньше для каждой ячейки выполнялся отдельный SELECT (_get_column_by_name),
-            # что давало N+1 запросов к БД при большом количестве ячеек.
             col_by_name: Dict[str, ColumnMetadata] = {}
             for header in sheet.headers:
                 col_record = ColumnMetadata(
@@ -195,9 +166,6 @@ class SQLAlchemyExcelRepository(ExcelRepository):
                 col_by_name[header.col_name] = col_record
             await self.session.flush()
 
-            # Bulk-insert ячеек: раньше каждая ячейка добавлялась через session.add(),
-            # что при тысячах ячеек давало тысячи отдельных ORM-операций. Теперь
-            # собираем все ячейки листа и вставляем одним insert-запросом.
             cell_rows = []
             for row_idx, row_data in enumerate(sheet.data):
                 for col_name, value in row_data.items():
@@ -246,16 +214,10 @@ class SQLAlchemyExcelRepository(ExcelRepository):
             logger.info("Saved {} comments for sheet_id={}", len(comments), sheet_id)
 
     async def index_entities(self, file_id: int) -> Dict[str, int]:
-        """Собирает уникальные значения сущностей (item/supplier/period) из mart.price_facts.
-
-        Без эмбеддингов: уникальные значения трёх справочников (десятки–сотни
-        записей) кэшируются в памяти для pg_trgm-резолюции и передачи в промпт.
-        """
         items: List[str] = []
         suppliers: List[str] = []
         periods: List[str] = []
 
-        # Периоды берём из метаданных листов.
         sheets_result = await self.session.execute(
             select(Sheet).where(Sheet.file_id == file_id)
         )
@@ -317,10 +279,6 @@ class SQLAlchemyExcelRepository(ExcelRepository):
 
 
 def _column_role(col_name: str) -> str:
-    """Определяет семантическую роль колонки по нормализованному имени.
-
-    Возможные роли: item / price / supplier / percent / metric_type / other.
-    """
     key = (col_name or "").lower()
     if any(k in key for k in ("наименован", "материал", "лом", "вид", "товар", "продукц")):
         return "item"

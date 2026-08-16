@@ -1,8 +1,5 @@
-"""Проверка нормализации: запускает normalize_file_to_mart для последнего файла."""
 import asyncio
-
 from sqlalchemy import text
-
 from src.core.db.database import async_session_maker
 from src.services.mart.normalizer import normalize_file_to_mart
 

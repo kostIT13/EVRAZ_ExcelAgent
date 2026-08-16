@@ -44,9 +44,7 @@ class Sheet(Base):
     row_count: Mapped[int] = mapped_column(Integer, default=0)
     col_count: Mapped[int] = mapped_column(Integer, default=0)
     period: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)
-    # Типизация листа: prices (цены лома) / matrix (план-факт-отклонение) / generic.
     sheet_kind: Mapped[str] = mapped_column(String(30), nullable=False, default="generic", index=True)
-    # Признак, что тип определён автоматическим детектором (а не вручную).
     sheet_kind_auto: Mapped[bool] = mapped_column(Integer, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -74,7 +72,6 @@ class ColumnMetadata(Base):
     data_type: Mapped[str] = mapped_column(String(50), nullable=False, default="text")
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     sample_values: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
-    # Семантическая роль колонки: item / price / supplier / percent / metric_type / other.
     role: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)
 
     sheet: Mapped["Sheet"] = relationship("Sheet", back_populates="columns")
@@ -214,12 +211,6 @@ class QueryLog(Base):
 
 
 class PriceFact(Base):
-    """mart.price_facts — нормализованная long-таблица фактов цен.
-
-    На ней строятся все SQL-запросы агента (вместо EAV cells). Появляется из
-    raw.cells на этапе нормализации (итеративно, идемпотентно).
-    """
-
     __tablename__ = "price_facts"
     __table_args__ = {"schema": "mart"}
 
@@ -234,8 +225,6 @@ class PriceFact(Base):
     value: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     currency: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, default="RUB")
     unit: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
-    # Признак, что в исходной ячейке не было значения (пусто). Позволяет SQL-агенту
-    # корректно считать средние — делить на заполненные, а не на все.
     is_blank: Mapped[bool] = mapped_column(Integer, default=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -251,12 +240,6 @@ class PriceFact(Base):
 
 
 class SheetTemplate(Base):
-    """mart.sheet_templates — кэш подтверждённых LLM-схем листов.
-
-    Хранит отпечаток структуры листа (fingerprint) и распознанную LLM-схему.
-    При повторной загрузке файла того же формата схема применяется без вызова LLM.
-    Статус: pending_confirmation → confirmed (после ручного подтверждения в UI).
-    """
 
     __tablename__ = "sheet_templates"
     __table_args__ = {"schema": "mart"}
@@ -279,15 +262,6 @@ class SheetTemplate(Base):
 
 
 class Metric(Base):
-    """mart.metrics — универсальная long-таблица для любых числовых таблиц.
-
-    Покрывает формат 'matrix' (шихта/план/факт/отклонение/проценты), который
-    mart.price_facts не может описать. Колонки:
-    - dimension_type/dimension: семантическое измерение (например, 'item'/'медь')
-    - metric_type: тип метрики ('план' / 'факт' / 'отклонение' / 'percent' / ...)
-    - metric: наименование метрики (например, 'состав шихты')
-    """
-
     __tablename__ = "metrics"
     __table_args__ = {"schema": "mart"}
 
@@ -317,12 +291,6 @@ class Metric(Base):
 
 
 class SupplierAlias(Base):
-    """mart.supplier_aliases — маппинг поставщиков (канонические имена и алиасы).
-
-    Один поставщик может появляться в шапке по-разному:
-    'северо-запад ВторМет * (921)341-19-36 (Алла)' vs 'Северо-запад' vs 'ЦветМет'.
-    canonical_name — каноническое имя, alias — синоним (добавляется из шапки).
-    """
 
     __tablename__ = "supplier_aliases"
     __table_args__ = {"schema": "mart"}

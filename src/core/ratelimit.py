@@ -1,13 +1,6 @@
-"""Rate limiting через slowapi.
-
-Инициализация: limiter = get_limiter(). Используется в main.py как middleware
-и в защищённых роутерах через @limiter.limit().
-"""
 from __future__ import annotations
-
 from slowapi import Limiter
 from slowapi.util import get_remote_address
-
 from src.core.config import settings
 
 _limiter: Limiter = Limiter(key_func=get_remote_address)

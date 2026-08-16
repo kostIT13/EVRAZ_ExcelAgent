@@ -1,25 +1,8 @@
-"""Entity Resolution без векторных эмбеддингов (чистый pg_trgm).
-
-RAG, dense-эмбеддинги, Qdrant, Ollama и fastembed полностью удалены. Список
-уникальных сущностей (item_name, supplier, sheet_period) извлекается из
-mart.price_facts напрямую (entity_embeddings удалена):
-
-1. На этапе ingestion — список сущностей кладётся в Redis/in-memory-кэш (или
-   читается из БД), а не эмбеддится.
-2. В рантайме вопрос сопоставляется с кандидатами через Postgres pg_trgm
-   (similarity() / % оператор) по item_name/supplier — быстро, без
-   RU-лемматизации, без отдельного BM25-индекса на диске.
-3. Если pg_trgm не дал кандидатов — полный список сущностей передаётся в
-   промпт Classifier/Planner, и LLM сам сопоставляет вопрос с сущностями.
-"""
 from __future__ import annotations
-
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
-
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from src.core.db.database import async_session_maker
 from src.core.logging_settings import logger
 
@@ -35,10 +18,10 @@ MAX_ENTITIES_FOR_PROMPT = 200
 
 @dataclass
 class EntityCandidate:
-    entity_type: str          # item | supplier | period
+    entity_type: str          
     entity_value: str
     score: float
-    method: str               # trigram
+    method: str               
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -50,15 +33,11 @@ class EntityCandidate:
 
 
 class EntityResolver:
-    """Резолвит вопрос к списку сущностей mart.price_facts через pg_trgm."""
 
     def __init__(self) -> None:
         self._entity_cache: Dict[str, List[str]] = {}
         self._cache_loaded = False
 
-    # ------------------------------------------------------------------
-    # Ingestion: извлечение списка сущностей (без эмбеддинга)
-    # ------------------------------------------------------------------
     async def index_entities(
         self,
         items: List[str],
@@ -66,12 +45,6 @@ class EntityResolver:
         periods: List[str],
         session: Optional[AsyncSession] = None,
     ) -> Dict[str, int]:
-        """Сохраняет уникальные сущности в in-memory-кэш.
-
-        Ничего не эмбеддит. Вместо этого список сущностей читается на рантайме
-        из mart.price_facts (см. resolve_candidates), а здесь только заполняем
-        кэш уникальными значениями, чтобы отдавать их в промпт.
-        """
         self._entity_cache["item"] = _unique(items)
         self._entity_cache["supplier"] = _unique(suppliers)
         self._entity_cache["period"] = _unique(periods)
@@ -86,20 +59,12 @@ class EntityResolver:
         )
         return counts
 
-    # ------------------------------------------------------------------
-    # Runtime: поиск кандидатов через pg_trgm
-    # ------------------------------------------------------------------
     async def resolve_candidates(
         self,
         query: str,
         top_n: int = DEFAULT_TOP_N,
         session: Optional[AsyncSession] = None,
     ) -> List[EntityCandidate]:
-        """Находит top-N похожих item_name/supplier через pg_trgm.
-
-        Выполняет SQL с similarity() по mart.price_facts.item_name и .supplier.
-        Это быстрее векторного поиска и не требует эмбеддинг-модели.
-        """
         if not query.strip():
             return []
 
@@ -141,11 +106,7 @@ class EntityResolver:
         ]
         return candidates[:top_n]
 
-    # ------------------------------------------------------------------
-    # Список сущностей для промпта (fallback, если pg_trgm пуст)
-    # ------------------------------------------------------------------
     def entities_for_prompt(self) -> Dict[str, List[str]]:
-        """Возвращает сущности для передачи в системный промпт Classifier/Planner."""
         if not self._cache_loaded:
             return {}
         return {
@@ -166,5 +127,4 @@ def _unique(values: List[str]) -> List[str]:
     return out
 
 
-# Singleton
 entity_resolver: EntityResolver = EntityResolver()

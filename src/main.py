@@ -53,7 +53,6 @@ app = FastAPI(
 
 register_exception_handlers(app)
 
-# Rate limiting (slowapi).
 _limiter = get_limiter()
 app.state.limiter = _limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
@@ -71,13 +70,11 @@ async def health():
 
 @app.get("/metrics")
 async def metrics():
-    """Prometheus-метрики: латентность, доля failed/low_confidence, RPS, token usage."""
     from src.core.metrics import metrics_response
     return metrics_response()
 
 
 @app.get("/metrics/summary")
 async def metrics_summary_endpoint():
-    """Агрегированные метрики (JSON) для фронтенд-страницы 'Метрики'."""
     from src.core.metrics import metrics_summary
     return metrics_summary()

@@ -113,7 +113,6 @@ async def get_sheet_schema(sheet_ids: List[int]) -> List[Dict[str, Any]]:
 
 
 def _default_columns(table: str) -> List[Dict[str, str]]:
-    """Возвращает колонки по умолчанию для mart-таблицы."""
     if table == "mart.metrics":
         return [
             {"name": "period", "type": "TEXT", "description": "период (например, '2025-05')"},

@@ -14,7 +14,6 @@ class QueryType(str, Enum):
 
 
 class Domain(str, Enum):
-    """Домен вопроса определяет mart-таблицу и схему."""
     PRICES = "prices"
     METRICS = "metrics"
     GENERIC = "generic"
@@ -25,15 +24,11 @@ class GraphState(TypedDict, total=False):
     request_id: str
     top_k: int
 
-    # Память диалога: история предыдущих вопросов/ответов (последние ~5 оборотов).
     conversation_id: Optional[str]
     conversation_history: List[Dict[str, Any]]
 
-    # Домен (prices / metrics / generic) — определяет таблицу и схему.
     domain: Domain
 
-    # Entity-resolution (вместо тяжёлого RAG-over-cells).
-    # Список top-N кандидатов item/supplier/period, найденных по вопросу.
     entity_candidates: List[Dict[str, Any]]
     entities_for_prompt: Optional[Dict[str, List[str]]]
 
@@ -47,7 +42,6 @@ class GraphState(TypedDict, total=False):
     plan: str
     schema: List[Dict[str, Any]]
 
-    # Структурированный spec для детерминированного SQL-компилятора.
     sql_spec: Optional[Dict[str, Any]]
 
     sql_query: str

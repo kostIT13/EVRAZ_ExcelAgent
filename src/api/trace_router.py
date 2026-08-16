@@ -8,7 +8,6 @@ from src.services.db_tables.query_log_service.service import TraceService
 
 router = APIRouter(prefix="/trace", tags=["traceability"])
 
-# Маппинг названий шагов на человекочитаемые иконки и подписи
 STEP_LABELS = {
     "question": {"icon": "❓", "label": "Вопрос пользователя"},
     "classifier": {"icon": "🔍", "label": "Классификация запроса"},

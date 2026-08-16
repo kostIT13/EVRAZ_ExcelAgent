@@ -1,26 +1,16 @@
-"""Query Cache Service — кэш вопрос→SQL для near-duplicate запросов.
-
-Позволяет отвечать на повторяющиеся вопросы мгновенно,
-без повторной генерации SQL.
-"""
-
 from __future__ import annotations
-
 import hashlib
 import json
 import re
 from typing import Any, Dict, List, Optional, Tuple
-
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from src.core.db.database import async_session_maker
 from src.core.db.models import QueryCache
 from src.core.logging_settings import logger
 
 
 def _normalize_question(question: str) -> str:
-    """Нормализует вопрос для сравнения: lowercase, сжатие пробелов, удаление пунктуации."""
     q = question.lower().strip()
     q = re.sub(r'[^\w\sа-яё]', ' ', q)
     q = re.sub(r'\s+', ' ', q)
@@ -29,28 +19,17 @@ def _normalize_question(question: str) -> str:
 
 
 def _hash_question(question: str) -> str:
-    """Хэширует нормализованный вопрос."""
     normalized = _normalize_question(question)
     return hashlib.sha256(normalized.encode('utf-8')).hexdigest()
 
 
 class QueryCacheService:
-    """Сервис кэширования вопрос→SQL."""
 
     async def lookup(
         self,
         question: str,
         session: Optional[AsyncSession] = None,
     ) -> Optional[Dict[str, Any]]:
-        """Ищет вопрос в кэше.
-
-        Args:
-            question: Вопрос пользователя.
-            session: Опциональная сессия БД.
-
-        Returns:
-            Dict с sql_query, result, query_type, entities если найден, иначе None.
-        """
         question_hash = _hash_question(question)
 
         async with session or async_session_maker() as s:
@@ -88,16 +67,6 @@ class QueryCacheService:
         entities: Optional[List[str]] = None,
         session: Optional[AsyncSession] = None,
     ) -> None:
-        """Сохраняет вопрос и SQL в кэш.
-
-        Args:
-            question: Вопрос пользователя.
-            sql_query: Сгенерированный SQL.
-            result: Результат выполнения SQL.
-            query_type: Тип запроса.
-            entities: Сущности из вопроса.
-            session: Опциональная сессия БД.
-        """
         question_hash = _hash_question(question)
         normalized = _normalize_question(question)
 
@@ -137,16 +106,6 @@ class QueryCacheService:
         threshold: float = 0.8,
         session: Optional[AsyncSession] = None,
     ) -> List[Dict[str, Any]]:
-        """Ищет похожие вопросы в кэше (по нормализованному тексту).
-
-        Args:
-            question: Вопрос пользователя.
-            threshold: Порог схожести (0.0-1.0).
-            session: Опциональная сессия БД.
-
-        Returns:
-            Список похожих записей.
-        """
         normalized = _normalize_question(question)
         words = set(normalized.split())
 
@@ -182,7 +141,6 @@ class QueryCacheService:
         self,
         session: Optional[AsyncSession] = None,
     ) -> Dict[str, Any]:
-        """Получает статистику кэша."""
         async with session or async_session_maker() as s:
             total = await s.execute(select(func.count(QueryCache.id)))
             total_count = total.scalar() or 0
@@ -207,5 +165,4 @@ class QueryCacheService:
         }
 
 
-# Singleton
 query_cache_service: QueryCacheService = QueryCacheService()

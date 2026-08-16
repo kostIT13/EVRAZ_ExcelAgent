@@ -1,6 +1,4 @@
-"""Проверка entity-resolution для запроса по алюминию."""
 import asyncio
-
 from src.services.entity_resolution.entity_resolver import entity_resolver
 
 

@@ -28,7 +28,6 @@ class CellService:
         skip: int = 0,
         limit: int = 100,
     ) -> List[Cell]:
-        """List cells for a sheet with pagination. Validates sheet exists."""
         async def _list(session):
             from src.services.db_tables.sheet_service.repository import SQLAlchemySheetRepository
             sheet_repo = SQLAlchemySheetRepository(session)
