@@ -3,7 +3,7 @@ import hashlib
 import json
 import re
 from typing import Any, Dict, List, Optional, Tuple
-from sqlalchemy import select, func
+from sqlalchemy import select, func, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.db.database import async_session_maker
 from src.core.db.models import QueryCache
@@ -18,9 +18,10 @@ def _normalize_question(question: str) -> str:
     return q
 
 
-def _hash_question(question: str) -> str:
+def _hash_question(question: str, response_mode: str = "") -> str:
     normalized = _normalize_question(question)
-    return hashlib.sha256(normalized.encode('utf-8')).hexdigest()
+    key = f"{response_mode}:{normalized}"
+    return hashlib.sha256(key.encode('utf-8')).hexdigest()
 
 
 class QueryCacheService:
@@ -29,8 +30,9 @@ class QueryCacheService:
         self,
         question: str,
         session: Optional[AsyncSession] = None,
+        response_mode: str = "",
     ) -> Optional[Dict[str, Any]]:
-        question_hash = _hash_question(question)
+        question_hash = _hash_question(question, response_mode)
 
         async with session or async_session_maker() as s:
             result = await s.execute(
@@ -66,8 +68,9 @@ class QueryCacheService:
         query_type: Optional[str] = None,
         entities: Optional[List[str]] = None,
         session: Optional[AsyncSession] = None,
+        response_mode: str = "",
     ) -> None:
-        question_hash = _hash_question(question)
+        question_hash = _hash_question(question, response_mode)
         normalized = _normalize_question(question)
 
         async with session or async_session_maker() as s:
@@ -163,6 +166,19 @@ class QueryCacheService:
             "total_cached": total_count,
             "top_queries": top_queries,
         }
+
+    async def clear(
+        self,
+        session: Optional[AsyncSession] = None,
+    ) -> int:
+        """Полностью очищает таблицу кэша запросов и возвращает число удалённых записей."""
+        async with session or async_session_maker() as s:
+            result = await s.execute(delete(QueryCache))
+            await s.commit()
+
+        deleted = result.rowcount or 0
+        logger.info("Query cache cleared: {} records removed", deleted)
+        return deleted
 
 
 query_cache_service: QueryCacheService = QueryCacheService()

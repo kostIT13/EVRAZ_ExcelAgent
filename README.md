@@ -130,7 +130,6 @@ docker compose exec service alembic upgrade head
 - `GET /files` — список.
 - `GET /files/{id}` — детали.
 - `GET /files/{id}/sheets`, `/columns`, `/cells` — просмотр raw-структуры.
-- `POST /files/{id}/reindex` — повторная нормализация raw.cells → mart.price_facts.
 - `POST /files/{id}/sheets/{sheet_id}/infer-schema` — Schema Inference (LLM).
 - `POST /files/{id}/sheets/{sheet_id}/confirm-schema` — подтверждение схемы.
 

@@ -16,7 +16,7 @@ def _history_to_dicts(history):
     return [{"role": t.role, "content": t.content} for t in history]
 
 
-def _build_agent_response(result: AgentResult) -> AskResponse:
+def _build_agent_response(result: AgentResult, response_mode: str = "detailed") -> AskResponse:
     return AskResponse(
         answer=result.answer,
         confidence=result.confidence,
@@ -24,6 +24,7 @@ def _build_agent_response(result: AgentResult) -> AskResponse:
         request_id=result.request_id,
         latency_ms=result.latency_ms,
         mode_used="agent",
+        response_mode=response_mode,
         query_type=result.query_type,
         sql_query=result.sql_query,
         sql_result_preview=result.sql_result[:10],
@@ -56,14 +57,16 @@ async def ask_question(
             top_k=body.top_k,
             conversation_history=history_dicts,
             conversation_id=body.conversation_id,
+            response_mode=body.response_mode,
         )
-        return _build_agent_response(rag_result)
+        return _build_agent_response(rag_result, body.response_mode)
 
     agent_result = await pipeline.run_agent(
         question=body.question,
         top_k=body.top_k,
         conversation_history=history_dicts,
         conversation_id=body.conversation_id,
+        response_mode=body.response_mode,
     )
 
     if body.mode == "auto" and agent_result.status == "failed":
@@ -76,7 +79,8 @@ async def ask_question(
             top_k=body.top_k,
             conversation_history=history_dicts,
             conversation_id=body.conversation_id,
+            response_mode=body.response_mode,
         )
-        return _build_agent_response(fallback_result)
+        return _build_agent_response(fallback_result, body.response_mode)
 
-    return _build_agent_response(agent_result)
+    return _build_agent_response(agent_result, body.response_mode)

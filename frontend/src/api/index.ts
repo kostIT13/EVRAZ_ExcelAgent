@@ -112,21 +112,23 @@ export function getSheetCells(fileId: number, sheetId: number, params: { skip?: 
   return get<CellResponse[]>(`/files/${fileId}/sheets/${sheetId}/cells`, { params });
 }
 
-export function reindexFile(fileId: number) {
-  return post<{ message: string }>(`/files/${fileId}/reindex`);
-}
-
 // ---------- Ask ----------
 export function askQuestion(req: AskRequest) {
   return post<AskResponse>('/ask', {
     body: {
       question: req.question,
       top_k: req.top_k ?? 10,
-      mode: req.mode ?? 'auto',
+      mode: 'agent',
+      response_mode: req.response_mode ?? 'detailed',
       conversation_history: req.conversation_history ?? [],
       conversation_id: req.conversation_id ?? null,
     },
   });
+}
+
+// ---------- Cache ----------
+export function clearCache() {
+  return post<{ message: string; cleared: number }>('/cache/clear');
 }
 
 // ---------- Trace ----------
@@ -153,8 +155,8 @@ export const api = {
   getSheetDetail,
   getSheetColumns,
   getSheetCells,
-  reindexFile,
   askQuestion,
+  clearCache,
   listTraces,
   getTrace,
   getMetricsSummary,

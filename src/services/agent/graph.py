@@ -170,6 +170,7 @@ class LangGraphAgent:
         top_k: int = 30,
         conversation_history: Optional[List[Dict[str, str]]] = None,
         conversation_id: Optional[str] = None,
+        response_mode: str = "detailed",
     ) -> AgentResult:
         request_id = str(uuid.uuid4())
         start_time = time.monotonic()
@@ -183,7 +184,7 @@ class LangGraphAgent:
         )
 
         try:
-            cached = await query_cache_service.lookup(question)
+            cached = await query_cache_service.lookup(question, response_mode=response_mode)
         except Exception as exc:
             logger.warning("LangGraphAgent [{}]: cache lookup failed: {}", request_id[:8], exc)
             cached = None
@@ -213,6 +214,7 @@ class LangGraphAgent:
             "question": question,
             "request_id": request_id,
             "top_k": top_k,
+            "response_mode": response_mode,
             "conversation_id": conversation_id,
             "conversation_history": conversation_history or [],
             "entity_candidates": [],
@@ -304,6 +306,7 @@ class LangGraphAgent:
                 result={"data": sql_result[:100], "formatted_answer": answer},
                 query_type=query_type,
                 entities=entities,
+                response_mode=response_mode,
             )
 
         result = AgentResult(

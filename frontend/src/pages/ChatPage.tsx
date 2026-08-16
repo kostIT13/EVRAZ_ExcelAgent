@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Send, Sparkles } from 'lucide-react';
+import { Send, Sparkles, Trash2 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import api from '@/api';
 import type { FileResponse, SourceInfo } from '@/types/api';
@@ -13,6 +13,12 @@ import SourcesModal from '@/components/chat/SourcesModal';
 import AgentProgress from '@/components/chat/AgentProgress';
 import TypingIndicator from '@/components/chat/TypingIndicator';
 
+const SUGGESTIONS = [
+  'Средняя цена лома меди по Ферроком в феврале 2025',
+  'Сравни цены на латунь у всех поставщиков в декабре 2025',
+  'Дельта между мин и макс ценой на медь по поставщикам',
+];
+
 export default function ChatPage() {
   const navigate = useNavigate();
   const { toasts, showToast, dismiss } = useToast();
@@ -22,13 +28,21 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<ChatMessageData[]>([]);
   const [question, setQuestion] = useState('');
   const [isAsking, setIsAsking] = useState(false);
-  const [mode, setMode] = useState<'auto' | 'rag' | 'agent'>('auto');
   const [topK, setTopK] = useState(10);
+  const [responseMode, setResponseMode] = useState<'detailed' | 'concise'>('detailed');
   const [agentStep, setAgentStep] = useState(-1);
   const [sourcesModal, setSourcesModal] = useState<SourceInfo[] | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const idRef = useRef(0);
+
+  const autoResize = () => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, 220)}px`;
+  };
 
   const loadFiles = useCallback(async () => {
     try {
@@ -59,9 +73,18 @@ export default function ChatPage() {
     setAgentStep(0);
     addMessage({ type: 'user', content: q });
     setQuestion('');
+    window.requestAnimationFrame(() => {
+      autoResize();
+      textareaRef.current?.focus();
+    });
 
     try {
-      const result = await api.askQuestion({ question: q, top_k: topK, mode });
+      const result = await api.askQuestion({
+        question: q,
+        top_k: topK,
+        mode: 'agent',
+        response_mode: responseMode,
+      });
       setAgentStep(-1);
       addMessage({
         type: 'assistant',
@@ -108,6 +131,16 @@ export default function ChatPage() {
     navigate(`/trace?request_id=${requestId}`);
   };
 
+  const handleClearCache = async () => {
+    if (!window.confirm('Очистить кэшированные запросы?')) return;
+    try {
+      const res = await api.clearCache();
+      showToast(`Кэш очищен (${res.cleared} записей)`, 'success');
+    } catch (err) {
+      showToast(`Ошибка очистки кэша: ${(err as Error).message}`, 'error');
+    }
+  };
+
   return (
     <div className="layout">
       <aside className="panel panel--files">
@@ -139,6 +172,21 @@ export default function ChatPage() {
                   <br />
                   Загрузите файл с ценами на металлы и задайте вопрос.
                 </div>
+                <div className="chat-welcome__suggestions">
+                  {SUGGESTIONS.map((s) => (
+                    <button
+                      key={s}
+                      type="button"
+                      className="chat-welcome__chip"
+                      onClick={() => {
+                        setQuestion(s);
+                        textareaRef.current?.focus();
+                      }}
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
               </motion.div>
             </div>
           )}
@@ -153,8 +201,8 @@ export default function ChatPage() {
             />
           ))}
 
-          {isAsking && mode === 'agent' && agentStep >= 0 && <AgentProgress activeStep={agentStep} />}
-          {isAsking && mode !== 'agent' && <TypingIndicator />}
+          {isAsking && agentStep >= 0 && <AgentProgress activeStep={agentStep} />}
+          {isAsking && agentStep < 0 && <TypingIndicator />}
 
           <div ref={messagesEndRef} />
         </div>
@@ -162,15 +210,14 @@ export default function ChatPage() {
         <div className="chat-controls">
           <div className="chat-settings">
             <label className="chat-settings__item">
-              <span className="chat-settings__label">Режим:</span>
+              <span className="chat-settings__label">Формат:</span>
               <select
                 className="chat-settings__select"
-                value={mode}
-                onChange={(e) => setMode(e.target.value as typeof mode)}
+                value={responseMode}
+                onChange={(e) => setResponseMode(e.target.value as typeof responseMode)}
               >
-                <option value="auto">🤖 Auto</option>
-                <option value="rag">📚 RAG</option>
-                <option value="agent">🧠 Agent</option>
+                <option value="detailed">📝 Полный ответ</option>
+                <option value="concise">🔢 Только число</option>
               </select>
             </label>
             <label className="chat-settings__item">
@@ -184,6 +231,15 @@ export default function ChatPage() {
                 onChange={(e) => setTopK(parseInt(e.target.value) || 10)}
               />
             </label>
+            <button
+              type="button"
+              className="chat-settings__clear"
+              onClick={handleClearCache}
+              title="Очистить кэшированные запросы"
+            >
+              <Trash2 size={16} />
+              <span>Очистить кэш</span>
+            </button>
           </div>
 
           <form
@@ -193,15 +249,34 @@ export default function ChatPage() {
               handleSend();
             }}
           >
-            <input
-              className="chat-input__field"
-              type="text"
-              value={question}
-              onChange={(e) => setQuestion(e.target.value)}
-              placeholder="Задайте вопрос о данных..."
-              autoComplete="off"
-            />
-            <button className="btn btn--primary chat-input__btn" type="submit" disabled={!question.trim() || isAsking}>
+            <div className="chat-input__wrap">
+              <textarea
+                ref={textareaRef}
+                className="chat-input__field"
+                rows={1}
+                value={question}
+                onChange={(e) => {
+                  setQuestion(e.target.value);
+                  autoResize();
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    handleSend();
+                  }
+                }}
+                placeholder="Задайте вопрос о данных... (Enter — отправить, Shift+Enter — новая строка)"
+                autoComplete="off"
+              />
+              <div className="chat-input__hint">
+                <kbd>Enter</kbd> отправить
+              </div>
+            </div>
+            <button
+              className="btn btn--primary chat-input__btn"
+              type="submit"
+              disabled={!question.trim() || isAsking}
+            >
               <Send size={18} />
             </button>
           </form>

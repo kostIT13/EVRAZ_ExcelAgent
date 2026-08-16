@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     API_KEY: str = ""
     RATE_LIMIT_ASK: str = "30/minute"
     RATE_LIMIT_UPLOAD: str = "10/minute"
+    RATE_LIMIT_CACHE_CLEAR: str = "10/minute"
 
     LLM_BASE_URL: str
     LLM_API_KEY: str

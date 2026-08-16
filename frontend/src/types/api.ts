@@ -88,6 +88,7 @@ export interface AskResponse {
   request_id: string;
   latency_ms: number;
   mode_used: string;
+  response_mode?: string;
   query_type: string;
   sql_query: string;
   sql_result_preview: unknown[];
@@ -100,7 +101,8 @@ export interface AskResponse {
 export interface AskRequest {
   question: string;
   top_k?: number;
-  mode?: 'auto' | 'rag' | 'agent';
+  mode?: 'agent';
+  response_mode?: 'detailed' | 'concise';
   conversation_history?: ConversationTurn[];
   conversation_id?: string | null;
 }

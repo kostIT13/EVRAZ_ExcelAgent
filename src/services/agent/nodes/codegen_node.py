@@ -22,6 +22,13 @@ WHERE fp.sheet_period = '2025-01'
 LIMIT 1""",
     },
     {
+        "question": "Какова средняя цена на все виды медного лома в феврале 2025?",
+        "sql": """SELECT AVG(fp.value) AS средняя_цена
+FROM mart.price_facts fp
+WHERE fp.sheet_period = '2025-02'
+  AND fp.item_name ILIKE 'Лом меди%'""",
+    },
+    {
         "question": "Сравни цены на латунь у всех поставщиков в декабре 2025",
         "sql": """SELECT fp.supplier, fp.value
 FROM mart.price_facts fp
@@ -170,6 +177,84 @@ def validate_sql(sql: str) -> List[str]:
     return errors
 
 
+# Словоформы металлов в родительном падеже для префиксного поиска "все виды".
+_MATERIAL_FORMS = {
+    "мед": "меди",
+    "алюмин": "алюминия",
+    "латун": "латуни",
+    "бронз": "бронзы",
+    "никел": "никеля",
+    "цинк": "цинка",
+    "свинц": "свинца",
+    "баббит": "баббита",
+}
+
+
+def _refine_all_kinds_filter(question: str, sql: str) -> str:
+    """Сужает широкий item_name ILIKE '%X%' до префикса 'Лом <металл>%'
+    для запросов 'все виды <металла>', чтобы не захватывать составные/легированные
+    материалы (медно-никелевые сплавы, сложные сплавы, оребрение и т.п.)."""
+    if not re.search(r"\bвсе\s+виды?\b", question, re.IGNORECASE):
+        return sql
+    m = re.search(r"(?i)item_name\s+ILIKE\s+'%([^']+)%'", sql)
+    if not m:
+        return sql
+    root = m.group(1).lower()
+    form = next((v for k, v in _MATERIAL_FORMS.items() if k in root), None)
+    if not form:
+        return sql
+    prefix = f"Лом {form}"
+    return sql[: m.start()] + f"item_name ILIKE '{prefix}%'" + sql[m.end():]
+
+
+def _refine_supplier_in_filter(sql: str) -> str:
+    """Заменяет <prefix>supplier IN ('a','b',...) на группу OR
+    <prefix>supplier ILIKE '%a%', убирая дефисы/пробелы, чтобы перекрыть
+    реальные названия поставщиков (например 'шами-сервис' -> 'шамисервис',
+    'сплав-21' -> 'сплав21')."""
+    pattern = re.compile(r"(?i)(([\w.]*)supplier\s+IN\s*\()([^)]*)(\))")
+
+    def _repl(m: re.Match) -> str:
+        prefix = m.group(2)  # например 'fp.'
+        inner = m.group(3)
+        items = re.findall(r"'([^']*)'", inner)
+        if not items:
+            return m.group(0)
+        clauses = []
+        for it in items:
+            norm = re.sub(r"[\s-]+", "", it).lower()
+            if norm:
+                clauses.append(f"{prefix}supplier ILIKE '%{norm}%'")
+        if not clauses:
+            return m.group(0)
+        return "(" + " OR ".join(clauses) + ")"
+
+    return pattern.sub(_repl, sql)
+
+
+def _refine_supplier_ilike_any(sql: str) -> str:
+    """Нормализует дефисы/пробелы в значениях массива
+    supplier ILIKE ANY (ARRAY['%x%', ...]), чтобы перекрыть реальные названия
+    поставщиков (например '%шами-сервис%' -> '%шамисервис%', '%сплав-21%' -> '%сплав21%')."""
+    pattern = re.compile(r"(?i)(supplier\s+ILIKE\s+ANY\s*\(ARRAY\[)([^\]]*)(\])")
+
+    def _repl(m: re.Match) -> str:
+        inner = m.group(2)
+        parts = [p.strip() for p in inner.split(",") if p.strip()]
+        cleaned = []
+        for p in parts:
+            s = p.strip()
+            if len(s) >= 2 and s.startswith("'"):
+                core = s[1:-1]
+                core = re.sub(r"[\s-]+", "", core)
+                cleaned.append(f"'{core}'")
+            else:
+                cleaned.append(s)
+        return m.group(1) + ", ".join(cleaned) + m.group(3)
+
+    return pattern.sub(_repl, sql)
+
+
 async def codegen_node(
     state: GraphState,
     llm: Optional[LLMClient] = None,
@@ -262,11 +347,19 @@ async def codegen_node(
 - НЕ выдумывай название вида, которого нет в entity_candidates — если его нет, значит
   такого вида в данных нет, и его не нужно включать в запрос.
 
+КРИТИЧЕСКОЕ ПРАВИЛО ДЛЯ "ВСЕХ ВИДОВ" МЕТАЛЛА:
+Когда пользователь просит "все виды <металла>" (например, "все виды меди",
+"все виды медного лома", "все виды алюминия") — используй ПРЕФИКСНЫЙ поиск по
+item_name в родительном падеже: item_name ILIKE 'Лом <металл>%'.
+НЕ используй широкую подстроку вида item_name ILIKE '%мед%' — она захватывает
+НЕ подходящие материалы: медно-никелевые сплавы, сложные сплавы с небольшим
+содержанием металла, трубки с оребрением другого металла.
+
 ПРИМЕРЫ:
+- "все виды меди" → item_name ILIKE 'Лом меди%'  (а НЕ '%мед%')
+- "все виды алюминия" → item_name ILIKE 'Лом алюминия%'  (а НЕ '%алюмин%')
+- "все виды латуни" → item_name ILIKE 'Лом латуни%'
 - "цена на лом алюминия" → item_name = 'Лом алюминия'
-- "цена на трубку 87,2%" → item_name = 'Лом меди трубка с оребрением медь 87,2%'
-  (берём ТОЧНОЕ имя из кандидатов, даже если в вопросе оно сокращено)
-- "все виды алюминия" → item_name ILIKE '%алюмин%'
 
 Выбирай из entity_candidates РОВНО те значения, которые соответствуют словам
 пользователя, и применяй к ним точное сравнение (не ILIKE) во всех случаях,
@@ -298,6 +391,35 @@ async def codegen_node(
             sql = sql[:-3]
         sql = sql.strip()
         sql = sql.rstrip(";")
+
+        # Детерминированная правка: для "все виды <металла>" сужаем широкий
+        # %металл% до префикса 'Лом <металл>%', чтобы не включать сплавы/оребрение.
+        refined = _refine_all_kinds_filter(question, sql)
+        if refined != sql:
+            sql = refined
+            logger.info(
+                "CodeGen Node [{}]: refined 'all kinds' item filter to prefix",
+                request_id,
+            )
+
+        # Детерминированная правка: supplier IN (...) -> OR supplier ILIKE '%x%'
+        # (нормализуем дефисы/пробелы в названиях поставщиков).
+        refined_suppliers = _refine_supplier_in_filter(sql)
+        if refined_suppliers != sql:
+            sql = refined_suppliers
+            logger.info(
+                "CodeGen Node [{}]: refined supplier IN(...) to ILIKE group",
+                request_id,
+            )
+
+        # Нормализуем дефисы/пробелы в supplier ILIKE ANY (ARRAY[...])
+        refined_any = _refine_supplier_ilike_any(sql)
+        if refined_any != sql:
+            sql = refined_any
+            logger.info(
+                "CodeGen Node [{}]: normalized supplier ILIKE ANY(ARRAY[...]) values",
+                request_id,
+            )
 
         state["sql_query"] = sql
         logger.info(

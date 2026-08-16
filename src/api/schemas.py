@@ -104,6 +104,11 @@ class AskRequest(BaseModel):
         pattern="^(auto|rag|agent)$",
         description="Режим: auto (автоопределение), rag (только RAG), agent (только агент)",
     )
+    response_mode: str = Field(
+        default="detailed",
+        pattern="^(detailed|concise)$",
+        description="Формат ответа: detailed (полный), concise (только число или слово)",
+    )
     conversation_history: List[ConversationTurn] = Field(
         default_factory=list,
         description="История предыдущих попыток для self-correction",
@@ -131,6 +136,7 @@ class AskResponse(BaseModel):
     request_id: str = Field(..., description="Уникальный ID запроса")
     latency_ms: int = Field(..., description="Время выполнения в миллисекундах")
     mode_used: str = Field(default="rag", description="Какой режим использовался: rag/agent")
+    response_mode: str = Field(default="detailed", description="Формат ответа: detailed/concise")
     query_type: str = Field(default="", description="Тип запроса (только для agent): lookup/aggregate/cross_sheet/delta")
     sql_query: str = Field(default="", description="Сгенерированный SQL (только для agent)")
     sql_result_preview: List[Any] = Field(default_factory=list, description="Первые строки результата (только для agent)")

@@ -1,9 +1,11 @@
 import { motion } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
-import { Bot, User, Timer, Copy, XCircle, Search, BookOpen, Fingerprint } from 'lucide-react';
+import { Bot, User, XCircle, Timer, Fingerprint, Search, BookOpen, Wand2 } from 'lucide-react';
 import type { AskResponse, SourceInfo } from '@/types/api';
 import { confidenceLabel, formatMs, modeLabel, shortId } from '@/lib/utils';
 import { SourceList } from './SourcesModal';
+import SqlBlock from './SqlBlock';
+import ResultTable from './ResultTable';
 
 export interface ChatMessageData {
   id: number;
@@ -24,6 +26,9 @@ export default function ChatMessage({ message, onCopy, onOpenSources, onTrace }:
   const { type, content, meta } = message;
   const isUser = type === 'user';
   const isError = type === 'error';
+  const isConcise = meta?.response_mode === 'concise';
+
+  const sqlPreview = meta?.sql_result_preview?.length ? meta.sql_result_preview : null;
 
   return (
     <motion.div
@@ -39,27 +44,22 @@ export default function ChatMessage({ message, onCopy, onOpenSources, onTrace }:
         <span className="chat-message__author">
           {isUser ? 'Вы' : isError ? 'Ошибка' : 'Ассистент'}
         </span>
+        {isConcise && <Wand2 size={13} className="chat-message__concise-ico" />}
       </div>
 
       <div className="chat-message__content">
-        {type === 'assistant' ? (
+        {type === 'assistant' && isConcise ? (
+          <div className="chat-message__concise">{content}</div>
+        ) : type === 'assistant' ? (
           <ReactMarkdown>{content}</ReactMarkdown>
         ) : (
           content
         )}
       </div>
 
-      {meta?.sql_query && (
-        <div className="chat-message__sql">
-          <div className="chat-message__sql-label">SQL запрос</div>
-          <pre>
-            <code>{meta.sql_query}</code>
-          </pre>
-          <button className="btn btn--sm btn--ghost chat-message__sql-copy" onClick={() => onCopy(meta.sql_query!)}>
-            <Copy size={12} /> Копировать
-          </button>
-        </div>
-      )}
+      {meta?.sql_query && <SqlBlock sql={meta.sql_query} onCopy={onCopy} />}
+
+      {sqlPreview && <ResultTable data={sqlPreview} onCopy={onCopy} />}
 
       {(type === 'assistant' || type === 'error') && (meta || content) && (
         <div className="chat-message__meta">
@@ -67,6 +67,9 @@ export default function ChatMessage({ message, onCopy, onOpenSources, onTrace }:
             <span className={`chat-message__badge chat-message__badge--${modeLabel(meta.mode_used).cls}`}>
               {modeLabel(meta.mode_used).text}
             </span>
+          )}
+          {isConcise && (
+            <span className="chat-message__badge chat-message__badge--concise">🔢 Только число</span>
           )}
           {meta?.confidence !== undefined && (
             <span className={`chat-message__badge chat-message__badge--${confidenceLabel(meta.confidence).cls}`}>

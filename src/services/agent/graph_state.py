@@ -23,6 +23,7 @@ class GraphState(TypedDict, total=False):
     question: str
     request_id: str
     top_k: int
+    response_mode: str
 
     conversation_id: Optional[str]
     conversation_history: List[Dict[str, Any]]

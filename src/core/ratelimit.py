@@ -16,3 +16,7 @@ def ask_limit() -> str:
 
 def upload_limit() -> str:
     return settings.RATE_LIMIT_UPLOAD or "10/minute"
+
+
+def cache_clear_limit() -> str:
+    return settings.RATE_LIMIT_CACHE_CLEAR or "10/minute"

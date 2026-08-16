@@ -3,8 +3,6 @@ from pathlib import Path
 from typing import List
 from fastapi import APIRouter, Depends, UploadFile, Query, Request
 from fastapi import File as FastAPIFile
-from sqlalchemy.ext.asyncio import AsyncSession
-from src.core.db.database import get_db
 from src.core.logging_settings import logger
 from src.api.errors import AppError, FileTooLargeError, ValidationError
 from src.api.security import verify_api_key
@@ -165,25 +163,3 @@ async def get_sheet_cells(
     return [CellResponse.model_validate(c) for c in cells]
 
 
-@router.post("/{file_id}/reindex", status_code=200)
-async def reindex_file(
-    file_id: int,
-    service: FileServiceDependency,
-):
-    await service.get_by_id(file_id)
-
-    from src.services.mart.normalizer import normalize_file_to_mart
-    from src.services.excel.repository import SQLAlchemyExcelRepository
-
-    logger.info("Reindexing file id={}", file_id)
-    async with get_db() as session:
-        repo = SQLAlchemyExcelRepository(session)
-        stats = await normalize_file_to_mart(file_id, session=session)
-        entity_stats = await repo.index_entities(file_id)
-    logger.info(
-        "Reindex complete for file id={}: mart={}, entities={}",
-        file_id,
-        stats,
-        entity_stats,
-    )
-    return {"message": f"File {file_id} reindexed successfully"}

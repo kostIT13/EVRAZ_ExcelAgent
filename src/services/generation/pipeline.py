@@ -24,6 +24,7 @@ class GenerationPipeline:
         session: Optional[AsyncSession] = None,
         conversation_history: Optional[List[Dict[str, str]]] = None,
         conversation_id: Optional[str] = None,
+        response_mode: str = "detailed",
     ) -> AgentResult:
         is_retry = bool(conversation_history)
         logger.info(
@@ -38,13 +39,14 @@ class GenerationPipeline:
             top_k=top_k,
             conversation_history=conversation_history,
             conversation_id=conversation_id,
+            response_mode=response_mode,
         )
 
         needs_correction = (
             result.status in ("failed", "low_confidence")
             or result.confidence < 0.5
             or not result.answer
-            or len(result.answer) < 20
+            or (len(result.answer) < 20 and response_mode != "concise")
         )
 
         if needs_correction and not is_retry:
@@ -80,6 +82,7 @@ class GenerationPipeline:
                 top_k=top_k,
                 conversation_history=correction_history,
                 conversation_id=conversation_id,
+                response_mode=response_mode,
             )
             result.self_corrected = True
 
