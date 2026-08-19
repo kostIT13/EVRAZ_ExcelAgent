@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request
-from src.api.schemas import AskRequest, AskResponse
+from src.api.schemas import AskRequest, AskResumeRequest, AskResponse, WaitForInputInfo
 from src.api.security import verify_api_key
 from src.core.logging_settings import logger
 from src.core.ratelimit import get_limiter, ask_limit
 from src.services.generation.pipeline import pipeline
-from src.services.agent.graph import AgentResult
+from src.services.agent.graph import AgentResult, STATUS_WAITING
 
 router = APIRouter(prefix="/ask", tags=["agent"])
 _limiter = get_limiter()
@@ -17,6 +17,12 @@ def _history_to_dicts(history):
 
 
 def _build_agent_response(result: AgentResult, response_mode: str = "detailed") -> AskResponse:
+    waiting = None
+    if result.status == STATUS_WAITING and result.waiting_question is not None:
+        waiting = WaitForInputInfo(
+            question=result.waiting_question.get("question", ""),
+            options=result.waiting_question.get("options", []),
+        )
     return AskResponse(
         answer=result.answer,
         confidence=result.confidence,
@@ -31,6 +37,8 @@ def _build_agent_response(result: AgentResult, response_mode: str = "detailed") 
         retry_count=result.retry_count,
         status=result.status,
         self_corrected=result.self_corrected,
+        thread_id=result.thread_id,
+        waiting_question=waiting,
     )
 
 
@@ -84,3 +92,24 @@ async def ask_question(
         return _build_agent_response(fallback_result, body.response_mode)
 
     return _build_agent_response(agent_result, body.response_mode)
+
+
+@router.post("/resume", response_model=AskResponse)
+@_limiter.limit(ask_limit)
+async def ask_resume(
+    request: Request,
+    body: AskResumeRequest,
+    _key: str = Depends(verify_api_key),
+) -> AskResponse:
+    """Продолжает прерванный на уточняющем вопросе агентный запуск."""
+    logger.info(
+        "Ask resume request: thread='{}', answer='{}'",
+        body.thread_id[:8],
+        body.user_answer[:80],
+    )
+    result = await pipeline.resume_agent(
+        thread_id=body.thread_id,
+        user_answer=body.user_answer,
+        response_mode=body.response_mode,
+    )
+    return _build_agent_response(result, body.response_mode)

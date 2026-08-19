@@ -1,9 +1,13 @@
 from __future__ import annotations
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
+from langgraph.types import Command, interrupt
+
 from src.core.logging_settings import logger
-from src.services.agent.graph_state import GraphState, QueryType, NODE_DISAMBIGUATION
+from src.services.agent.graph_state import GraphState, QueryType, NODE_DISAMBIGUATION, NODE_PLANNER
+from src.services.agent.structured_schemas import DisambiguationResult
 from src.services.llm.llm_client import LLMClient
+from src.services.llm.structured import get_structured_llm
 
 DISAMBIGUATION_SYSTEM_PROMPT = """Ты — узел разрешения неоднозначностей для вопросов по Excel-файлу с ценами на металлы.
 
@@ -20,7 +24,7 @@ DISAMBIGUATION_SYSTEM_PROMPT = """Ты — узел разрешения нео�
 - Не указан период/месяц
 - Указано несколько возможных периодов
 
-Верни JSON с полями:
+Верни строго JSON-объект с полями:
 1. "needs_disambiguation": true/false — нуждается ли вопрос в уточнении
 2. "ambiguity_type": тип неоднозначности (или null):
    - "price_source" — не указан источник цены
@@ -57,12 +61,11 @@ async def disambiguation_node(
     state: GraphState,
     llm: Optional[LLMClient] = None,
     **kwargs: Any,
-) -> GraphState:
-    llm = llm or LLMClient()
+):
     request_id = state.get("request_id", "?")[:8]
     question = state.get("question", "")
     query_type = state.get("query_type")
-    entities = state.get("entities", [])
+    entities = list(state.get("entities", []))
 
     logger.info(
         "Disambiguation Node [{}]: checking '{}'",
@@ -85,49 +88,21 @@ async def disambiguation_node(
         {"role": "user", "content": user_message},
     ]
 
+    needs_disambiguation = False
+    ambiguity_type = None
+    clarifying_question = ""
+    options: List[str] = []
+    suggested_resolution = None
+
     try:
-        raw_response = await llm.chat(
-            messages=messages,
-            model=None,
-            temperature=0.1,
-            max_tokens=1024,
-        )
+        structured = get_structured_llm(DisambiguationResult, temperature=0.0)
+        result: DisambiguationResult = await structured.ainvoke(messages)
 
-        cleaned = raw_response.strip()
-        if cleaned.startswith("```json"):
-            cleaned = cleaned[7:]
-        if cleaned.startswith("```"):
-            cleaned = cleaned[3:]
-        if cleaned.endswith("```"):
-            cleaned = cleaned[:-3]
-        cleaned = cleaned.strip()
-
-        result = json.loads(cleaned)
-
-        needs_disambiguation = result.get("needs_disambiguation", False)
-        ambiguity_type = result.get("ambiguity_type")
-        clarifying_question = result.get("clarifying_question", "")
-        options = result.get("options", [])
-        suggested_resolution = result.get("suggested_resolution")
-
-        state["disambiguation_needed"] = needs_disambiguation
-        state["disambiguation_info"] = {
-            "ambiguity_type": ambiguity_type,
-            "clarifying_question": clarifying_question,
-            "options": options,
-            "suggested_resolution": suggested_resolution,
-        }
-
-        if needs_disambiguation and suggested_resolution:
-            logger.info(
-                "Disambiguation Node [{}]: auto-resolving with '{}'",
-                request_id,
-                suggested_resolution,
-            )
-            if suggested_resolution not in entities:
-                entities.append(suggested_resolution)
-                state["entities"] = entities
-            state["disambiguation_needed"] = False  
+        needs_disambiguation = result.needs_disambiguation
+        ambiguity_type = result.ambiguity_type
+        clarifying_question = result.clarifying_question
+        options = result.options or []
+        suggested_resolution = result.suggested_resolution
 
         logger.info(
             "Disambiguation Node [{}]: needs={}, type={}, auto_resolved={}",
@@ -136,20 +111,81 @@ async def disambiguation_node(
             ambiguity_type,
             bool(suggested_resolution) if needs_disambiguation else False,
         )
-
-    except (json.JSONDecodeError, KeyError, TypeError) as exc:
+    except Exception as exc:
         logger.error(
-            "Disambiguation Node [{}]: failed to parse LLM response: {}",
+            "Disambiguation Node [{}]: structured LLM failed: {}",
             request_id,
             exc,
         )
-        state["disambiguation_needed"] = False
-        state["disambiguation_info"] = {}
+        needs_disambiguation = False
 
-    state["trace"] = state.get("trace", {})
-    state["trace"][NODE_DISAMBIGUATION] = {
-        "needs_disambiguation": state.get("disambiguation_needed", False),
-        "disambiguation_info": state.get("disambiguation_info", {}),
+    base_trace = dict(state.get("trace", {}))
+    base_trace[NODE_DISAMBIGUATION] = {
+        "needs_disambiguation": needs_disambiguation,
+        "ambiguity_type": ambiguity_type,
+        "clarifying_question": clarifying_question,
+        "options": options,
     }
 
-    return state
+    # --- Ветвление -----------------------------------------------------
+    # 1) Неоднозначность можно разрешить автоматически.
+    if needs_disambiguation and suggested_resolution:
+        if suggested_resolution not in entities:
+            entities.append(suggested_resolution)
+        return Command(
+            goto=NODE_PLANNER,
+            update={
+                "entities": entities,
+                "disambiguation_needed": False,
+                "disambiguation_info": {
+                    "ambiguity_type": ambiguity_type,
+                    "clarifying_question": clarifying_question,
+                    "options": options,
+                    "suggested_resolution": suggested_resolution,
+                },
+                "trace": base_trace,
+            },
+        )
+
+    # 2) Нужен уточняющий вопрос — приостанавливаем граф через interrupt().
+    if needs_disambiguation:
+        user_choice = interrupt(
+            {
+                "question": clarifying_question
+                or "Уточните, пожалуйста, что именно вас интересует:",
+                "options": options or AVAILABLE_PRICE_SOURCES,
+            }
+        )
+        user_choice_text = (
+            user_choice if isinstance(user_choice, str) else json.dumps(user_choice, ensure_ascii=False)
+        )
+        if user_choice_text and user_choice_text not in entities:
+            entities.append(user_choice_text)
+        return Command(
+            goto=NODE_PLANNER,
+            update={
+                "entities": entities,
+                "disambiguation_needed": False,
+                "user_resolution": user_choice_text,
+                "disambiguation_info": {
+                    "ambiguity_type": ambiguity_type,
+                    "clarifying_question": clarifying_question,
+                    "options": options or AVAILABLE_PRICE_SOURCES,
+                    "user_choice": user_choice_text,
+                },
+                "trace": {
+                    **base_trace,
+                    "user_resolution": user_choice_text,
+                },
+            },
+        )
+
+    # 3) Неоднозначности нет — идём дальше без изменений.
+    return Command(
+        goto=NODE_PLANNER,
+        update={
+            "disambiguation_needed": False,
+            "disambiguation_info": state.get("disambiguation_info", {}),
+            "trace": base_trace,
+        },
+    )

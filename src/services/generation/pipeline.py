@@ -5,7 +5,11 @@ from src.core.db.database import async_session_maker
 from src.core.db.models import QueryLog
 from src.core.logging_settings import logger
 from src.services.llm.llm_client import LLMClient
-from src.services.agent.graph import LangGraphAgent, AgentResult
+from src.services.agent.graph import (
+    LangGraphAgent,
+    AgentResult,
+    STATUS_WAITING,
+)
 
 
 class GenerationPipeline:
@@ -42,11 +46,16 @@ class GenerationPipeline:
             response_mode=response_mode,
         )
 
+        # waiting_for_input — граф приостановлен на уточняющем вопросе,
+        # self-correction не запускаем.
         needs_correction = (
-            result.status in ("failed", "low_confidence")
-            or result.confidence < 0.5
-            or not result.answer
-            or (len(result.answer) < 20 and response_mode != "concise")
+            result.status not in (STATUS_WAITING,)
+            and (
+                result.status in ("failed", "low_confidence")
+                or result.confidence < 0.5
+                or not result.answer
+                or (len(result.answer) < 20 and response_mode != "concise")
+            )
         )
 
         if needs_correction and not is_retry:
@@ -98,6 +107,30 @@ class GenerationPipeline:
             session=session,
         )
 
+        return result
+
+    async def resume_agent(
+        self,
+        thread_id: str,
+        user_answer: str,
+        session: Optional[AsyncSession] = None,
+        response_mode: str = "detailed",
+    ) -> AgentResult:
+        """Продолжает прерванный на уточняющем вопросе запуск агента."""
+        logger.info(
+            "Pipeline: resuming agent thread={} with answer",
+            thread_id[:8],
+        )
+        result = await self._agent.resume(
+            thread_id=thread_id,
+            user_answer=user_answer,
+            response_mode=response_mode,
+        )
+
+        await self._log_agent_to_db(
+            result=result,
+            session=session,
+        )
         return result
 
     async def _log_agent_to_db(

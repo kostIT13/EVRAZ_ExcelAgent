@@ -9,7 +9,9 @@ from src.services.agent.graph_state import (
     GraphState,
     NODE_PLANNER,
 )
+from src.services.agent.structured_schemas import PlannerResult
 from src.services.llm.llm_client import LLMClient
+from src.services.llm.structured import get_structured_llm
 
 PLANNER_SYSTEM_PROMPT = """Ты — планировщик запросов к нормализованной факт-таблице цен на металлы.
 
@@ -31,7 +33,7 @@ PLANNER_SYSTEM_PROMPT = """Ты — планировщик запросов к �
 - Схема: mart.price_facts — единственная таблица для вопросов о ценах
 - План должен быть на русском языке, кратким (3-5 предложений)
 
-Верни ТОЛЬКО текст плана без лишних пояснений.
+Верни ТОЛЬКО JSON-объект вида {"plan": "текст плана"} без лишних пояснений.
 """
 
 
@@ -133,6 +135,26 @@ def _default_columns(table: str) -> List[Dict[str, str]]:
     ]
 
 
+def _build_light_schema(schema: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Лёгкая схема для промпта планировщика (без samples и sample_values).
+
+    Полная схема (с samples) хранится в state['schema'] для executor/codegen,
+    а в LLM-промпт отправляем компактную версию — это значительно ускоряет ответ.
+    """
+    light = []
+    for sheet in schema:
+        light.append({
+            "name": sheet.get("name"),
+            "period": sheet.get("period"),
+            "table": (sheet.get("schema") or {}).get("table"),
+            "columns": [
+                {"name": c.get("name"), "data_type": c.get("data_type")}
+                for c in sheet.get("columns", [])
+            ],
+        })
+    return light
+
+
 async def planner_node(
     state: GraphState,
     llm: Optional[LLMClient] = None,
@@ -179,7 +201,8 @@ async def planner_node(
 
     state["schema"] = schema
 
-    schema_json = json.dumps(schema, ensure_ascii=False, indent=2)
+    # Лёгкая схема (без samples) для промпта — ускоряет ответ LLM.
+    schema_json = json.dumps(_build_light_schema(schema), ensure_ascii=False, indent=2)
     candidates_text = json.dumps(entity_candidates[:10], ensure_ascii=False, indent=2)
     candidates_section = (
         f"\nСущности-кандидаты (item_name/supplier/sheet_period):\n{candidates_text}"
@@ -202,20 +225,16 @@ async def planner_node(
     ]
 
     try:
-        plan = await llm.chat(
-            messages=messages,
-            model=None,
-            temperature=0.1,
-            max_tokens=1024,
-        )
-        state["plan"] = plan.strip()
+        structured = get_structured_llm(PlannerResult, temperature=0.0)
+        result: PlannerResult = await structured.ainvoke(messages)
+        state["plan"] = (result.plan or "").strip()
         logger.info(
             "Planner Node [{}]: plan generated ({} chars)",
             request_id,
             len(state["plan"]),
         )
     except Exception as exc:
-        logger.error("Planner Node [{}]: LLM failed: {}", request_id, exc)
+        logger.error("Planner Node [{}]: structured LLM failed: {}", request_id, exc)
         state["plan"] = f"Ошибка при генерации плана: {exc}"
 
     state["trace"] = state.get("trace", {})

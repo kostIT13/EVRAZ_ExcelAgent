@@ -1075,6 +1075,26 @@ body {
   transition: border-color var(--transition), color var(--transition);
 }
 
+.chat-settings__new {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  background: var(--color-surface-2);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  font-size: 0.78rem;
+  font-family: var(--font);
+  cursor: pointer;
+  transition: border-color var(--transition), color var(--transition);
+}
+
+.chat-settings__new:hover {
+  border-color: var(--evraz-gold);
+  color: var(--evraz-gold);
+}
+
 .chat-settings__clear:hover {
   border-color: var(--evraz-red);
   color: var(--evraz-red);

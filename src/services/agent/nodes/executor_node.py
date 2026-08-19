@@ -377,6 +377,8 @@ async def executor_node(
     if not sql_query:
         state["sql_error"] = "Нет SQL-запроса для выполнения"
         state["sql_result"] = []
+        # Инкрементируем счётчик ретраев, чтобы не зациклить codegen→executor.
+        state["retry_count"] = state.get("retry_count", 0) + 1
         state["trace"] = state.get("trace", {})
         state["trace"][NODE_EXECUTOR] = {"error": state["sql_error"]}
         return state
@@ -386,6 +388,7 @@ async def executor_node(
             f"SQL не прошёл валидацию: {'; '.join(validation_errors)}"
         )
         state["sql_result"] = []
+        state["retry_count"] = state.get("retry_count", 0) + 1
         state["trace"] = state.get("trace", {})
         state["trace"][NODE_EXECUTOR] = {"error": state["sql_error"]}
         return state
@@ -397,6 +400,7 @@ async def executor_node(
     if error:
         state["sql_error"] = error
         state["sql_result"] = []
+        state["retry_count"] = state.get("retry_count", 0) + 1
         state["trace"] = state.get("trace", {})
         state["trace"][NODE_EXECUTOR] = {
             "sql_query": sql_query,

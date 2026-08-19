@@ -33,7 +33,21 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Ingestion queue start error: {e}")
 
+    # Инициализация LangGraph Postgres-checkpointer (создание таблиц при первом запуске).
+    try:
+        from src.services.agent.checkpointer import CheckpointerManager
+        await CheckpointerManager.get()
+        logger.info("LangGraph checkpointer initialised")
+    except Exception as e:
+        logger.error(f"LangGraph checkpointer init error: {e}")
+
     yield
+
+    try:
+        from src.services.agent.checkpointer import CheckpointerManager
+        await CheckpointerManager.close()
+    except Exception as e:
+        logger.error(f"LangGraph checkpointer close error: {e}")
 
     try:
         from src.services.excel.ingestion_queue import ingestion_queue

@@ -119,6 +119,23 @@ class AskRequest(BaseModel):
     )
 
 
+class WaitForInputInfo(BaseModel):
+
+    question: str = Field(default="", description="Уточняющий вопрос от агента")
+    options: List[str] = Field(default_factory=list, description="Варианты ответа для уточнения")
+
+
+class AskResumeRequest(BaseModel):
+
+    thread_id: str = Field(..., min_length=1, description="ID прерванного диалога (thread_id из /ask)")
+    user_answer: str = Field(..., min_length=1, max_length=2000, description="Ответ пользователя на уточняющий вопрос")
+    response_mode: str = Field(
+        default="detailed",
+        pattern="^(detailed|concise)$",
+        description="Формат ответа: detailed/concise",
+    )
+
+
 class SourceInfo(BaseModel):
 
     chunk: str = Field(..., description="Текст чанка")
@@ -141,8 +158,16 @@ class AskResponse(BaseModel):
     sql_query: str = Field(default="", description="Сгенерированный SQL (только для agent)")
     sql_result_preview: List[Any] = Field(default_factory=list, description="Первые строки результата (только для agent)")
     retry_count: int = Field(default=0, description="Количество retry (только для agent)")
-    status: str = Field(default="success", description="Статус: success/low_confidence/failed")
+    status: str = Field(default="success", description="Статус: success/low_confidence/failed/waiting_for_input")
     self_corrected: bool = Field(default=False, description="Был ли применён self-correction")
+    thread_id: Optional[str] = Field(
+        default=None,
+        description="Идентификатор диалога (thread_id) для продолжения через /ask/resume",
+    )
+    waiting_question: Optional[WaitForInputInfo] = Field(
+        default=None,
+        description="Уточняющий вопрос, когда status=waiting_for_input",
+    )
 
 
 class TraceStepInfo(BaseModel):

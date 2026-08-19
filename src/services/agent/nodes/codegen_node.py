@@ -432,6 +432,8 @@ item_name в родительном падеже: item_name ILIKE 'Лом <ме�
         logger.error("CodeGen Node [{}]: LLM failed: {}", request_id, exc)
         state["sql_query"] = ""
         state["validation_errors"] = [f"Ошибка LLM: {exc}"]
+        # Инкремент счётчика ретраев, чтобы не зациклить codegen при ошибке.
+        state["retry_count"] = state.get("retry_count", 0) + 1
         state["trace"] = state.get("trace", {})
         state["trace"][NODE_CODEGEN] = {"error": str(exc)}
         return state
@@ -456,6 +458,8 @@ item_name в родительном падеже: item_name ILIKE 'Лом <ме�
                 "validation_errors": state["validation_errors"],
                 "compiled_from_spec": True,
             }
+            if state["validation_errors"]:
+                state["retry_count"] = state.get("retry_count", 0) + 1
             return state
         except Exception as exc:
             logger.warning(
@@ -473,6 +477,10 @@ item_name в родительном падеже: item_name ILIKE 'Лом <ме�
         )
     else:
         state["validation_errors"] = ["SQL-запрос пуст."]
+
+    # Инкремент счётчика ретраев, чтобы не зациклить codegen при ошибках валидации.
+    if state["validation_errors"]:
+        state["retry_count"] = state.get("retry_count", 0) + 1
 
     state["trace"] = state.get("trace", {})
     state["trace"][NODE_CODEGEN] = {

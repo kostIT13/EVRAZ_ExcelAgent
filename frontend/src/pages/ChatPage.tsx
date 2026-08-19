@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Send, Sparkles, Trash2 } from 'lucide-react';
+import { RotateCcw, Send, Sparkles, Trash2 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import api from '@/api';
 import type { FileResponse, SourceInfo } from '@/types/api';
@@ -19,6 +19,14 @@ const SUGGESTIONS = [
   'Дельта между мин и макс ценой на медь по поставщикам',
 ];
 
+// Генерация нового thread_id (conversation_id) для диалога.
+function newThreadId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `chat-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 export default function ChatPage() {
   const navigate = useNavigate();
   const { toasts, showToast, dismiss } = useToast();
@@ -32,6 +40,8 @@ export default function ChatPage() {
   const [responseMode, setResponseMode] = useState<'detailed' | 'concise'>('detailed');
   const [agentStep, setAgentStep] = useState(-1);
   const [sourcesModal, setSourcesModal] = useState<SourceInfo[] | null>(null);
+  // conversationId = thread_id диалога (для checkpointer/interrupt на бэкенде).
+  const [conversationId, setConversationId] = useState<string | null>(() => newThreadId());
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -84,6 +94,7 @@ export default function ChatPage() {
         top_k: topK,
         mode: 'agent',
         response_mode: responseMode,
+        conversation_id: conversationId,
       });
       setAgentStep(-1);
       addMessage({
@@ -139,6 +150,17 @@ export default function ChatPage() {
     } catch (err) {
       showToast(`Ошибка очистки кэша: ${(err as Error).message}`, 'error');
     }
+  };
+
+  // Начать новый диалог: сбросить сообщения и thread_id.
+  const handleNewChat = () => {
+    setMessages([]);
+    setQuestion('');
+    setAgentStep(-1);
+    setSourcesModal(null);
+    setConversationId(newThreadId());
+    showToast('Начат новый чат', 'success');
+    textareaRef.current?.focus();
   };
 
   return (
@@ -231,6 +253,15 @@ export default function ChatPage() {
                 onChange={(e) => setTopK(parseInt(e.target.value) || 10)}
               />
             </label>
+            <button
+              type="button"
+              className="chat-settings__new"
+              onClick={handleNewChat}
+              title="Начать новый диалог (сбросить thread_id)"
+            >
+              <RotateCcw size={16} />
+              <span>Новый чат</span>
+            </button>
             <button
               type="button"
               className="chat-settings__clear"

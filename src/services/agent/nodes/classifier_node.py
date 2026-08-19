@@ -12,7 +12,9 @@ from src.services.agent.graph_state import (
     NODE_CLASSIFIER,
     NODE_PLANNER,
 )
+from src.services.agent.structured_schemas import ClassifierResult
 from src.services.llm.llm_client import LLMClient
+from src.services.llm.structured import get_structured_llm
 from src.services.entity_resolution.entity_resolver import entity_resolver
 
 CLASSIFIER_SYSTEM_PROMPT = """Ты — классификатор запросов к базе данных Excel-файла Evraz с ценами на металлы.
@@ -123,25 +125,10 @@ async def classifier_node(
     ]
 
     try:
-        raw_response = await llm.chat(
-            messages=messages,
-            model=None,
-            temperature=0.1,
-            max_tokens=1024,
-        )
+        structured = get_structured_llm(ClassifierResult, temperature=0.0)
+        result: ClassifierResult = await structured.ainvoke(messages)
 
-        cleaned = raw_response.strip()
-        if cleaned.startswith("```json"):
-            cleaned = cleaned[7:]
-        if cleaned.startswith("```"):
-            cleaned = cleaned[3:]
-        if cleaned.endswith("```"):
-            cleaned = cleaned[:-3]
-        cleaned = cleaned.strip()
-
-        result = json.loads(cleaned)
-
-        query_type_str = result.get("query_type", "unknown")
+        query_type_str = result.query_type
         valid_types = {t.value for t in QueryType}
         if query_type_str not in valid_types:
             query_type_str = "unknown"
@@ -149,15 +136,15 @@ async def classifier_node(
         state["query_type"] = QueryType(query_type_str)
 
         # Домен (prices/metrics/generic) — определяет таблицу для SQL.
-        domain_str = result.get("domain", "generic")
+        domain_str = result.domain
         if domain_str not in {d.value for d in Domain}:
             domain_str = _heuristic_domain(question)
         state["domain"] = Domain(domain_str)
 
-        state["entities"] = result.get("entities", [])
+        state["entities"] = result.entities or []
 
         sheet_map = {s["id"]: s for s in sheets}
-        relevant_ids = result.get("relevant_sheet_ids", [])
+        relevant_ids = result.relevant_sheet_ids or []
         state["relevant_sheets"] = [
             sheet_map[sid] for sid in relevant_ids if sid in sheet_map
         ]
@@ -170,9 +157,9 @@ async def classifier_node(
             [s["name"] for s in state["relevant_sheets"]],
         )
 
-    except (json.JSONDecodeError, KeyError, TypeError) as exc:
+    except Exception as exc:
         logger.error(
-            "Classifier Node [{}]: failed to parse LLM response: {}",
+            "Classifier Node [{}]: structured LLM failed: {}",
             request_id,
             exc,
         )
