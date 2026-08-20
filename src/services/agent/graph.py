@@ -1,4 +1,5 @@
 from __future__ import annotations
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -133,6 +134,82 @@ def build_agent_graph() -> StateGraph:
     return workflow
 
 
+def _extract_chart_data(sql_result: List[Dict[str, Any]]) -> Optional[List[Dict[str, Any]]]:
+    """Case A: если sql_result уже является временным рядом (несколько периодов),
+    формирует структурированный chart_data [{period, value}, ...]."""
+    if not sql_result or len(sql_result) < 2:
+        return None
+    row = sql_result[0]
+    if not isinstance(row, dict):
+        return None
+    period_key = next(
+        (k for k in row if k.lower() in ("sheet_period", "period", "месяц")),
+        None,
+    )
+    value_key = next(
+        (k for k, v in row.items()
+         if k != period_key and isinstance(v, (int, float))),
+        None,
+    )
+    if not period_key or not value_key:
+        return None
+    points = []
+    for r in sql_result:
+        p = r.get(period_key)
+        v = r.get(value_key)
+        if p is None or v is None:
+            continue
+        try:
+            points.append({"period": str(p), "value": float(v)})
+        except (TypeError, ValueError):
+            continue
+    if len(points) < 2:
+        return None
+    return points
+
+
+def _extract_chart_filters(sql_query: str) -> Dict[str, Any]:
+    """Извлекает фильтры (category/supplier/price_type) из выполненного SQL.
+
+    Надёжнее, чем entity-candidates: сам SQL уже содержит условия
+    ``item_name ILIKE '%...%'`` / ``supplier ILIKE '%...%'`` / ``price_type = '...'``,
+    которые агент сгенерировал и выполнил.
+    """
+    out: Dict[str, Any] = {}
+
+    def _first(pattern: str) -> Optional[str]:
+        m = re.search(pattern, sql_query or "", re.IGNORECASE)
+        return m.group(1).strip() if m else None
+
+    # item_name ILIKE '%x%'
+    cat = _first(r"item_name\s+ILIKE\s+'%([^']+)%'")
+    if not cat:
+        # item_name IN ('a','b') — берём первый элемент.
+        m = re.search(r"item_name\s+IN\s*\(\s*'([^']+)'", sql_query or "", re.IGNORECASE)
+        cat = m.group(1).strip() if m else None
+    if not cat:
+        cat = _first(r"item_name\s*=\s*'([^']+)'")
+    if cat:
+        out["category"] = cat
+
+    sup = _first(r"supplier\s+ILIKE\s+'%([^']+)%'")
+    if not sup:
+        m = re.search(r"supplier\s+IN\s*\(\s*'([^']+)'", sql_query or "", re.IGNORECASE)
+        sup = m.group(1).strip() if m else None
+    if not sup:
+        sup = _first(r"supplier\s*=\s*'([^']+)'")
+    if sup:
+        out["supplier"] = sup
+
+    ptype = _first(r"price_type\s*=\s*'([^']+)'")
+    if not ptype:
+        ptype = _first(r"price_type\s+ILIKE\s+'%([^']+)%'")
+    if ptype:
+        out["price_type"] = ptype
+
+    return out
+
+
 @dataclass
 class AgentResult:
     answer: str
@@ -151,6 +228,8 @@ class AgentResult:
     thread_id: Optional[str] = None
     waiting_question: Optional[Dict[str, Any]] = None
     waiting_options: Optional[List[str]] = field(default_factory=list)
+    chart_available: bool = False
+    chart_data: Optional[List[Dict[str, Any]]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -169,6 +248,8 @@ class AgentResult:
             "thread_id": self.thread_id,
             "waiting_question": self.waiting_question,
             "waiting_options": self.waiting_options,
+            "chart_available": self.chart_available,
+            "chart_data": self.chart_data,
         }
 
 
@@ -247,6 +328,16 @@ class LangGraphAgent:
             status = STATUS_WAITING
             answer = ""
 
+        # Case A: если результат уже является временным рядом — отдаём chart_data сразу.
+        chart_data = _extract_chart_data(sql_result)
+        # Кнопка доступна, если есть что резолвить (item/supplier) или уже есть chart_data.
+        chart_available = (
+            chart_data is not None
+            or bool(final_state.get("last_category_id"))
+            or bool(final_state.get("last_semantic_keys"))
+            or bool(final_state.get("last_supplier_filter"))
+        )
+
         return AgentResult(
             answer=answer,
             confidence=confidence,
@@ -268,6 +359,8 @@ class LangGraphAgent:
             if waiting_question is not None
             else None,
             waiting_options=waiting_options,
+            chart_available=chart_available,
+            chart_data=chart_data,
         )
 
     async def run(
@@ -482,6 +575,104 @@ class LangGraphAgent:
                 logger.warning("Resume [{}]: cache store failed: {}", request_id[:8], exc)
 
         return result
+
+    async def build_chart(
+        self,
+        thread_id: str,
+    ) -> tuple[List[Dict[str, Any]], Optional[str]]:
+        """Case B: лёгкий timeseries по уже резолвнутому контексту из checkpoint.
+
+        Не проходит через Router/Entity Resolver и не дёргает LLM — берём последний
+        checkpoint по ``thread_id`` и извлекаем фильтры (item/supplier/price_type)
+        из уже выполненного ``sql_query`` (надёжнее, чем entity-candidates), строя
+        временной ряд по всем месяцам.
+        """
+        graph = await self._get_graph()
+        config = {"configurable": {"thread_id": thread_id}}
+
+        try:
+            snapshot = await graph.aget_state(config)
+            values = dict(snapshot.values or {})
+        except Exception as exc:
+            logger.warning("build_chart [{}]: get_state failed: {}", thread_id[:8], exc)
+            return [], "Не удалось получить контекст диалога"
+
+        domain = values.get("domain")
+        table = "mart.metrics" if getattr(domain, "value", None) == "metrics" else "mart.price_facts"
+
+        # Приоритет: фильтры из выполненного SQL, фолбэк на резолвнутый контекст.
+        filters = _extract_chart_filters(values.get("sql_query", ""))
+        semantic_keys = values.get("last_semantic_keys") or []
+        if not filters.get("category"):
+            filters["category"] = values.get("last_category_id") or (semantic_keys[0] if semantic_keys else None)
+        if not filters.get("supplier"):
+            filters["supplier"] = values.get("last_supplier_filter")
+
+        category = filters.get("category")
+        supplier = filters.get("supplier")
+        price_type = filters.get("price_type")
+
+        if not category and not supplier:
+            return [], "Нет контекста для построения графика"
+
+        # Исходные значения фильтров для условий.
+        category_value = category
+        supplier_value = supplier
+
+        if table == "mart.metrics":
+            where = []
+            params: Dict[str, Any] = {}
+            if category_value:
+                where.append("dimension ILIKE :cat")
+                params["cat"] = f"%{category_value}%"
+            if supplier_value:
+                where.append("supplier ILIKE :sup")
+                params["sup"] = f"%{supplier_value}%"
+            where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+            sql = f"""
+SELECT period, AVG(value) AS value
+FROM mart.metrics
+{where_sql}
+GROUP BY period
+ORDER BY period"""
+        else:
+            where = []
+            params = {}
+            if category_value:
+                where.append("fp.item_name ILIKE :cat")
+                params["cat"] = f"%{category_value}%"
+            if supplier_value:
+                where.append("fp.supplier ILIKE :sup")
+                params["sup"] = f"%{supplier_value}%"
+            if price_type:
+                where.append("fp.price_type = :ptype")
+                params["ptype"] = price_type
+            where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+            sql = f"""
+SELECT fp.sheet_period AS period, AVG(fp.value) AS value
+FROM mart.price_facts fp
+{where_sql}
+GROUP BY fp.sheet_period
+ORDER BY fp.sheet_period"""
+
+        from src.core.db.database import async_session_maker
+        from sqlalchemy import text
+        try:
+            async with async_session_maker() as s:
+                res = await s.execute(text(sql), params)
+                rows = res.fetchall()
+        except Exception as exc:
+            logger.error("build_chart [{}]: SQL failed: {}", thread_id[:8], exc)
+            return [], "Не удалось выполнить запрос для графика"
+
+        points = [
+            {"period": str(r[0]), "value": float(r[1])}
+            for r in rows
+            if r[0] is not None and r[1] is not None
+        ]
+        if len(points) < 2:
+            return [], "Мало данных для построения временного ряда"
+        return points, None
 
 
 langgraph_agent: LangGraphAgent = LangGraphAgent()

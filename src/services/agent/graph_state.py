@@ -33,6 +33,11 @@ class GraphState(TypedDict, total=False):
     entity_candidates: List[Dict[str, Any]]
     entities_for_prompt: Optional[Dict[str, List[str]]]
 
+    # Резолвнутый контекст для переиспользования в лёгком /chart (без LLM).
+    last_category_id: Optional[str]
+    last_semantic_keys: List[str]
+    last_supplier_filter: Optional[str]
+
     query_type: QueryType
     entities: List[str]
     relevant_sheets: List[Dict[str, Any]]

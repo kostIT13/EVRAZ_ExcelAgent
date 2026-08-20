@@ -12,6 +12,7 @@ from src.services.agent.graph_state import (
     NODE_CLASSIFIER,
     NODE_PLANNER,
 )
+from src.services.agent.prompts import build_memory_context
 from src.services.agent.structured_schemas import ClassifierResult
 from src.services.llm.llm_client import LLMClient
 from src.services.llm.structured import get_structured_llm
@@ -100,6 +101,19 @@ async def classifier_node(
         )
         state["entity_candidates"] = []
 
+    # Сохраняем резолвнутый контекст для лёгкого /chart (переиспользуется из checkpoint).
+    state["last_category_id"] = _pick_best_candidate(
+        state.get("entity_candidates", []), "item"
+    )
+    state["last_supplier_filter"] = _pick_best_candidate(
+        state.get("entity_candidates", []), "supplier"
+    )
+    state["last_semantic_keys"] = [
+        c["entity_value"]
+        for c in state.get("entity_candidates", [])
+        if c.get("entity_type") == "item"
+    ][:10]
+
     sheets_json = json.dumps(sheets, ensure_ascii=False, indent=2)
     candidates_text = json.dumps(
         state.get("entity_candidates", [])[:5],
@@ -111,7 +125,13 @@ async def classifier_node(
         if state.get("entity_candidates")
         else ""
     )
-    user_message = f"""Вопрос пользователя: {question}{entity_section}
+    memory_ctx = build_memory_context(state.get("conversation_history", []))
+    memory_section = (
+        f"\n\nИстория диалога (контекст предыдущих вопросов):\n{memory_ctx}"
+        if memory_ctx
+        else ""
+    )
+    user_message = f"""Вопрос пользователя: {question}{entity_section}{memory_section}
 
 Список листов в базе данных:
 {sheets_json}
@@ -176,6 +196,20 @@ async def classifier_node(
     }
 
     return state
+
+
+def _pick_best_candidate(candidates: List[Dict[str, Any]], entity_type: str) -> Optional[str]:
+    """Возвращает лучшего кандидата заданного типа (item/supplier) по score."""
+    best = None
+    best_score = -1.0
+    for c in candidates or []:
+        if c.get("entity_type") != entity_type:
+            continue
+        score = float(c.get("score", 0.0) or 0.0)
+        if score > best_score:
+            best = c.get("entity_value")
+            best_score = score
+    return best
 
 
 def _heuristic_domain(question: str) -> str:

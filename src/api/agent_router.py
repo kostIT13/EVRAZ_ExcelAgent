@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request
-from src.api.schemas import AskRequest, AskResumeRequest, AskResponse, WaitForInputInfo
+from src.api.schemas import (
+    AskRequest,
+    AskResumeRequest,
+    AskResponse,
+    ChartRequest,
+    ChartResponse,
+    WaitForInputInfo,
+)
 from src.api.security import verify_api_key
 from src.core.logging_settings import logger
 from src.core.ratelimit import get_limiter, ask_limit
 from src.services.generation.pipeline import pipeline
-from src.services.agent.graph import AgentResult, STATUS_WAITING
+from src.services.agent.graph import AgentResult, STATUS_WAITING, langgraph_agent
 
 router = APIRouter(prefix="/ask", tags=["agent"])
 _limiter = get_limiter()
@@ -39,6 +46,8 @@ def _build_agent_response(result: AgentResult, response_mode: str = "detailed") 
         self_corrected=result.self_corrected,
         thread_id=result.thread_id,
         waiting_question=waiting,
+        chart_available=result.chart_available,
+        chart_data=result.chart_data,
     )
 
 
@@ -113,3 +122,31 @@ async def ask_resume(
         response_mode=body.response_mode,
     )
     return _build_agent_response(result, body.response_mode)
+
+
+@router.post("/chart", response_model=ChartResponse)
+@_limiter.limit(ask_limit)
+async def ask_chart(
+    request: Request,
+    body: ChartRequest,
+    _key: str = Depends(verify_api_key),
+) -> ChartResponse:
+    """Лёгкий timeseries по уже резолвнутому контексту из checkpoint.
+
+    Не проходит через Router/Entity Resolver и не дёргает LLM — переиспользует
+    last_category_id/last_semantic_keys/last_supplier_filter из памяти диалога.
+    """
+    logger.info("Ask chart request: thread='{}'", body.thread_id[:8])
+    data, error = await langgraph_agent.build_chart(thread_id=body.thread_id)
+    if error:
+        return ChartResponse(
+            thread_id=body.thread_id,
+            chart_available=False,
+            chart_data=[],
+            message=error,
+        )
+    return ChartResponse(
+        thread_id=body.thread_id,
+        chart_available=True,
+        chart_data=data,
+    )

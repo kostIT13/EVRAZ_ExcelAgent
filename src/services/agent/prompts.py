@@ -39,3 +39,33 @@ def build_table_for_domain(domain: str) -> str:
     if domain == "metrics":
         return "mart.metrics"
     return "mart.price_facts"
+
+
+def build_memory_context(
+    conversation_history,
+    max_steps: int = 6,
+) -> str:
+    """Формирует текстовый блок контекста из истории диалога.
+
+    Память агента: берутся последние ``max_steps`` пар «вопрос-ответ»
+    (т.е. до ``max_steps * 2`` реплик). Используется в промптах нод
+    classifier / planner / answer, чтобы агент мог опираться на
+    предыдущие запросы при уточнении.
+
+    ``conversation_history`` — список dict вида ``{"role", "content"}``.
+    """
+    if not conversation_history:
+        return ""
+
+    recent = list(conversation_history)[-(max_steps * 2):]
+    lines: list[str] = []
+    for turn in recent:
+        role_label = "Пользователь" if turn.get("role") == "user" else "Ассистент"
+        content = (turn.get("content") or "").strip()
+        if content:
+            lines.append(f"{role_label}: {content}")
+
+    if not lines:
+        return ""
+
+    return "\n".join(lines)

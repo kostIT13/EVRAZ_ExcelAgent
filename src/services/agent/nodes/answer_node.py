@@ -3,6 +3,7 @@ import json
 from typing import Any, Optional
 from src.core.logging_settings import logger
 from src.services.agent.graph_state import GraphState, NODE_ANSWER
+from src.services.agent.prompts import build_memory_context
 from src.services.llm.llm_client import LLMClient
 
 ANSWER_SYSTEM_PROMPT = """Ты — финальный ассистент по данным о ценах на цветной лом.
@@ -112,7 +113,13 @@ async def answer_node(
                 temperature = 0.2
                 max_tokens = 256
 
-            user_message = f"""Вопрос пользователя: {question}
+            memory_ctx = build_memory_context(state.get("conversation_history", []))
+            memory_section = (
+                f"\n\nИстория диалога (контекст предыдущих вопросов):\n{memory_ctx}"
+                if memory_ctx
+                else ""
+            )
+            user_message = f"""Вопрос пользователя: {question}{memory_section}
 
 SQL-запрос:
 {sql_query}

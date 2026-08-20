@@ -168,6 +168,25 @@ class AskResponse(BaseModel):
         default=None,
         description="Уточняющий вопрос, когда status=waiting_for_input",
     )
+    chart_available: bool = Field(
+        default=False,
+        description="Доступна ли кнопка «Сделай график»",
+    )
+    chart_data: Optional[List[Dict[str, Any]]] = Field(
+        default=None,
+        description="Данные графика [{period, value}, ...], если ответ уже временной ряд",
+    )
+
+
+class ChartRequest(BaseModel):
+    thread_id: str = Field(..., min_length=1, description="ID диалога (thread_id из /ask)")
+
+
+class ChartResponse(BaseModel):
+    thread_id: str = Field(..., description="ID диалога")
+    chart_available: bool = Field(default=False, description="Удалось построить график")
+    chart_data: List[Dict[str, Any]] = Field(default_factory=list, description="Точки ряда [{period, value}]")
+    message: str = Field(default="", description="Сообщение об ошибке, если график не построен")
 
 
 class TraceStepInfo(BaseModel):

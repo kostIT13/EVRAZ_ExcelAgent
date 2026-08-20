@@ -30,12 +30,11 @@ class GenerationPipeline:
         conversation_id: Optional[str] = None,
         response_mode: str = "detailed",
     ) -> AgentResult:
-        is_retry = bool(conversation_history)
         logger.info(
-            "Pipeline [{}]: running agent for '{}' (retry={})",
+            "Pipeline [{}]: running agent for '{}' (history_turns={})",
             "agent",
             question[:80],
-            is_retry,
+            len(conversation_history or []),
         )
 
         result = await self._agent.run(
@@ -58,7 +57,7 @@ class GenerationPipeline:
             )
         )
 
-        if needs_correction and not is_retry:
+        if needs_correction:
             logger.info(
                 "Pipeline [{}]: self-correction triggered (status={}, confidence={:.2f}). "
                 "Retrying with previous attempt context...",
@@ -67,10 +66,12 @@ class GenerationPipeline:
                 result.confidence,
             )
 
-            correction_history = [
+            # Сохраняем память диалога и добавляем попытку для коррекции.
+            correction_history = list(conversation_history or [])
+            correction_history.extend([
                 {"role": "user", "content": question},
                 {"role": "assistant", "content": result.answer or "Не удалось получить ответ"},
-            ]
+            ])
 
             if result.trace:
                 error_details = []

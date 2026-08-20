@@ -9,6 +9,7 @@ from src.services.agent.graph_state import (
     GraphState,
     NODE_PLANNER,
 )
+from src.services.agent.prompts import build_memory_context
 from src.services.agent.structured_schemas import PlannerResult
 from src.services.llm.llm_client import LLMClient
 from src.services.llm.structured import get_structured_llm
@@ -209,7 +210,13 @@ async def planner_node(
         if entity_candidates
         else ""
     )
-    user_message = f"""Вопрос пользователя: {question}{candidates_section}
+    memory_ctx = build_memory_context(state.get("conversation_history", []))
+    memory_section = (
+        f"\n\nИстория диалога (контекст предыдущих вопросов):\n{memory_ctx}"
+        if memory_ctx
+        else ""
+    )
+    user_message = f"""Вопрос пользователя: {question}{candidates_section}{memory_section}
 
 Тип запроса: {query_type.value if query_type else 'unknown'}
 Сущности: {', '.join(entities) if entities else 'не определены'}
