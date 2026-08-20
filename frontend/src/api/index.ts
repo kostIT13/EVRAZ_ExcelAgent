@@ -2,6 +2,7 @@ import type {
   AskRequest,
   AskResponse,
   CellResponse,
+  ChartResponse,
   ColumnResponse,
   FileDetailResponse,
   FileListResponse,
@@ -126,6 +127,11 @@ export function askQuestion(req: AskRequest) {
   });
 }
 
+// ---------- Chart ----------
+export function makeChart(threadId: string) {
+  return post<ChartResponse>('/ask/chart', { body: { thread_id: threadId } });
+}
+
 // ---------- Cache ----------
 export function clearCache() {
   return post<{ message: string; cleared: number }>('/cache/clear');
@@ -156,6 +162,7 @@ export const api = {
   getSheetColumns,
   getSheetCells,
   askQuestion,
+  makeChart,
   clearCache,
   listTraces,
   getTrace,

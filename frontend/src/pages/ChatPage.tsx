@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { RotateCcw, Send, Sparkles, Trash2 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import api from '@/api';
-import type { FileResponse, SourceInfo } from '@/types/api';
+import type { ChartPoint, ConversationTurn, FileResponse, SourceInfo } from '@/types/api';
 import { useToast } from '@/hooks/useToast';
 import { ToastContainer } from '@/components/ui/Toast';
 import FileList from '@/components/files/FileList';
@@ -18,6 +18,9 @@ const SUGGESTIONS = [
   'Сравни цены на латунь у всех поставщиков в декабре 2025',
   'Дельта между мин и макс ценой на медь по поставщикам',
 ];
+
+// Память агента: сколько последних пар «вопрос-ответ» запоминаем и отправляем.
+const MAX_MEMORY_TURNS = 6;
 
 // Генерация нового thread_id (conversation_id) для диалога.
 function newThreadId(): string {
@@ -34,6 +37,8 @@ export default function ChatPage() {
   const [files, setFiles] = useState<FileResponse[]>([]);
   const [selectedFile, setSelectedFile] = useState<FileResponse | null>(null);
   const [messages, setMessages] = useState<ChatMessageData[]>([]);
+  // Память агента: последние N пар «вопрос-ответ», отправляемые бэкенду.
+  const [history, setHistory] = useState<ConversationTurn[]>([]);
   const [question, setQuestion] = useState('');
   const [isAsking, setIsAsking] = useState(false);
   const [topK, setTopK] = useState(10);
@@ -75,8 +80,8 @@ export default function ChatPage() {
     setMessages((prev) => [...prev, { ...msg, id: ++idRef.current }]);
   };
 
-  const handleSend = async () => {
-    const q = question.trim();
+  const handleSend = async (text?: string) => {
+    const q = (text ?? question).trim();
     if (!q || isAsking) return;
 
     setIsAsking(true);
@@ -95,6 +100,8 @@ export default function ChatPage() {
         mode: 'agent',
         response_mode: responseMode,
         conversation_id: conversationId,
+        // Память агента: последние N шагов диалога для контекста уточнения.
+        conversation_history: history,
       });
       setAgentStep(-1);
       addMessage({
@@ -103,11 +110,40 @@ export default function ChatPage() {
         meta: result,
         sources: result.sources,
       });
+      // Запоминаем новый шаг «вопрос-ответ», обрезая до последних N пар.
+      setHistory((prev) => {
+        const next: ConversationTurn[] = [
+          ...prev,
+          { role: 'user', content: q },
+          { role: 'assistant', content: result.answer },
+        ];
+        return next.slice(-MAX_MEMORY_TURNS * 2);
+      });
     } catch (err) {
       setAgentStep(-1);
       addMessage({ type: 'error', content: `❌ Ошибка: ${(err as Error).message}` });
     } finally {
       setIsAsking(false);
+    }
+  };
+
+  // Уточнение по конкретному предыдущему запросу.
+  const handleClarify = (refinement: string) => {
+    handleSend(refinement);
+  };
+
+  // Лёгкий график (Case B): дёргаем /chart, кэш держим на сообщении.
+  const handleMakeChart = async (threadId: string): Promise<ChartPoint[]> => {
+    try {
+      const res = await api.makeChart(threadId);
+      if (!res.chart_available) {
+        showToast(res.message || 'Не удалось построить график', 'error');
+        return [];
+      }
+      return res.chart_data;
+    } catch (err) {
+      showToast(`Ошибка построения графика: ${(err as Error).message}`, 'error');
+      return [];
     }
   };
 
@@ -155,6 +191,7 @@ export default function ChatPage() {
   // Начать новый диалог: сбросить сообщения и thread_id.
   const handleNewChat = () => {
     setMessages([]);
+    setHistory([]);
     setQuestion('');
     setAgentStep(-1);
     setSourcesModal(null);
@@ -213,15 +250,30 @@ export default function ChatPage() {
             </div>
           )}
 
-          {messages.map((msg) => (
-            <ChatMessage
-              key={msg.id}
-              message={msg}
-              onCopy={handleCopy}
-              onOpenSources={setSourcesModal}
-              onTrace={handleTrace}
-            />
-          ))}
+          {messages.map((msg, i) => {
+            // Для уточнения находим вопрос пользователя, к которому относится ответ.
+            let baseQuestion = '';
+            if (msg.type === 'assistant') {
+              for (let j = i - 1; j >= 0; j--) {
+                if (messages[j].type === 'user') {
+                  baseQuestion = messages[j].content;
+                  break;
+                }
+              }
+            }
+            return (
+              <ChatMessage
+                key={msg.id}
+                message={msg}
+                onCopy={handleCopy}
+                onOpenSources={setSourcesModal}
+                onTrace={handleTrace}
+                onClarify={msg.type === 'assistant' ? handleClarify : undefined}
+                clarifyBase={baseQuestion}
+                onMakeChart={handleMakeChart}
+              />
+            );
+          })}
 
           {isAsking && agentStep >= 0 && <AgentProgress activeStep={agentStep} />}
           {isAsking && agentStep < 0 && <TypingIndicator />}

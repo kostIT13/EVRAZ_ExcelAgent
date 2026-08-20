@@ -96,6 +96,21 @@ export interface AskResponse {
   status: string;
   self_corrected: boolean;
   trace_id?: string | null;
+  thread_id?: string | null;
+  chart_available?: boolean;
+  chart_data?: ChartPoint[] | null;
+}
+
+export interface ChartPoint {
+  period: string;
+  value: number;
+}
+
+export interface ChartResponse {
+  thread_id: string;
+  chart_available: boolean;
+  chart_data: ChartPoint[];
+  message?: string;
 }
 
 export interface AskRequest {

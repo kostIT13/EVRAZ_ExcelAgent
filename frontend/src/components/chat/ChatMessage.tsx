@@ -1,10 +1,24 @@
+import { useState } from 'react';
 import { motion } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
-import { Bot, User, XCircle, Timer, Fingerprint, Search, BookOpen, Wand2 } from 'lucide-react';
-import type { AskResponse, SourceInfo } from '@/types/api';
+import {
+  BarChart3,
+  Bot,
+  CornerDownLeft,
+  Loader2,
+  User,
+  XCircle,
+  Timer,
+  Fingerprint,
+  Search,
+  BookOpen,
+  Wand2,
+} from 'lucide-react';
+import type { AskResponse, ChartPoint, SourceInfo } from '@/types/api';
 import { confidenceLabel, formatMs, modeLabel, shortId } from '@/lib/utils';
 import { SourceList } from './SourcesModal';
 import SqlBlock from './SqlBlock';
+import ResultChart from './ResultChart';
 import ResultTable from './ResultTable';
 
 export interface ChatMessageData {
@@ -20,13 +34,43 @@ interface ChatMessageProps {
   onCopy: (text: string) => void;
   onOpenSources: (sources: SourceInfo[]) => void;
   onTrace: (requestId: string) => void;
+  onClarify?: (refinement: string) => void;
+  clarifyBase?: string;
+  onMakeChart?: (threadId: string) => Promise<ChartPoint[]>;
 }
 
-export default function ChatMessage({ message, onCopy, onOpenSources, onTrace }: ChatMessageProps) {
+export default function ChatMessage({
+  message,
+  onCopy,
+  onOpenSources,
+  onTrace,
+  onClarify,
+  clarifyBase,
+  onMakeChart,
+}: ChatMessageProps) {
   const { type, content, meta } = message;
   const isUser = type === 'user';
   const isError = type === 'error';
   const isConcise = meta?.response_mode === 'concise';
+  const [showClarify, setShowClarify] = useState(false);
+  const [clarifyText, setClarifyText] = useState('');
+  // Кэш chart_data на уровне конкретного сообщения — повторный клик не бьёт в бэкенд.
+  const [chartData, setChartData] = useState<ChartPoint[] | null>(meta?.chart_data ?? null);
+  const [chartLoading, setChartLoading] = useState(false);
+
+  const handleMakeChart = async () => {
+    if (!meta?.thread_id || !onMakeChart) return;
+    if (chartData && chartData.length > 0) return;
+    setChartLoading(true);
+    try {
+      const data = await onMakeChart(meta.thread_id);
+      if (data && data.length > 0) setChartData(data);
+    } catch {
+      /* toast handled in parent */
+    } finally {
+      setChartLoading(false);
+    }
+  };
 
   const sqlPreview = meta?.sql_result_preview?.length ? meta.sql_result_preview : null;
 
@@ -99,7 +143,72 @@ export default function ChatMessage({ message, onCopy, onOpenSources, onTrace }:
               <BookOpen size={12} /> Источники ({message.sources.length})
             </button>
           )}
+          {!isUser && !isError && onClarify && (
+            <button
+              className="chat-message__badge chat-message__badge--clarify"
+              onClick={() => setShowClarify((v) => !v)}
+              title="Уточнить информацию по этому запросу"
+            >
+              <CornerDownLeft size={12} /> Уточнить
+            </button>
+          )}
+          {!isUser && !isError && onMakeChart && meta?.thread_id && (
+            <button
+              className="chat-message__badge chat-message__badge--chart"
+              onClick={handleMakeChart}
+              disabled={chartLoading || (!!chartData && chartData.length > 0)}
+              title="Построить график по всем месяцам"
+            >
+              {chartLoading ? (
+                <Loader2 size={12} className="chat-message__spin" />
+              ) : (
+                <BarChart3 size={12} />
+              )}{' '}
+              Сделай график
+            </button>
+          )}
         </div>
+      )}
+
+      {chartData && chartData.length > 0 && <ResultChart data={chartData} />}
+
+      {showClarify && onClarify && (
+        <form
+          className="chat-clarify"
+          onSubmit={(e) => {
+            e.preventDefault();
+            const t = clarifyText.trim();
+            if (!t) return;
+            onClarify(t);
+            setClarifyText('');
+            setShowClarify(false);
+          }}
+        >
+          {clarifyBase && <div className="chat-clarify__base">Запрос: {clarifyBase}</div>}
+          <textarea
+            className="chat-clarify__textarea"
+            rows={2}
+            autoFocus
+            value={clarifyText}
+            onChange={(e) => setClarifyText(e.target.value)}
+            placeholder="Уточните, что именно нужно уточнить..."
+          />
+          <div className="chat-clarify__actions">
+            <button className="chat-clarify__send" type="submit" disabled={!clarifyText.trim()}>
+              Отправить уточнение
+            </button>
+            <button
+              className="chat-clarify__cancel"
+              type="button"
+              onClick={() => {
+                setClarifyText('');
+                setShowClarify(false);
+              }}
+            >
+              Отмена
+            </button>
+          </div>
+        </form>
       )}
     </motion.div>
   );
