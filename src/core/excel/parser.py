@@ -90,9 +90,35 @@ class ExcelParser:
         logger.debug("Sheet '{}': unmerged {} cells", ws.title, len(merged))
 
     def _detect_header_rows(self, ws: Worksheet) -> int:
+        """Определяет число строк шапки.
+
+        Сначала пробует эвристику (число в колонке A / плотность первых 5 колонок).
+        Если она даёт шапку без осмысленных заголовков (например, лист начинается
+        с блока заголовка-титула, как 'ШИХТОВОЧНЫЙ ЛИСТ'), то ищем настоящую строку
+        заголовков по плотности заполнения ячеек по всей ширине листа.
+        """
         max_col = ws.max_column or 1
         max_row = ws.max_row or 1
 
+        default = self._default_header_rows(ws, max_col, max_row)
+
+        # Если в найденной шапке есть хотя бы несколько осмысленных названий
+        # колонок (не col_N) — это настоящая шапка, используем её как есть.
+        if self._headers_are_meaningful(ws, default, max_col):
+            return default
+
+        dense = self._detect_dense_header_row(ws, max_col, max_row)
+        if dense and dense != default:
+            logger.debug(
+                "Sheet header fallback: default={}, dense={}",
+                default,
+                dense,
+            )
+            return dense
+
+        return default
+
+    def _default_header_rows(self, ws: Worksheet, max_col: int, max_row: int) -> int:
         for row in range(1, min(max_row + 1, 10)):
             cell_val = ws.cell(row=row, column=1).value
             if isinstance(cell_val, (int, float)):
@@ -108,6 +134,54 @@ class ExcelParser:
                     return row - 1
 
         return 3
+
+    def _headers_are_meaningful(self, ws: Worksheet, header_rows: int, max_col: int) -> bool:
+        """True, если шапка содержит достаточно РАЗНЫХ осмысленных заголовков.
+
+        Считаем уникальные текстовые метки (не пустые и не auto col_N). Порог 4 —
+        это отличает настоящую шапку с несколькими колонками (цены: наименование,
+        поставщики, цена, аукцион) от одного повторяющегося заголовка-титула
+        ('ШИХТОВОЧНЫЙ ЛИСТ'), растянутого через объединённые ячейки.
+        """
+        if header_rows <= 0:
+            return False
+
+        distinct_labels: set = set()
+        for col in range(1, max_col + 1):
+            levels = []
+            for row in range(1, header_rows + 1):
+                v = ws.cell(row=row, column=col).value
+                if v is None:
+                    continue
+                s = str(v).strip().replace("\n", " ")
+                if s and (not levels or s != levels[-1]):
+                    levels.append(s)
+            if not levels:
+                continue
+            full = self._clean_header_name(" > ".join(levels))
+            if re.search(r"[а-яА-Яa-zA-Z]", full) and not re.fullmatch(r"col_\d+", full):
+                distinct_labels.add(full.lower())
+        return len(distinct_labels) >= 4
+
+    def _detect_dense_header_row(self, ws: Worksheet, max_col: int, max_row: int) -> Optional[int]:
+        """Ищет первую строку, плотно заполненную по всей ширине листа
+        (признак настоящей шапки после блока титула). Возвращает номер этой строки."""
+        limit = min(max_row, 30)
+        if limit < 1:
+            return None
+
+        threshold = max(3, int(max_col * 0.2))
+
+        for row in range(1, limit + 1):
+            filled = 0
+            for col in range(1, max_col + 1):
+                v = ws.cell(row=row, column=col).value
+                if v is not None and str(v).strip() != "":
+                    filled += 1
+            if filled >= threshold:
+                return row
+
+        return None
 
     def _filter_empty_columns(
         self,

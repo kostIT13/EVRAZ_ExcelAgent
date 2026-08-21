@@ -154,6 +154,10 @@ async def verifier_node(
     sql_error = state.get("sql_error")
     retry_count = state.get("retry_count", 0)
 
+    domain = state.get("domain")
+    domain_value = getattr(domain, "value", None) if domain else None
+    expected_table = "mart.metrics" if domain_value == "metrics" else "mart.price_facts"
+
     logger.info(
         "Verifier Node [{}]: verifying SQL+result (retry #{})",
         request_id,
@@ -232,6 +236,7 @@ async def verifier_node(
 
 Тип запроса: {query_type.value if query_type else 'unknown'}
 Сущности: {', '.join(entities) if entities else 'не определены'}
+Домен: {domain_value or 'prices'} (ожидаемая таблица: {expected_table})
 
 SQL-запрос:
 {sql_query}

@@ -1,4 +1,5 @@
 from __future__ import annotations
+import re
 import time
 from typing import Any, Dict, List, Optional
 from sqlalchemy import delete, select
@@ -155,8 +156,11 @@ async def _metric_rows_for_sheet(
     if not columns:
         return []
 
-    # Первая колонка — измерение (наименование/шихта).
-    dimension_col = min(c.col_index for c in columns)
+    # Измерение (dimension) — колонка с текстовыми подписями строк (наименование/
+    # поставщик/марка/шихта), а не первая по счёту. Иначе в matrix-листах
+    # (шихтовочный лист) в измерение попадают числовые колонки, а настоящие
+    # поставщики теряются.
+    dimension_col = _pick_dimension_column(columns)
     metric_cols = [c for c in columns if c.col_index != dimension_col]
 
     cells_result = await s.execute(
@@ -217,6 +221,48 @@ async def _metric_rows_for_sheet(
                     is_blank=True,
                 ))
     return out
+
+
+_DIMENSION_KEYWORDS = (
+    "поставщик", "наименован", "материал", "шихт", "марка",
+    "контрагент", "организац", "сорт", "горн", "угол", "товар",
+)
+
+
+def _pick_dimension_column(columns) -> Optional[Any]:
+    """Выбирает колонку-измерение для matrix-листа.
+
+    Приоритет:
+    1. Колонка, чьё имя содержит смысловой ключ (поставщик/наименование/...);
+    2. Первая колонка с текстовым (не числовым, не auto col_N) именем;
+    3. Самая левая колонка.
+    """
+    if not columns:
+        return None
+
+    sorted_cols = sorted(columns, key=lambda c: c.col_index)
+
+    for col in sorted_cols:
+        name = (col.normalized_name or "").lower()
+        if any(k in name for k in _DIMENSION_KEYWORDS):
+            return col.col_index
+
+    for col in sorted_cols:
+        name = (col.normalized_name or "").strip().lower()
+        if name and name != "unknown" and not re.fullmatch(r"col_\d+", name):
+            if not _is_numeric_header(name):
+                return col.col_index
+
+    return sorted_cols[0].col_index
+
+
+def _is_numeric_header(name: str) -> bool:
+    """True, если имя колонки — это просто число (например, '59823')."""
+    try:
+        float(name.replace("_", "."))
+        return True
+    except ValueError:
+        return False
 
 
 async def _supplier_alias_rows_for_sheet(

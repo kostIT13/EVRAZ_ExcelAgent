@@ -79,3 +79,20 @@ def test_generated_sql_validation():
 
     errors = validate_generated_sql("DROP TABLE mart.price_facts")
     assert errors != []
+
+
+def test_metrics_aggregate_by_dimension_and_metric():
+    sql = compile_select({
+        "table": "mart.metrics",
+        "aggregation": {"func": "SUM", "column": "value", "alias": "суммарный_расход"},
+        "filters": [
+            {"column": "dimension", "op": "ILIKE", "value": "краснокаменская"},
+            {"column": "metric", "op": "ILIKE", "value": "%расход%силос%"},
+            {"column": "value", "op": "IS NOT NULL"},
+        ],
+    })
+    assert "FROM mart.metrics" in sql
+    assert "SUM(mart.metrics.value) AS суммарный_расход" in sql
+    assert "dimension ILIKE '%краснокаменская%'" in sql
+    assert "metric ILIKE '%%расход%силос%%'" in sql
+    assert "value IS NOT NULL" in sql

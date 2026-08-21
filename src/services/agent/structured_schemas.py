@@ -1,19 +1,10 @@
-"""Pydantic-схемы для структурированного вывода LLM (with_structured_output).
-
-Каждая модель соответствует JSON-ответу соответствующего узла графа.
-Валидация выполняется langchain через ``with_structured_output`` — без ручного
-``json.loads`` + try/except.
-"""
 
 from __future__ import annotations
-
 from typing import List, Optional
-
 from pydantic import BaseModel, Field
 
 
 class ClassifierResult(BaseModel):
-    """Ответ classifier_node."""
 
     query_type: str = Field(description="lookup/aggregate/cross_sheet/delta/sum_by_supplier/find_period/unknown")
     domain: str = Field(default="generic", description="prices/metrics/generic")
@@ -22,7 +13,6 @@ class ClassifierResult(BaseModel):
 
 
 class DisambiguationResult(BaseModel):
-    """Ответ disambiguation_node."""
 
     needs_disambiguation: bool = Field(default=False, description="Нужно ли уточнение")
     ambiguity_type: Optional[str] = Field(
@@ -38,6 +28,5 @@ class DisambiguationResult(BaseModel):
 
 
 class PlannerResult(BaseModel):
-    """Ответ planner_node (текстовый план для codegen)."""
 
     plan: str = Field(description="План действий для генерации SQL-запроса")

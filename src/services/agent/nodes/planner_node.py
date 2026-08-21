@@ -3,7 +3,7 @@ import json
 from typing import Any, Dict, List, Optional
 from sqlalchemy import select
 from src.core.db.database import async_session_maker
-from src.core.db.models import ColumnMetadata, Sheet, PriceFact
+from src.core.db.models import ColumnMetadata, Metric, Sheet, PriceFact
 from src.core.logging_settings import logger
 from src.services.agent.graph_state import (
     GraphState,
@@ -38,9 +38,20 @@ PLANNER_SYSTEM_PROMPT = """Ты — планировщик запросов к �
 """
 
 
-async def get_sheet_schema(sheet_ids: List[int]) -> List[Dict[str, Any]]:
+async def get_sheet_schema(
+    sheet_ids: List[int],
+    domain: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Строит схему для планировщика.
+
+    Для домена ``metrics`` (шихтовочные/матричные листы, план/факт, расход)
+    возвращает схему таблицы ``mart.metrics`` (dimension/metric/value), иначе —
+    ``mart.price_facts``.
+    """
     if not sheet_ids:
         return []
+
+    is_metrics = domain == "metrics"
 
     async with async_session_maker() as session:
         sheets_result = await session.execute(
@@ -53,6 +64,8 @@ async def get_sheet_schema(sheet_ids: List[int]) -> List[Dict[str, Any]]:
             select(ColumnMetadata).where(ColumnMetadata.sheet_id.in_(sheet_ids))
         )
         columns = columns_result.scalars().all()
+
+        table = "mart.metrics" if is_metrics else "mart.price_facts"
 
         schema = []
         for sid in sheet_ids:
@@ -71,27 +84,46 @@ async def get_sheet_schema(sheet_ids: List[int]) -> List[Dict[str, Any]]:
                 if col.sheet_id == sid
             ]
 
-            fact_result = await session.execute(
-                select(PriceFact)
-                .where(PriceFact.sheet_id == sid)
-                .limit(20)
-            )
-            fact_rows = fact_result.scalars().all()
-
-            fact_samples = []
-            seen_items = set()
-            for fp in fact_rows:
-                if fp.item_name not in seen_items:
-                    seen_items.add(fp.item_name)
-                    fact_samples.append({
-                        "item_name": fp.item_name,
-                        "sheet_period": fp.sheet_period,
-                        "supplier": fp.supplier,
-                        "price_type": fp.price_type,
-                        "value": fp.value,
+            if is_metrics:
+                metric_result = await session.execute(
+                    select(Metric).where(Metric.sheet_id == sid).limit(40)
+                )
+                samples: List[Dict[str, Any]] = []
+                seen = set()
+                for m in metric_result.scalars().all():
+                    key = (m.dimension, m.metric)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    samples.append({
+                        "dimension": m.dimension,
+                        "metric": m.metric,
+                        "metric_type": m.metric_type,
+                        "value": m.value,
+                        "period": m.period,
                     })
-                if len(fact_samples) >= 10:
-                    break
+                    if len(samples) >= 12:
+                        break
+            else:
+                fact_result = await session.execute(
+                    select(PriceFact)
+                    .where(PriceFact.sheet_id == sid)
+                    .limit(20)
+                )
+                samples = []
+                seen_items = set()
+                for fp in fact_result.scalars().all():
+                    if fp.item_name not in seen_items:
+                        seen_items.add(fp.item_name)
+                        samples.append({
+                            "item_name": fp.item_name,
+                            "sheet_period": fp.sheet_period,
+                            "supplier": fp.supplier,
+                            "price_type": fp.price_type,
+                            "value": fp.value,
+                        })
+                    if len(samples) >= 10:
+                        break
 
             schema.append({
                 "id": sheet.id,
@@ -100,16 +132,10 @@ async def get_sheet_schema(sheet_ids: List[int]) -> List[Dict[str, Any]]:
                 "description": sheet.description or "",
                 "period": sheet.period,
                 "columns": sheet_columns,
-                "samples": fact_samples,
+                "samples": samples,
                 "schema": {
-                    "table": "mart.price_facts",
-                    "columns": [
-                        {"name": "sheet_period", "type": "TEXT", "description": "период (например, '2025-11')"},
-                        {"name": "item_name", "type": "TEXT", "description": "нормализованное название лома"},
-                        {"name": "supplier", "type": "TEXT", "description": "поставщик или NULL"},
-                        {"name": "price_type", "type": "TEXT", "description": "среднерыночная / аукцион_старт / аукцион_победитель / поставщик"},
-                        {"name": "value", "type": "FLOAT", "description": "значение цены в руб/тн"},
-                    ],
+                    "table": table,
+                    "columns": _default_columns(table),
                 },
             })
         return schema
@@ -177,12 +203,14 @@ async def planner_node(
     )
 
     sheet_ids = [s["id"] for s in relevant_sheets]
-    schema = await get_sheet_schema(sheet_ids)
+    domain = state.get("domain")
+    domain_value = getattr(domain, "value", None) if domain else None
+
+    schema = await get_sheet_schema(sheet_ids, domain_value)
 
     if not schema:
         # Планируем по mart-таблице даже без листов (fallback на факт-таблицу).
-        domain = state.get("domain")
-        table = "mart.metrics" if domain and getattr(domain, "value", None) == "metrics" else "mart.price_facts"
+        table = "mart.metrics" if domain_value == "metrics" else "mart.price_facts"
         logger.warning(
             "Planner Node [{}]: no schema for sheets {}, falling back to {}",
             request_id,
@@ -202,6 +230,8 @@ async def planner_node(
 
     state["schema"] = schema
 
+    table = (schema[0].get("schema") or {}).get("table") or "mart.price_facts"
+
     # Лёгкая схема (без samples) для промпта — ускоряет ответ LLM.
     schema_json = json.dumps(_build_light_schema(schema), ensure_ascii=False, indent=2)
     candidates_text = json.dumps(entity_candidates[:10], ensure_ascii=False, indent=2)
@@ -220,11 +250,12 @@ async def planner_node(
 
 Тип запроса: {query_type.value if query_type else 'unknown'}
 Сущности: {', '.join(entities) if entities else 'не определены'}
+Домен: {domain_value or 'generic'}
 
-Схема mart.price_facts:
+Схема таблицы {table}:
 {schema_json}
 
-Составь план действий для SQL-запроса по mart.price_facts."""
+Составь план действий для SQL-запроса по таблице {table}."""
 
     messages = [
         {"role": "system", "content": PLANNER_SYSTEM_PROMPT},

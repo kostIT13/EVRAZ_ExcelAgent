@@ -149,6 +149,70 @@ CODEGEN_SYSTEM_PROMPT = """Ты — генератор SQL-запросов дл
 Верни ТОЛЬКО SQL-запрос без пояснений. Без markdown-обёртки ```sql.
 """
 
+METRICS_FEW_SHOT_EXAMPLES = [
+    {
+        "question": "Каков суммарный расход из силосов по поставщику Краснокаменская КЖ?",
+        "sql": """SELECT SUM(m.value) AS суммарный_расход
+FROM mart.metrics m
+WHERE m.dimension ILIKE '%краснокаменская%'
+  AND m.metric ILIKE '%расход%силос%'
+  AND m.value IS NOT NULL""",
+    },
+    {
+        "question": "Какое среднее значение влаги (Wr) по всем поставщикам?",
+        "sql": """SELECT AVG(m.value) AS средняя_влага
+FROM mart.metrics m
+WHERE m.metric ILIKE '%влага%'
+  AND m.value IS NOT NULL""",
+    },
+    {
+        "question": "Сколько составляет остаток угля на складе по поставщику Распадская ГЖ?",
+        "sql": """SELECT m.dimension, m.value
+FROM mart.metrics m
+WHERE m.metric ILIKE '%остаток%склад%'
+  AND m.dimension ILIKE '%распадская%'
+  AND m.value IS NOT NULL
+LIMIT 10""",
+    },
+]
+
+METRICS_CODEGEN_SYSTEM_PROMPT = """Ты — генератор SQL-запросов для нормализованной таблицы метрик
+производства/шихты (план/факт, состав шихты, расход из силосов, запасы угля).
+
+Схема базы данных (таблица mart.metrics, LONG-ФАКТ-ТАБЛИЦА):
+- id: INTEGER PRIMARY KEY
+- file_id: INTEGER
+- sheet_id: INTEGER — ID листа (например, лист '2 блок'/'3 блок')
+- period: TEXT — период (например, '2025-05')
+- dimension: TEXT — измерение строки: поставщик/материал/марка угля (например,
+  'Краснокаменская КЖ', 'Распадская ГЖ'). Для фильтрации по поставщику используй
+  dimension ILIKE.
+- dimension_type: TEXT — тип измерения ('item' и т.п.)
+- metric_type: TEXT — тип метрики: план / факт / отклонение / percent / value
+- metric: TEXT — наименование метрики (колонка листа), например
+  'расход_в_силосов_т', 'остаток_угля_на_открытом_угольном_складе_т',
+  'запас_угля_сут', 'влага_wr'. Для поиска по смыслу используй metric ILIKE
+  с короткой маской (например '%расход%', '%силос%', '%остаток%').
+- value: DOUBLE PRECISION — числовое значение метрики
+- unit: TEXT — единица измерения
+- is_blank: BOOL — пустая ячейка (исключай из агрегаций)
+
+ПРАВИЛА:
+1. Только SELECT запросы (read-only), схема mart.metrics
+2. Поставщик/материал фильтруй по dimension ILIKE '%текст%'
+3. Нужную меру фильтруй по metric ILIKE '%ключ%' (расход -> '%расход%силос%' или '%расход%')
+4. Агрегации (SUM/AVG/MIN/MAX) применяй к value; при суммировании добавляй
+   AND m.value IS NOT NULL
+5. При необходимости фильтруй по листу через sheet_id из схемы или по period
+6. Не выдумывай значения dimension — используй сущности из вопроса
+7. Используй понятные алиасы для колонок
+
+ПРИМЕРЫ ЗАПРОСОВ (few-shot):
+{few_shot_examples}
+
+Верни ТОЛЬКО SQL-запрос без пояснений. Без markdown-обёртки ```sql.
+"""
+
 FORBIDDEN_KEYWORDS = [
     "INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "CREATE",
     "TRUNCATE", "GRANT", "REVOKE", "EXECUTE", "EXEC",
@@ -255,6 +319,41 @@ def _refine_supplier_ilike_any(sql: str) -> str:
     return pattern.sub(_repl, sql)
 
 
+def _build_metrics_user_message(
+    question: str,
+    candidates_section: str,
+    retry_section: str,
+    query_type: Any,
+    entities: List[str],
+    plan: str,
+    schema_json: str,
+) -> str:
+    """Собирает user-промпт для генерации SQL по таблице mart.metrics
+    (производственные метрики/шихта: расход, запасы, план/факт)."""
+    return f"""Вопрос пользователя: {question}{candidates_section}{retry_section}
+
+Тип запроса: {query_type.value if query_type else 'unknown'}
+Сущности: {', '.join(entities) if entities else 'не определены'}
+Домен: metrics
+
+План действий:
+{plan}
+
+Схема таблицы mart.metrics:
+{schema_json}
+
+Сгенерируй SQL-запрос по таблице mart.metrics для получения ответа на вопрос.
+
+ВАЖНО: Для метрик используй mart.metrics — единственная таблица. НЕ используй mart.price_facts.
+
+- Поставщик/материал/марку фильтруй по dimension ILIKE '%текст%'
+- Нужную меру фильтруй по metric ILIKE '%ключ%' (например, "расход из силосов" ->
+  metric ILIKE '%расход%силос%' или '%расход%'; "остаток угля" -> metric ILIKE '%остаток%')
+- Агрегации (SUM/AVG/MIN/MAX) применяй к value, при суммировании добавляй AND m.value IS NOT NULL
+- Используй значение поставщика/материала из вопроса (или entity_candidates) для dimension,
+  не выдумывай названия"""
+
+
 async def codegen_node(
     state: GraphState,
     llm: Optional[LLMClient] = None,
@@ -282,6 +381,8 @@ async def codegen_node(
 
     schema_json = json.dumps(schema, ensure_ascii=False, indent=2)
     domain = state.get("domain")
+    domain_value = getattr(domain, "value", None) if domain else None
+    is_metrics = domain_value == "metrics"
     candidates_text = json.dumps(entity_candidates[:15], ensure_ascii=False, indent=2)
     candidates_section = (
         f"\nСущности-кандидаты (item_name/supplier/sheet_period):\n{candidates_text}"
@@ -289,14 +390,30 @@ async def codegen_node(
         else ""
     )
 
+    few_shot_source = METRICS_FEW_SHOT_EXAMPLES if is_metrics else FEW_SHOT_EXAMPLES
     few_shot_text = "\n\n".join(
         f"Вопрос: {ex['question']}\nSQL: {ex['sql']}"
-        for ex in FEW_SHOT_EXAMPLES
+        for ex in few_shot_source
     )
 
     # Секция с информацией о предыдущей неудачной попытке
     retry_section = ""
     if retry_count > 0 and prev_sql:
+        if is_metrics:
+            retry_hints = (
+                "- Если причина 'empty_result' — смягчи фильтр по metric (более короткая "
+                "ILIKE-маска: '%расход%', '%силос%') и добавь AND value IS NOT NULL\n"
+                "- Если причина 'wrong_filter' — исправь dimension/metric фильтры\n"
+                "- Если причина 'wrong_table' — используй mart.metrics, а не mart.price_facts"
+            )
+        else:
+            retry_hints = (
+                "- Если причина 'empty_result' — попробуй убрать или смягчить условия WHERE "
+                "(особенно price_source), используй более короткие ILIKE-маски для "
+                "item_name_normalized, или убери LIMIT\n"
+                "- Если причина 'wrong_filter' — исправь условия фильтрации\n"
+                "- Если причина 'wrong_table' — используй правильную таблицу"
+            )
         retry_section = f"""
 ПРЕДЫДУЩАЯ ПОПЫТКА (ретрай #{retry_count}):
 Причина ретрая: {retry_reason or 'не указана'}
@@ -304,11 +421,7 @@ async def codegen_node(
 {prev_sql}
 
 ИСПРАВЬ предыдущий SQL с учётом причины ретрая. Возможные исправления:
-- Если причина 'empty_result' — попробуй убрать или смягчить условия WHERE (особенно price_source),
-  используй более короткие ILIKE-маски для item_name_normalized (без лишних цифр и символов),
-  или убери LIMIT чтобы увидеть все доступные данные
-- Если причина 'wrong_filter' — исправь условия фильтрации
-- Если причина 'wrong_table' — используй правильную таблицу
+{retry_hints}
 """
 
     user_message = f"""Вопрос пользователя: {question}{candidates_section}{retry_section}
@@ -365,11 +478,28 @@ item_name в родительном падеже: item_name ILIKE 'Лом <ме�
 пользователя, и применяй к ним точное сравнение (не ILIKE) во всех случаях,
 кроме явного запроса на все виды."""
 
-    messages = [
-        {"role": "system", "content": CODEGEN_SYSTEM_PROMPT.format(
+    if is_metrics:
+        system_prompt = METRICS_CODEGEN_SYSTEM_PROMPT.format(
             few_shot_examples=few_shot_text
-        )},
-        {"role": "user", "content": user_message},
+        )
+        user_content = _build_metrics_user_message(
+            question,
+            candidates_section,
+            retry_section,
+            query_type,
+            entities,
+            plan,
+            schema_json,
+        )
+    else:
+        system_prompt = CODEGEN_SYSTEM_PROMPT.format(
+            few_shot_examples=few_shot_text
+        )
+        user_content = user_message
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_content},
     ]
 
     try:
