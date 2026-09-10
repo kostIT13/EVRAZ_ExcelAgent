@@ -112,7 +112,7 @@ docker compose exec service alembic upgrade head
 
 | Переменная | Описание |
 |---|---|
-| `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL_PRIMARY`, `LLM_MODEL_CHEAP` | LLM-клиент |
+| `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL_PRIMARY` | LLM-клиент |
 | `TRIGRAM_THRESHOLD` | порог pg_trgm similarity для fuzzy-сопоставления сущностей |
 | `DB_STATEMENT_TIMEOUT_MS` | statement_timeout для БД (отдельно от `REQUEST_TIMEOUT_S`) |
 | `API_KEY` | API-ключ для `/files/*` и `/ask/*` (пусто = dev) |

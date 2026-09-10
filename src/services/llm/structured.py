@@ -49,17 +49,13 @@ def get_structured_llm(
     if schema in _STRUCTURED_CACHE:
         return _STRUCTURED_CACHE[schema]
 
-    primary = _build_chat(settings.LLM_MODEL_PRIMARY, temperature).with_structured_output(
+    runnable = _build_chat(settings.LLM_MODEL_PRIMARY, temperature).with_structured_output(
         schema, method=method
     )
-    cheap = _build_chat(settings.LLM_MODEL_CHEAP, temperature).with_structured_output(
-        schema, method=method
-    )
-    runnable = primary.with_fallbacks([cheap])
 
     _STRUCTURED_CACHE[schema] = runnable
     logger.info(
-        "Structured LLM built for {} (method={}, fallback primary->cheap)",
+        "Structured LLM built for {} (method={})",
         schema.__name__,
         method,
     )

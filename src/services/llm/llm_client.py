@@ -51,22 +51,6 @@ class LLMClient:
         if error is None:
             return result
 
-        if target != settings.LLM_MODEL_CHEAP:
-            logger.warning(
-                "Primary model '{}' failed ({}), falling back to '{}'",
-                target,
-                type(error).__name__,
-                settings.LLM_MODEL_CHEAP,
-            )
-            return await self._call(
-                client=self._chat,
-                model=settings.LLM_MODEL_CHEAP,
-                messages=messages,
-                temperature=temperature if temperature is not None else 0.1,
-                max_tokens=max_tokens,
-                **kwargs,
-            )
-
         raise error
 
     async def chat_stream(

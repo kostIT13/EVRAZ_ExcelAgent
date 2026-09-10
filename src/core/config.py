@@ -33,7 +33,6 @@ class Settings(BaseSettings):
     LLM_BASE_URL: str
     LLM_API_KEY: str
     LLM_MODEL_PRIMARY: str
-    LLM_MODEL_CHEAP: str
 
     LLM_TEMPERATURE: float = 0.1
     LLM_MAX_TOKENS: int = 2048

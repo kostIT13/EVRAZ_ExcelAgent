@@ -49,7 +49,6 @@
    | `LLM_BASE_URL` | базовый URL LLM-провайдера (OpenAI-совместимый) |
    | `LLM_API_KEY` | API-ключ LLM |
    | `LLM_MODEL_PRIMARY` | основная модель (например `deepseek-ai/DeepSeek-V4-Flash`) |
-   | `LLM_MODEL_CHEAP` | быстрая/дешёвая модель |
    | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | учётные данные БД |
    | `API_KEY` | API-ключ для `/files/*` и `/ask/*` (пусто = auth отключён в dev) |
 
