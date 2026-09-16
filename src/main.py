@@ -25,7 +25,6 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Database connection error: {e}")
 
-    # Стартуем фоновый воркер асинхронного ingestion.
     try:
         from src.services.excel.ingestion_queue import ingestion_queue
         await ingestion_queue.start()
@@ -33,7 +32,6 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Ingestion queue start error: {e}")
 
-    # Инициализация LangGraph Postgres-checkpointer (создание таблиц при первом запуске).
     try:
         from src.services.agent.checkpointer import CheckpointerManager
         await CheckpointerManager.get()
