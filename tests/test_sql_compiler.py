@@ -1,5 +1,4 @@
 import pytest
-
 from src.services.agent.sql_compiler import (
     compile_select,
     compile_spec,
