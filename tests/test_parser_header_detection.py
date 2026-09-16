@@ -1,7 +1,5 @@
 from pathlib import Path
-
 import pytest
-
 from src.core.excel.parser import ExcelParser
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"

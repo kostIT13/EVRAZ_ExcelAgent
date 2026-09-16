@@ -1,9 +1,7 @@
 from __future__ import annotations
-
 import json
 from pathlib import Path
 from typing import Any, Dict, List
-
 import pytest
 
 GOLDEN_PATH = Path(__file__).parent / "golden_questions.json"
