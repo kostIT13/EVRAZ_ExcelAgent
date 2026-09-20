@@ -20,6 +20,11 @@ def pytest_addoption(parser):
 def pytest_collection_modifyitems(config, items):
     if config.getoption("--golden"):
         return
+    # Если пользователь явно выбрал golden-тесты через `pytest -m golden`,
+    # не добавляем skip — прогон должен выполниться.
+    markexpr = getattr(config.option, "markexpr", "") or ""
+    if "golden" in [m.strip().lstrip("!") for m in markexpr.split(" and ")]:
+        return
     skip_golden = pytest.mark.skip(reason="Включите --golden для LLM-интеграции")
     for item in items:
         if "golden" in item.keywords:

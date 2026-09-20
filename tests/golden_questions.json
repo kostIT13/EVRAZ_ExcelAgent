@@ -5,6 +5,7 @@
     "query_type": "lookup",
     "domain": "prices",
     "expected_result_value": 720000.0,
+    "expected_result_type": "scalar",
     "expected_sql_hint": "price_type='среднерыночная' AND item_name ILIKE '%медь%' AND sheet_period='2025-01'"
   },
   {
@@ -29,7 +30,7 @@
     "query_type": "delta",
     "domain": "prices",
     "expected_result_type": "delta",
-    "expected_sql_hint": "sheet_period='2025-01' и '2025-02', price_type='среднерыночная'"
+    "expected_sql_hint": "sheet_period IN ('2025-01','2025-02') AND price_type='среднерыночная'"
   },
   {
     "id": "g005",
@@ -109,7 +110,7 @@
     "query_type": "find_period",
     "domain": "prices",
     "expected_result_type": "aggregate",
-    "expected_sql_hint": "item_name ILIKE '%алюмин%' ORDER BY value DESC"
+    "expected_sql_hint": "item_name ILIKE '%алюмин%' AND value DESC"
   },
   {
     "id": "g015",
@@ -149,7 +150,7 @@
     "query_type": "delta",
     "domain": "prices",
     "expected_result_type": "delta",
-    "expected_sql_hint": "sheet_period='2025-03' и '2025-04', item_name ILIKE '%бронз%'"
+    "expected_sql_hint": "sheet_period IN ('2025-03','2025-04') AND item_name ILIKE '%бронз%'"
   },
   {
     "id": "g020",
@@ -158,5 +159,85 @@
     "domain": "metrics",
     "expected_result_type": "multirow",
     "expected_sql_hint": "metric_type='факт'"
+  },
+  {
+    "id": "g021",
+    "question": "Какая стартовая цена аукциона на никель в мае 2025?",
+    "query_type": "lookup",
+    "domain": "prices",
+    "expected_result_type": "scalar",
+    "expected_sql_hint": "price_type='аукцион_старт' AND sheet_period='2025-05' AND item_name ILIKE '%никел%'"
+  },
+  {
+    "id": "g022",
+    "question": "Средняя цена лома меди у всех поставщиков в июне 2025?",
+    "query_type": "aggregate",
+    "domain": "prices",
+    "expected_result_type": "aggregate",
+    "expected_sql_hint": "AVG(value) AND price_type='поставщик' AND sheet_period='2025-06' AND item_name ILIKE '%медь%'"
+  },
+  {
+    "id": "g023",
+    "question": "Сравни средние цены на лом меди у поставщиков Сплав-21 и ВторМет в январе 2025",
+    "query_type": "cross_sheet",
+    "domain": "prices",
+    "expected_result_type": "multirow",
+    "expected_sql_hint": "supplier ILIKE '%сплав21%' AND supplier ILIKE '%втормет%' AND sheet_period='2025-01'"
+  },
+  {
+    "id": "g024",
+    "question": "Сумма всех цен на бронзу у поставщика Сплав-21 за 2025 год?",
+    "query_type": "sum_by_supplier",
+    "domain": "prices",
+    "expected_result_type": "aggregate",
+    "expected_sql_hint": "SUM(value) AND supplier ILIKE '%сплав21%' AND item_name ILIKE '%бронз%'"
+  },
+  {
+    "id": "g025",
+    "question": "В каком месяце цена на никель была максимальной?",
+    "query_type": "find_period",
+    "domain": "prices",
+    "expected_result_type": "aggregate",
+    "expected_sql_hint": "item_name ILIKE '%никел%' AND value DESC"
+  },
+  {
+    "id": "g026",
+    "question": "Какой факт по шихте меди в сентябре 2025?",
+    "query_type": "lookup",
+    "domain": "metrics",
+    "expected_result_type": "scalar",
+    "expected_sql_hint": "metric_type='факт' AND dimension ILIKE '%медь%' AND period='2025-09'"
+  },
+  {
+    "id": "g027",
+    "question": "Какое отклонение факта от плана по шихте латуни в ноябре 2025?",
+    "query_type": "delta",
+    "domain": "metrics",
+    "expected_result_type": "delta",
+    "expected_sql_hint": "metric_type='отклонение' AND dimension ILIKE '%латун%' AND period='2025-11'"
+  },
+  {
+    "id": "g028",
+    "question": "Минимальная цена на бронзу среди всех поставщиков в июле 2025?",
+    "query_type": "aggregate",
+    "domain": "prices",
+    "expected_result_type": "aggregate",
+    "expected_sql_hint": "MIN(value) AND price_type='поставщик' AND sheet_period='2025-07' AND item_name ILIKE '%бронз%'"
+  },
+  {
+    "id": "g029",
+    "question": "Покажи все цены на алюминий в августе 2025",
+    "query_type": "lookup",
+    "domain": "prices",
+    "expected_result_type": "multirow",
+    "expected_sql_hint": "sheet_period='2025-08' AND item_name ILIKE '%алюмин%'"
+  },
+  {
+    "id": "g030",
+    "question": "Сколько месяцев данных по шихте меди есть в системе?",
+    "query_type": "aggregate",
+    "domain": "metrics",
+    "expected_result_type": "aggregate",
+    "expected_sql_hint": "COUNT(DISTINCT period) AND dimension ILIKE '%медь%'"
   }
 ]
