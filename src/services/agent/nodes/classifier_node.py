@@ -15,7 +15,7 @@ from src.services.agent.graph_state import (
 from src.services.agent.prompts import build_memory_context
 from src.services.agent.structured_schemas import ClassifierResult
 from src.services.llm.llm_client import LLMClient
-from src.services.llm.structured import get_structured_llm
+from src.services.llm.structured import ainvoke_structured, get_structured_llm
 from src.services.entity_resolution.entity_resolver import entity_resolver
 
 CLASSIFIER_SYSTEM_PROMPT = """Ты — классификатор запросов к базе данных Excel-файла Evraz с ценами на металлы.
@@ -149,7 +149,12 @@ async def classifier_node(
 
     try:
         structured = get_structured_llm(ClassifierResult, temperature=0.0)
-        result: ClassifierResult = await structured.ainvoke(messages)
+        result: ClassifierResult = await ainvoke_structured(
+            structured,
+            messages,
+            schema=ClassifierResult,
+            max_retries=1,
+        )
 
         query_type_str = result.query_type
         valid_types = {t.value for t in QueryType}

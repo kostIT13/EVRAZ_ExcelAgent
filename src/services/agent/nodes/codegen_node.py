@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from typing import Any, List, Optional
@@ -239,6 +240,35 @@ def validate_sql(sql: str) -> List[str]:
         errors.append("Несбалансированные круглые скобки")
 
     return errors
+
+
+def _clean_sql_text(raw: str) -> str:
+    """Извлекает чистый SQL из ответа модели: убирает markdown-обёртку,
+    пояснения и завершающую точку с запятой. Возвращает пустую строку,
+    если в ответе нет SQL-подобного содержимого."""
+    text = (raw or "").strip()
+    if not text:
+        return ""
+
+    # Ответ целиком в markdown-обёртке ```sql ... ```
+    if text.startswith("```"):
+        m = re.match(r"^```(?:sql)?\s*(.*?)\s*```$", text, re.IGNORECASE | re.DOTALL)
+        if m:
+            return m.group(1).strip().rstrip(";").strip()
+
+    # Текст с преамбулой типа 'Вот SQL:' — берём первое вхождение SELECT...
+    if not text.upper().startswith("SELECT"):
+        m = re.search(r"(?i)\bSELECT\b.*", text, re.DOTALL)
+        if m:
+            text = m.group(0).strip()
+        else:
+            return ""
+
+    # Обрезаем посторонний текст после завершающего ';'
+    first_semi = text.find(";")
+    if first_semi != -1:
+        text = text[:first_semi]
+    return text.strip()
 
 
 # Словоформы металлов в родительном падеже для префиксного поиска "все виды".
@@ -502,26 +532,69 @@ item_name в родительном падеже: item_name ILIKE 'Лом <ме�
         {"role": "user", "content": user_content},
     ]
 
-    try:
-        # CodeGen — самый дорогой по цене ошибки узел для финансовых данных,
-        # поэтому всегда используем основную (primary) модель, без cheap-fallback.
-        raw_sql = await llm.chat(
-            messages=messages,
-            model=settings.LLM_MODEL_PRIMARY,
-            temperature=0.1,
-            max_tokens=2048,
-        )
+    # --- Генерация SQL с внутриузловыми ретраями --------------------------
+    # Flash-модели/прокси иногда возвращают ПУСТОЙ контент или пояснительный
+    # текст вместо SQL. Пробуем до MAX_CODEGEN_ATTEMPTS раз, передавая модели
+    # корректирующий фидбек, чтобы не гонять дорогой graph-level retry
+    # (classifier → disambiguation → planner → codegen) заново.
+    max_codegen_attempts = 3
+    sql = ""
+    raw_sql = ""
+    last_gen_error: Optional[str] = None
 
-        sql = raw_sql.strip()
-        if sql.startswith("```sql"):
-            sql = sql[6:]
-        elif sql.startswith("```"):
-            sql = sql[3:]
-        if sql.endswith("```"):
-            sql = sql[:-3]
-        sql = sql.strip()
-        sql = sql.rstrip(";")
+    for attempt in range(max_codegen_attempts):
+        try:
+            # CodeGen — самый дорогой по цене ошибки узел для финансовых данных,
+            # поэтому всегда используем основную (primary) модель, без cheap-fallback.
+            raw_sql = await llm.chat(
+                messages=messages,
+                model=settings.LLM_MODEL_PRIMARY,
+                temperature=0.1,
+                max_tokens=2048,
+            )
 
+            sql = _clean_sql_text(raw_sql)
+            gen_errors = validate_sql(sql) if sql else ["SQL-запрос пуст."]
+            if gen_errors:
+                last_gen_error = "; ".join(gen_errors)
+                logger.warning(
+                    "CodeGen Node [{}]: attempt {}/{} produced invalid SQL ({}): '{}'",
+                    request_id,
+                    attempt + 1,
+                    max_codegen_attempts,
+                    last_gen_error,
+                    (raw_sql or "")[:120],
+                )
+                if attempt < max_codegen_attempts - 1:
+                    messages = messages + [
+                        {"role": "assistant", "content": raw_sql or ""},
+                        {
+                            "role": "user",
+                            "content": (
+                                "Твой предыдущий ответ не является корректным SQL-запросом "
+                                f"({last_gen_error}). Верни ТОЛЬКО один SQL-запрос (SELECT) "
+                                "по описанной схеме, без markdown-обёртки и без пояснений."
+                            ),
+                        },
+                    ]
+                    continue
+                sql = ""
+            break
+        except Exception as exc:
+            last_gen_error = str(exc)
+            logger.warning(
+                "CodeGen Node [{}]: attempt {}/{} LLM call failed: {}",
+                request_id,
+                attempt + 1,
+                max_codegen_attempts,
+                exc,
+            )
+            if attempt < max_codegen_attempts - 1:
+                await asyncio.sleep(0.5)
+                continue
+            sql = ""
+
+    if sql:
         # Детерминированная правка: для "все виды <металла>" сужаем широкий
         # %металл% до префикса 'Лом <металл>%', чтобы не включать сплавы/оребрение.
         refined = _refine_all_kinds_filter(question, sql)
@@ -557,15 +630,20 @@ item_name в родительном падеже: item_name ILIKE 'Лом <ме�
             request_id,
             len(sql),
         )
-
-    except Exception as exc:
-        logger.error("CodeGen Node [{}]: LLM failed: {}", request_id, exc)
+    else:
+        # Все попытки провалились — честно сообщаем о неудаче, не создавая
+        # пустой sql_query, который снова уйдёт в graph-level retry.
+        logger.warning(
+            "CodeGen Node [{}]: SQL generation failed after {} attempts: {}",
+            request_id,
+            max_codegen_attempts,
+            last_gen_error,
+        )
         state["sql_query"] = ""
-        state["validation_errors"] = [f"Ошибка LLM: {exc}"]
-        # Инкремент счётчика ретраев, чтобы не зациклить codegen при ошибке.
+        state["validation_errors"] = [f"Ошибка генерации SQL: {last_gen_error}"]
         state["retry_count"] = state.get("retry_count", 0) + 1
         state["trace"] = state.get("trace", {})
-        state["trace"][NODE_CODEGEN] = {"error": str(exc)}
+        state["trace"][NODE_CODEGEN] = {"error": last_gen_error}
         return state
 
     # --- Детерминированный SQL-компилятор ---

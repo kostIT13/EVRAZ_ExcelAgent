@@ -12,7 +12,7 @@ from src.services.agent.graph_state import (
 from src.services.agent.prompts import build_memory_context
 from src.services.agent.structured_schemas import PlannerResult
 from src.services.llm.llm_client import LLMClient
-from src.services.llm.structured import get_structured_llm
+from src.services.llm.structured import ainvoke_structured, get_structured_llm
 
 PLANNER_SYSTEM_PROMPT = """Ты — планировщик запросов к нормализованной факт-таблице цен на металлы.
 
@@ -264,7 +264,12 @@ async def planner_node(
 
     try:
         structured = get_structured_llm(PlannerResult, temperature=0.0)
-        result: PlannerResult = await structured.ainvoke(messages)
+        result: PlannerResult = await ainvoke_structured(
+            structured,
+            messages,
+            schema=PlannerResult,
+            max_retries=1,
+        )
         state["plan"] = (result.plan or "").strip()
         logger.info(
             "Planner Node [{}]: plan generated ({} chars)",

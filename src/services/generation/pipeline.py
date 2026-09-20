@@ -47,13 +47,17 @@ class GenerationPipeline:
 
         # waiting_for_input — граф приостановлен на уточняющем вопросе,
         # self-correction не запускаем.
+        # Self-correction запускаем ТОЛЬКО при реальном провале (failed / низкая
+        # уверенность / пустой ответ). Раньше он срабатывал и на low_confidence
+        # (0.5–0.7) из-за сбоя парсинга верификатора — это удваивало латентность
+        # (45→90+ сек) и приводило к 504 в nginx при повторном прогоне всего графа.
         needs_correction = (
             result.status not in (STATUS_WAITING,)
             and (
-                result.status in ("failed", "low_confidence")
+                result.status == "failed"
                 or result.confidence < 0.5
                 or not result.answer
-                or (len(result.answer) < 20 and response_mode != "concise")
+                or (len(result.answer) < 10 and response_mode != "concise")
             )
         )
 

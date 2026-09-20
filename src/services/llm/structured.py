@@ -5,12 +5,19 @@
 
 Фабрика возвращает ``Runnable`` с ``with_structured_output(PydanticSchema)``,
 который автоматически парсит ответ модели в валидированный Pydantic-объект —
-без ручного ``json.loads`` + try/except. Добавлен fallback primary → cheap.
+без ручного ``json.loads`` + try/except.
+
+Дополнительно предоставляет ``ainvoke_structured`` — надёжную обёртку вызова
+с ретраями: flash-модели/прокси иногда возвращают пустой контент или невалидный
+JSON, из-за чего ``with_structured_output`` бросает исключение. Вместо падения
+всего узла делаем повторный вызов с корректирующим сообщением.
 """
 
 from __future__ import annotations
 
-from typing import Dict, Type, TypeVar
+import asyncio
+import json
+from typing import Any, Dict, List, Type, TypeVar
 
 from langchain_core.runnables import Runnable
 from langchain_openai import ChatOpenAI
@@ -60,3 +67,50 @@ def get_structured_llm(
         method,
     )
     return runnable
+
+
+async def ainvoke_structured(
+    runnable: Runnable,
+    messages: List[Dict[str, str]],
+    schema: Type[T],
+    max_retries: int = 2,
+) -> T:
+    """Вызывает ``runnable.ainvoke(messages)`` с ретраями при сбое парсинга.
+
+    При ошибке (пустой контент, невалидный JSON, несоответствие схеме)
+    повторяем запрос с корректирующим сообщением вместо того, чтобы ронять
+    весь узел графа. Возвращает валидированный объект ``schema``.
+    """
+    last_exc: Exception | None = None
+    current_messages = list(messages)
+
+    for attempt in range(max_retries + 1):
+        try:
+            return await runnable.ainvoke(current_messages)
+        except Exception as exc:  # OutputParserException, ValidationError и т.п.
+            last_exc = exc
+            logger.warning(
+                "Structured ainvoke attempt {}/{} for {} failed: {}",
+                attempt + 1,
+                max_retries + 1,
+                getattr(schema, "__name__", "?"),
+                exc,
+            )
+            if attempt >= max_retries:
+                break
+            await asyncio.sleep(0.5)
+            schema_json = json.dumps(schema.model_json_schema(), ensure_ascii=False)
+            current_messages = current_messages + [
+                {
+                    "role": "user",
+                    "content": (
+                        "Твой предыдущий ответ не прошёл проверку JSON-схемы "
+                        f"({exc}). Верни строго один JSON-объект, соответствующий схеме:\n"
+                        f"{schema_json}"
+                    ),
+                }
+            ]
+
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("Structured output failed without an exception")

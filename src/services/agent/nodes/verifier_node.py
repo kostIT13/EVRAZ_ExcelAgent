@@ -3,7 +3,9 @@ import json
 from typing import Any, Dict, List, Optional
 from src.core.logging_settings import logger
 from src.services.agent.graph_state import GraphState, NODE_VERIFIER
+from src.services.agent.structured_schemas import VerifierResult
 from src.services.llm.llm_client import LLMClient
+from src.services.llm.structured import ainvoke_structured, get_structured_llm
 
 VERIFIER_SYSTEM_PROMPT = """Ты — верификатор SQL-запросов для базы данных Excel-файла с ценами на металлы.
 
@@ -251,37 +253,29 @@ SQL-запрос:
             {"role": "user", "content": user_message},
         ]
 
-        raw_response = await llm.chat(
-            messages=messages,
-            model=None,
-            temperature=0.1,
-            max_tokens=1024,
+        # Структурированный вывод: json_mode + Pydantic-валидация + retry при
+        # пустом/невалидном ответе (раньше ручной json.loads падал на "").
+        structured = get_structured_llm(VerifierResult, temperature=0.0)
+        result: VerifierResult = await ainvoke_structured(
+            structured,
+            messages,
+            schema=VerifierResult,
+            max_retries=1,
         )
 
-        cleaned = raw_response.strip()
-        if cleaned.startswith("```json"):
-            cleaned = cleaned[7:]
-        if cleaned.startswith("```"):
-            cleaned = cleaned[3:]
-        if cleaned.endswith("```"):
-            cleaned = cleaned[:-3]
-        cleaned = cleaned.strip()
-
-        result = json.loads(cleaned)
-
-        is_correct = result.get("is_correct", False)
-        llm_confidence = float(result.get("confidence", 0.0))
-        issues = result.get("issues", [])
-        state["needs_retry"] = result.get("needs_retry", not is_correct)
-        state["retry_reason"] = result.get("retry_reason", "")
+        is_correct = result.is_correct
+        llm_confidence = float(result.confidence)
+        issues = result.issues or []
+        state["needs_retry"] = result.needs_retry
+        state["retry_reason"] = result.retry_reason or ""
 
         state["answer"] = _format_result_deterministically(sql_result)
 
         confidence = llm_confidence
         if "large_result" in sanity_issues:
-            confidence *= 0.8  
+            confidence *= 0.8
         if "all_null_values" in sanity_issues:
-            confidence *= 0.5  
+            confidence *= 0.5
 
         state["confidence"] = max(0.0, min(1.0, confidence))
 
@@ -309,20 +303,31 @@ SQL-запрос:
             "sanity_issues": sanity_issues,
         }
 
-    except (json.JSONDecodeError, KeyError, TypeError) as exc:
-        logger.error(
-            "Verifier Node [{}]: failed to parse LLM response: {}",
+    except Exception as exc:
+        # LLM-верификация не удалась (пустой контент/невалидный JSON). Это НЕ повод
+        # ронять confidence до 0.5: иначе pipeline запускает полный self-correction
+        # (второй прогон всего графа) и запрос упирается в таймауты nginx.
+        # Детерминированная оценка: SQL выполнился и вернул данные — доверяем (>=0.7).
+        logger.warning(
+            "Verifier Node [{}]: LLM verification failed ({}), using deterministic fallback",
             request_id,
             exc,
         )
+        base_conf = 0.8 if not sanity_issues else 0.6
+        if "large_result" in sanity_issues:
+            base_conf *= 0.8
+        if "all_null_values" in sanity_issues:
+            base_conf *= 0.5
+
         state["answer"] = _format_result_deterministically(sql_result)
-        state["confidence"] = 0.5
+        state["confidence"] = max(0.0, min(1.0, base_conf))
         state["needs_retry"] = False
         state["retry_reason"] = ""
         state["trace"] = state.get("trace", {})
         state["trace"][NODE_VERIFIER] = {
             "error": str(exc),
-            "fallback": True,
+            "fallback": "deterministic",
+            "sanity_issues": sanity_issues,
         }
 
     return state

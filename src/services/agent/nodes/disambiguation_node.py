@@ -7,7 +7,7 @@ from src.core.logging_settings import logger
 from src.services.agent.graph_state import GraphState, QueryType, NODE_DISAMBIGUATION, NODE_PLANNER
 from src.services.agent.structured_schemas import DisambiguationResult
 from src.services.llm.llm_client import LLMClient
-from src.services.llm.structured import get_structured_llm
+from src.services.llm.structured import ainvoke_structured, get_structured_llm
 
 DISAMBIGUATION_SYSTEM_PROMPT = """Ты — узел разрешения неоднозначностей для вопросов по Excel-файлу с ценами на металлы.
 
@@ -96,7 +96,12 @@ async def disambiguation_node(
 
     try:
         structured = get_structured_llm(DisambiguationResult, temperature=0.0)
-        result: DisambiguationResult = await structured.ainvoke(messages)
+        result: DisambiguationResult = await ainvoke_structured(
+            structured,
+            messages,
+            schema=DisambiguationResult,
+            max_retries=1,
+        )
 
         needs_disambiguation = result.needs_disambiguation
         ambiguity_type = result.ambiguity_type
