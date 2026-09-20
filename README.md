@@ -384,14 +384,28 @@ Grafana (порт 3001) подключена к Prometheus через provisioni
 
 ## Golden dataset
 
-`tests/golden_questions.json` — набор вопросов с ожидаемыми SQL-сигнатурами/результатами.
+`tests/golden_questions.json` — набор из **30 эталонных вопросов** (g001–g030) с ожидаемыми
+SQL-сигнатурами (`expected_sql_hint`) и типами результата (`expected_result_type`).
 `tests/test_golden_dataset.py` прогоняет их через агента (marker `golden`).
 
 ```bash
-python -m pytest tests/            # юнит-проверки (без LLM)
-python -m pytest -m golden tests/  # интеграционные golden-тесты (требуют LLM и данные)
+python -m pytest tests/             # юнит-проверки (без LLM); golden-вопросы скипаются
+python -m pytest --golden tests/    # интеграционные golden-тесты (требуют LLM и данные)
+python -m pytest -m golden tests/   # эквивалентный способ отбора golden-тестов
 ```
 
+Подготовка окружения для golden-прогона:
+
+```bash
+docker compose up -d                # PostgreSQL + сервисы
+docker compose exec service alembic upgrade head
+python scripts/load_demo_data.py --check-mart   # загрузка data/*.xlsx и проверка витрины
+python scripts/run_golden_report.py --json out/golden_report.json  # отчёт по точности (pass rate)
+python scripts/seed_golden_db.py --drop         # загрузка эталонов в таблицу golden_dataset
+```
+
+CI-прогон настроен в `.github/workflows/golden.yml`: юнит-тесты всегда,
+golden-прогон — при наличии секретов `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL_PRIMARY`.
 Запускайте в CI при каждом изменении промптов/схемы/нормализации.
 
 ---
