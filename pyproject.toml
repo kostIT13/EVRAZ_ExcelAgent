@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "evraz-agent"
 version = "0.1.0"
@@ -31,9 +35,16 @@ dependencies = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Пакет проекта называется `src` (src/__init__.py), поэтому в sys.path нужен
+# корень репозитория, а не `src/`. Гарантирует импорт `src.*` в pytest
+# независимо от editable install (консольный `pytest` не добавляет CWD в sys.path).
+pythonpath = ["."]
 markers = [
     "golden: интеграционные golden-dataset тесты (требуют LLM и данные)",
     "integration: интеграционные тесты с реальной PostgreSQL (требуют TEST_POSTGRES_URL)",
 ]
 addopts = "-ra"
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
