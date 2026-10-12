@@ -1,7 +1,7 @@
 import re
 from pathlib import Path
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import insert, select
+from sqlalchemy import delete, insert, select
 from loguru import logger
 from typing import Any, Dict, List, Optional
 from src.core.db.models import File, Sheet, ColumnMetadata, Cell, EntityDictionary, ExcelComment, PriceFact
@@ -127,6 +127,13 @@ class SQLAlchemyExcelRepository(ExcelRepository):
             file_record.status = "processed"
             file_record.error_message = None
         await self.session.flush()
+
+        # Идемпотентность: при повторной загрузке того же файла удаляем старые
+        # листы (каскадно — column_metadata/cells/excel_comments), чтобы не
+        # плодить дубликаты листов и фактов в витрине.
+        await self.session.execute(
+            delete(Sheet).where(Sheet.file_id == file_record.id)
+        )
 
         for sheet in parsed.sheets:
             period = TableStructurer(sheet).period

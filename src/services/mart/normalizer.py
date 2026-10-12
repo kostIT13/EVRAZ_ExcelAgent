@@ -498,6 +498,10 @@ def _price_from_path(path: List[str]) -> tuple[Optional[str], Optional[str]]:
     last = (path[-1] or "").strip()
     key = last.lower()
 
+    # Вычисляемая колонка «по результатам аукциона» (среднее стартовой цены и
+    # предложения победителя) — не является ни ценой, ни поставщиком.
+    if "по результатам аукциона" in leaf or "по_результатам_аукциона" in leaf:
+        return None, None
     if "среднерыночн" in key or "средн" in key and "рыночн" in key:
         return "среднерыночная", None
     if "старт" in key or "стартов" in key:
@@ -588,6 +592,10 @@ async def _fact_rows_from_cells(
 def _split_source(source: str) -> tuple[Optional[str], Optional[str]]:
     key = (source or "").strip().lower()
     if not key:
+        return None, None
+    # Вычисляемая колонка «по результатам аукциона» (среднее стартовой цены и
+    # предложения победителя) — не является ни ценой, ни поставщиком.
+    if "по_результатам_аукциона" in key or "по результатам аукциона" in key:
         return None, None
     # Подстрока-детекция внутренних типов (аналог _price_from_path).
     if "среднерыночн" in key or ("средн" in key and "рыночн" in key):
