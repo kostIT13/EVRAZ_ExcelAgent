@@ -1,0 +1,59 @@
+name: CI (unit + integration)
+
+# Быстрый CI без LLM: юнит-тесты (без БД) и интеграционные тесты
+# с реальным PostgreSQL (repository + mart normalizer).
+#
+# Интеграционные тесты используют переменную TEST_POSTGRES_URL,
+# которая задаётся в job через service-контейнер postgres.
+# LLM-зависимые golden-тесты остаются в .github/workflows/golden.yml.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  unit:
+    name: Юнит-тесты (без БД и LLM)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Установка зависимостей
+        run: pip install -e .
+      - name: Юнит-тесты
+        run: pytest tests/ -m "not golden and not integration" -v
+
+  integration:
+    name: Интеграционные тесты (PostgreSQL)
+    needs: unit
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: evraz
+          POSTGRES_PASSWORD: evraz_secret
+          POSTGRES_DB: evraz_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U evraz -d evraz_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      TEST_POSTGRES_URL: postgresql+asyncpg://evraz:evraz_secret@localhost:5432/evraz_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Установка зависимостей
+        run: pip install -e .
+      - name: Интеграционные тесты
+        run: pytest tests/integration/ -m integration -v

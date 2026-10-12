@@ -26,7 +26,7 @@ jobs:
       - name: Установка зависимостей
         run: pip install -e .
       - name: Юнит-тесты
-        run: pytest tests/ -m "not golden" -v
+        run: pytest tests/ -m "not golden and not integration" -v
 
   golden:
     name: Golden-прогон (LLM + данные)
