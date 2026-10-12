@@ -6,6 +6,7 @@
 в факт-таблицы витрины данных (`mart.price_facts`, `mart.metrics`) и отвечать на вопросы пользователя
 на естественном языке через LangGraph-агент с безопасной генерацией и выполнением SQL в PostgreSQL.
 
+
 Проект спроектирован как prod-ready: асинхронный ingestion файлов, entity-resolution по справочникам,
 read-only генерация SQL, наблюдаемость (Prometheus/Grafana), auth и rate limiting, golden-датасет для
 регрессионного тестирования.
