@@ -1,13 +1,13 @@
 flowchart LR
-    ST[GraphState: question, query_type, entities, plan,<br/>sql_query, sql_result, trace, retry_count, confidence]
+    ST["GraphState: question, query_type, entities, plan,<br/>sql_query, sql_result, trace, retry_count, confidence"]
 
     subgraph Status ["Итоговый статус по confidence"]
-        S70{confidence ≥ 0.7}
-        S70 -- да --> SUC["success"]
-        S70 -- нет --> LWC["low_confidence → self-correction на уровне pipeline"]
+        S70{"confidence >= 0.7"}
+        S70 -- "да" --> SUC["success"]
+        S70 -- "нет" --> LWC["low_confidence → self-correction на уровне pipeline"]
     end
 
-    E2{Ошибки графа} -- да --> FLD["failed"]
+    E2{"Ошибки графа"} -- "да" --> FLD["failed"]
 
     ST --> S70
     ST --> E2

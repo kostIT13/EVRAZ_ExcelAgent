@@ -73,7 +73,7 @@ flowchart TD
     subgraph Backend ["Backend — FastAPI (uvicorn, :8000)"]
         API[Роутеры: /files, /ask, /trace, /schema, /cache]
         ING[Excel: парсер → repository → mart-normalizer]
-        QUEUE[Ingestion Queue (async worker)]
+        QUEUE["Ingestion Queue (async worker)"]
         AGENT[LangGraph агент: classifier → ... → answer]
         ENT[Entity Resolution: rapidfuzz + BM25]
         LLM_CLI[LLMClient: OpenAI-совместимый API]
@@ -266,12 +266,12 @@ docker compose exec service alembic upgrade head
 
 ```mermaid
 flowchart TD
-    START(["POST /files/upload"]) --> A{Валидация<br/>.xlsx / .xls, ≤50 МБ}
-    A -- нет --> ERR(["400 ValidationError"])
+    START(["POST /files/upload"]) --> A{"Валидация<br/>.xlsx / .xls, max 50 МБ"}
+    A -- "нет" --> ERR(["400 ValidationError"])
     A -- да --> TMP[Запись во временный файл]
 
     TMP --> Q[["IngestionQueue (async worker)"]]
-    Q -->|1| PENDING[create_pending_file: запись File = upload/pending]
+    Q -->|"1"| PENDING["create_pending_file: запись File = upload/pending"]
     PENDING --> PARSER
 
     subgraph Parse ["Парсинг (src/core/excel)"]

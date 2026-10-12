@@ -6,26 +6,26 @@
 ```mermaid
 flowchart TD
     subgraph User
-        U[Пользователь]
+        U["Пользователь"]
     end
 
     subgraph Frontend ["Frontend — React + Vite (Nginx)"]
-        UI[Страницы: Чат, Файлы, Дашборд, Метрики, Трейс]
+        UI["Страницы: Чат, Файлы, Дашборд, Метрики, Трейс"]
     end
 
     subgraph Backend ["Backend — FastAPI (uvicorn, :8000)"]
-        API[Роутеры: /files, /ask, /trace, /schema, /cache]
-        ING[Excel: парсер → repository → mart-normalizer]
-        QUEUE[Ingestion Queue (async worker)]
-        AGENT[LangGraph агент: classifier → ... → answer]
-        ENT[Entity Resolution: rapidfuzz + BM25]
-        LLM_CLI[LLMClient: OpenAI-совместимый API]
-        CACHE[/Query Cache/]
-        METRICS[/Prometheus /metrics/]
+        API["Роутеры: /files, /ask, /trace, /schema, /cache"]
+        ING["Excel: парсер → repository → mart-normalizer"]
+        QUEUE["Ingestion Queue (async worker)"]
+        AGENT["LangGraph агент: classifier → ... → answer"]
+        ENT["Entity Resolution: rapidfuzz + BM25"]
+        LLM_CLI["LLMClient: OpenAI-совместимый API"]
+        CACHE[/"Query Cache"/]
+        METRICS[/"Prometheus /metrics"/]
     end
 
-    subgraph LLM ["LLM-провайдер"]
-        MODEL[DeepSeek / любая OpenAI-совместимая модель]
+    subgraph LLMProvider ["LLM-провайдер"]
+        MODEL["DeepSeek / любая OpenAI-совместимая модель"]
     end
 
     subgraph DB ["PostgreSQL 16"]
@@ -34,26 +34,26 @@ flowchart TD
     end
 
     subgraph Ops ["Мониторинг"]
-        PROM[Prometheus :9090]
-        GRAF[Grafana :3001]
+        PROM["Prometheus :9090"]
+        GRAF["Grafana :3001"]
     end
 
-    U -->|загружает .xlsx / задаёт вопросы| UI
-    UI -->|REST / HTTP| API
+    U -->|"загружает .xlsx / задаёт вопросы"| UI
+    UI -->|"REST / HTTP"| API
 
-    API -->|POST /files/upload| QUEUE
+    API -->|"POST /files/upload"| QUEUE
     QUEUE --> ING
     ING --> PUBLIC
-    ING -->|нормализация| MART
+    ING -->|"нормализация"| MART
     ING --> ENT
 
-    API -->|POST /ask| AGENT
+    API -->|"POST /ask"| AGENT
     AGENT --> LLM_CLI
-    LLM_CLI -->|chat / structured output| MODEL
-    AGENT -->|безопасный SELECT| MART
+    LLM_CLI -->|"chat / structured output"| MODEL
+    AGENT -->|"безопасный SELECT"| MART
     AGENT --> CACHE
     AGENT --> ENT
-    AGENT -->|результат + SQL| API
+    AGENT -->|"результат + SQL"| API
 
     METRICS --> PROM
     PROM --> GRAF
@@ -61,4 +61,4 @@ flowchart TD
 
     style DB fill:#e8f0fe,stroke:#4a6fa5
     style MART fill:#e6f4ea,stroke:#2e7d32
-    style LLM fill:#fdf2e9,stroke:#c45800
+    style LLMProvider fill:#fdf2e9,stroke:#c45800

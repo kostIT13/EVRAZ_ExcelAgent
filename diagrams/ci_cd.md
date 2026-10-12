@@ -7,24 +7,23 @@
 flowchart TD
     TRIGGER{{"push в main/master или pull_request"}} --> CI
 
-    subgraph CI ["ci.yml — CI (unit + integration)"]
-        U[unit<br/>pytest -m 'not golden and not integration'<br/>Ubuntu, Python 3.12, без БД]
-        I[integration<br/>pytest tests/integration -m integration<br/>service: postgres:16, TEST_POSTGRES_URL]
+    subgraph CIJOB ["ci.yml — CI (unit + integration)"]
+        U["unit<br/>pytest -m 'not golden and not integration'<br/>Ubuntu, Python 3.12, без БД"]
+        I["integration<br/>pytest tests/integration -m integration<br/>service: postgres:16, TEST_POSTGRES_URL"]
     end
 
     TRIGGER --> GOLD
 
-    CI --> GOLD
     U -. "needs" .-> I
 
-    subgraph GOLD ["golden.yml — LLM-регрессия"]
-        U2[unit-tests<br/>pytest -m 'not golden and not integration']
-        G[golden<br/>postgres service + миграции + demo-data]
-        G2[Отчёт по точности<br/>run_golden_report.py]
+    subgraph GOLDJOB ["golden.yml — LLM-регрессия"]
+        U2["unit-tests<br/>pytest -m 'not golden and not integration'"]
+        G["golden<br/>postgres service + миграции + demo-data"]
+        G2["Отчёт по точности<br/>run_golden_report.py"]
     end
 
-    GOLD --> SEC{{secrets: LLM_BASE_URL, LLM_API_KEY, LLM_MODEL_PRIMARY}}
-    SEC -- отсутствуют --> GFALL[golden падает ожидаемо]
+    GOLD --> SEC{{"secrets: LLM_BASE_URL, LLM_API_KEY, LLM_MODEL_PRIMARY"}}
+    SEC -- "отсутствуют" --> GFALL["golden падает ожидаемо"]
 
     U2 --> G
     G --> G2

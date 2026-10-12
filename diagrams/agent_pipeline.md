@@ -6,29 +6,29 @@
 
 ```mermaid
 flowchart TD
-    START([Вопрос пользователя via POST /ask]) --> C[classifier<br/>тип запроса + домен]
+    START(["Вопрос пользователя через POST /ask"]) --> C["classifier<br/>тип запроса + домен"]
 
-    C -- query_type = None --> F[failed]
-    C -- ok --> D[disambiguation<br/>нужно ли уточнение]
+    C -- "query_type = None" --> F["failed"]
+    C -- "ok" --> D["disambiguation<br/>нужно ли уточнение"]
 
-    D --> P[planner<br/>план действий]
+    D --> P["planner<br/>план действий"]
 
-    P --> G[codegen<br/>генерация безопасного SQL]
+    P --> G["codegen<br/>генерация безопасного SQL"]
 
-    G -- SQL пуст / ошибки валидации, ретраев < 3 --> G
-    G -- SQL пуст и ретраев = 3 --> F
-    G -- валидация не пройдена, ретраев = 3 --> E
-    G -- ок --> E[executor<br/>выполнение SELECT (read-only)]
+    G -- "SQL пуст / ошибки валидации, ретраев < 3" --> G
+    G -- "SQL пуст и ретраев = 3" --> F
+    G -- "валидация не пройдена, ретраев = 3" --> E
+    G -- "ok" --> E["executor<br/>выполнение SELECT (read-only)"]
 
-    E -- sql_error, ретраев < 3 --> G
-    E -- sql_error, ретраев = 3 --> F
-    E -- ок --> V[verifier<br/>LLM-проверка SQL + результата]
+    E -- "sql_error, ретраев < 3" --> G
+    E -- "sql_error, ретраев = 3" --> F
+    E -- "ok" --> V["verifier<br/>LLM-проверка SQL + результата"]
 
-    V -- needs_retry, ретраев < 3 --> G
-    V -- needs_retry, ретраев = 3 --> A
-    V -- ок --> A[answer<br/>формирование ответа]
+    V -- "needs_retry, ретраев < 3" --> G
+    V -- "needs_retry, ретраев = 3" --> A
+    V -- "ok" --> A["answer<br/>формирование ответа"]
 
-    A --> ENDX([END])
+    A --> ENDX(["END"])
     F --> ENDX
 ```
 
@@ -36,15 +36,15 @@ flowchart TD
 
 ```mermaid
 flowchart LR
-    ST[GraphState: question, query_type, entities, plan,<br/>sql_query, sql_result, trace, retry_count, confidence]
+    ST["GraphState: question, query_type, entities, plan,<br/>sql_query, sql_result, trace, retry_count, confidence"]
 
     subgraph Status ["Итоговый статус по confidence"]
-        S70{confidence ≥ 0.7}
-        S70 -- да --> SUC["success"]
-        S70 -- нет --> LWC["low_confidence → self-correction на уровне pipeline"]
+        S70{"confidence >= 0.7"}
+        S70 -- "да" --> SUC["success"]
+        S70 -- "нет" --> LWC["low_confidence → self-correction на уровне pipeline"]
     end
 
-    E2{Ошибки графа} -- да --> FLD["failed"]
+    E2{"Ошибки графа"} -- "да" --> FLD["failed"]
 
     ST --> S70
     ST --> E2
