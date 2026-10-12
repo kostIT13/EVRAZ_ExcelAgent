@@ -1,0 +1,195 @@
+[
+  {
+    "id": 1,
+    "question": "Сколько составила среднерыночная цена на Лом твердых сплавов (без припоя) в декабре 2025 года?",
+    "expected": 2697900.0,
+    "status": "success",
+    "answer": "Среднерыночная цена на лом твердых сплавов (без припоя) в декабре 2025 года составила 2 697 900 руб./тн.",
+    "actual_number": 2025.0,
+    "sql": "SELECT fp.value AS среднерыночная_цена\nFROM mart.price_facts fp\nWHERE fp.sheet_period = '2025-12'\n  AND fp.price_type = 'среднерыночная'\n  AND fp.item_name = 'Лом твердых сплавов (без припоя)'\nLIMIT 1",
+    "passed": false,
+    "latency_ms": 34
+  },
+  {
+    "id": 2,
+    "question": "Какова была максимальная цена по результатам предложения победителя на аукционе за Лом латуни ЛАЖМц в январе 2025 - декабре 2025 года?",
+    "expected": 602922.0,
+    "status": "success",
+    "answer": "Максимальная цена по результатам предложения победителя на аукционе за лом латуни ЛАЖМц в период с января по декабрь 2025 года составила 602 922 руб./тн.",
+    "actual_number": 2025.0,
+    "sql": "SELECT MAX(fp.value) AS максимальная_цена\nFROM mart.price_facts fp\nWHERE fp.item_name = 'Лом латуни ЛАЖМц'\n  AND fp.price_type = 'аукцион_победитель'\n  AND fp.sheet_period BETWEEN '2025-01' AND '2025-12'",
+    "passed": false,
+    "latency_ms": 21
+  },
+  {
+    "id": 3,
+    "question": "Какова была средняя цена на все виды медного лома по данным Ферроком в феврале 2025 года?",
+    "expected": 696625.15,
+    "status": "success",
+    "answer": "Средняя цена на все виды медного лома по данным компании Ферроком в феврале 2025 года составила 696 625,15 руб./тн.",
+    "actual_number": 2025.0,
+    "sql": "SELECT AVG(fp.value) AS средняя_цена\nFROM mart.price_facts fp\nWHERE fp.sheet_period = '2025-02'\n  AND fp.supplier ILIKE '%ферроком%'\n  AND fp.item_name ILIKE 'Лом меди%'\n  AND fp.price_type = 'поставщик'\n  AND fp.value IS NOT NULL",
+    "passed": false,
+    "latency_ms": 26
+  },
+  {
+    "id": 4,
+    "question": "Какова была дельта между минимальной и максимальной ценой на все виды медного лома по данным Ферроком, Сплав-21, ЦветМет, шами-сервис, в феврале 2025 года?",
+    "expected": 438350.1,
+    "status": "success",
+    "answer": "дельта: 438 350.10",
+    "actual_number": 438350.1,
+    "sql": "SELECT MAX(fp.value) - MIN(fp.value) AS дельта\nFROM mart.price_facts fp\nWHERE fp.sheet_period = '2025-02'\n  AND fp.price_type = 'поставщик'\n  AND fp.item_name ILIKE 'Лом меди%'\n  AND fp.value IS NOT NULL\n  AND (\n    fp.supplier ILIKE '%ферроком%'\n    OR fp.supplier ILIKE '%сплав-21%'\n    OR fp.supplier ILIKE '%сплав21%'\n    OR fp.supplier ILIKE '%цветмет%'\n    OR fp.supplier ILIKE '%шамисервис%'\n    OR fp.supplier ILIKE '%шами-сервис%'\n  )",
+    "passed": true,
+    "latency_ms": 63102
+  },
+  {
+    "id": 5,
+    "question": "Какова была минимальная цена на цинковый лом за все месяцы?",
+    "expected": 164220.0,
+    "status": "error",
+    "error": "timed out",
+    "passed": false
+  },
+  {
+    "id": 6,
+    "question": "Какова была максимальная среднерыночная цена на Лом меди кусок за весь 2025 год (январь-декабрь)?",
+    "expected": 906729.75,
+    "status": "success",
+    "answer": "Максимальная среднерыночная цена на лом меди кусок за 2025 год, с января по декабрь, составила 906 729 руб./тн.",
+    "actual_number": 2025.0,
+    "sql": "SELECT MAX(fp.value) AS максимальная_среднерыночная_цена\nFROM mart.price_facts fp\nWHERE fp.item_name = 'Лом меди кусок'\n  AND fp.price_type = 'среднерыночная'\n  AND fp.sheet_period BETWEEN '2025-01' AND '2025-12'",
+    "passed": false,
+    "latency_ms": 85182
+  },
+  {
+    "id": 7,
+    "question": "Какова была минимальная цена предложения победителя на Лом алюминия за весь 2025 год?",
+    "expected": 143692.75,
+    "status": "success",
+    "answer": "Минимальная цена предложения победителя на Лом алюминия за весь 2025 год составила 143 692.5 руб./тн.",
+    "actual_number": 2025.0,
+    "sql": "SELECT MIN(fp.value) AS минимальная_цена\nFROM mart.price_facts fp\nWHERE fp.sheet_period LIKE '2025-%'\n  AND fp.price_type = 'аукцион_победитель'\n  AND fp.item_name = 'Лом алюминия'",
+    "passed": false,
+    "latency_ms": 124905
+  },
+  {
+    "id": 8,
+    "question": "В каком месяце 2025 года цена на Лом латуни (секции холодильные) по данным компании \"Северо-запад ВторМет\" была максимальной и чему она равнялась?",
+    "expected": null,
+    "status": "low_confidence",
+    "answer": "Запрос не вернул данных.",
+    "actual_number": null,
+    "sql": "SELECT fp.sheet_period AS месяц,\n       MAX(fp.value) AS максимальная_цена\nFROM mart.price_facts fp\nWHERE fp.sheet_period LIKE '2025-%'\n  AND fp.item_name = 'Лом латуни (секции холодильные)'\n  AND fp.supplier ILIKE '%Северо-запад ВторМет%'\n  AND fp.price_type = 'поставщик'\n  AND fp.value IS NOT NULL\nGROUP BY fp.sheet_period\nORDER BY максимальная_цена DESC, fp.sheet_period\nLIMIT 1",
+    "passed": null,
+    "latency_ms": 128328
+  },
+  {
+    "id": 9,
+    "question": "Какова была максимальная цена на Лом баббита Б83 (Олово 2) по результатам предложения победителя за весь 2025 год?",
+    "expected": 2869940.0,
+    "status": "success",
+    "answer": "максимальная_цена: 2 869 940",
+    "actual_number": 2869940.0,
+    "sql": "SELECT MAX(fp.value) AS максимальная_цена\nFROM mart.price_facts fp\nWHERE fp.sheet_period LIKE '2025-%'\n  AND fp.price_type = 'аукцион_победитель'\n  AND fp.item_name = 'Лом баббита Б83 (Олово 2)'",
+    "passed": true,
+    "latency_ms": 33559
+  },
+  {
+    "id": 10,
+    "question": "Какая минимальная среднерыночная цена была зафиксирована на Лом алюминия стружка в 2025 году?",
+    "expected": 70380.0,
+    "status": "success",
+    "answer": "Минимальная среднеры",
+    "actual_number": null,
+    "sql": "SELECT MIN(fp.value) AS минимальная_среднерыночная_цена\nFROM mart.price_facts fp\nWHERE fp.sheet_period LIKE '2025-%'\n  AND fp.price_type = 'среднерыночная'\n  AND fp.item_name = 'Лом алюминия стружка'",
+    "passed": false,
+    "latency_ms": 33171
+  },
+  {
+    "id": 11,
+    "question": "Какова была средняя цена всех видов медного лома (кусочек, микс, в кабеле, стружка, трубка с оребрением, трубка с оребрением меди 87,2%) по данным компании 'Сплав-21' в декабре 2025 года?",
+    "expected": 759991.39,
+    "status": "failed",
+    "answer": "Не удалось найти ответ на ваш вопрос. Попробуйте переформулировать запрос.",
+    "actual_number": null,
+    "sql": "",
+    "passed": false,
+    "latency_ms": 143720
+  },
+  {
+    "id": 12,
+    "question": "Какова была средняя цена на все виды алюминиевого лома (алюминий, в кабеле, стружка, блоки УБРС, трубка медная с алюм оребрением меди) по данным Шами-сервис в сентябре 2025 года?",
+    "expected": 122632.35,
+    "status": "failed",
+    "answer": "Не удалось найти ответ на ваш вопрос. Попробуйте переформулировать запрос.",
+    "actual_number": null,
+    "sql": "",
+    "passed": false,
+    "latency_ms": 131149
+  },
+  {
+    "id": 13,
+    "question": "Рассчитайте среднюю цену по трем видам латуни (лом латуни, лом латуни стружка, лом латуни ЛАЖМц) по данным компании \"ЦветМет\" в апреле 2025 года.",
+    "expected": 492660.0,
+    "status": "error",
+    "error": "Remote end closed connection without response",
+    "passed": false
+  },
+  {
+    "id": 14,
+    "question": "Какова разница (дельта) между максимальной и минимальной ценой на Лом меди кусок среди всех поставщиков (ВРП У, Северо-запад, Ферроком, Сплав-21, ЦветМет, Шами-сервис, УралМетРесурс) в декабре 2025 года?",
+    "expected": 141346.5,
+    "status": "error",
+    "error": "Remote end closed connection without response",
+    "passed": false
+  },
+  {
+    "id": 15,
+    "question": "Насколько выросла среднерыночная цена на Лом алюминия с января 2025 года по декабрь 2025 года?",
+    "expected": -879.75,
+    "status": "error",
+    "error": "Remote end closed connection without response",
+    "passed": false
+  },
+  {
+    "id": 16,
+    "question": "Какова разница между ценой предложения победителя и стартовой ценой августа на Лом меди в кабеле в октябре 2025 года?",
+    "expected": 23072.91,
+    "status": "error",
+    "error": "Remote end closed connection without response",
+    "passed": false
+  },
+  {
+    "id": 17,
+    "question": "Какова была сумма цен на все виды лома баббита (Б83, Б83 стружка, Б16, Б16 стружка) по данным компании \"Ферроком\" в июле 2025 года?",
+    "expected": 4516050.0,
+    "status": "error",
+    "error": "Remote end closed connection without response",
+    "passed": false
+  },
+  {
+    "id": 18,
+    "question": "В каком месяце 2025 года цена на Лом нержавейки стружка по данным \"Северо-запад ВторМет\" была равна 73 899 руб./тн?",
+    "expected": null,
+    "status": "error",
+    "error": "Remote end closed connection without response",
+    "passed": false
+  },
+  {
+    "id": 19,
+    "question": "Какова была средняя цена на Лом провода (Ni 91,5%; Cr 4,5%) по всем поставщикам (исключая пустые ячейки) в июне 2025 года?",
+    "expected": 576896.06,
+    "status": "error",
+    "error": "Remote end closed connection without response",
+    "passed": false
+  },
+  {
+    "id": 20,
+    "question": "Какова была цена на Лом легированный Б26 (рукава СРГС) по данным компании \"Шами-сервис\" в мае 2025 года?",
+    "expected": 65394.75,
+    "status": "error",
+    "error": "Remote end closed connection without response",
+    "passed": false
+  }
+]

@@ -1,0 +1,129 @@
+{
+  "total": 10,
+  "passed": 0,
+  "failed": 10,
+  "pass_rate": 0.0,
+  "generated_at": "2026-10-12 18:38:47",
+  "rows": [
+    {
+      "id": "g001",
+      "question": "Какая среднерыночная цена на лом меди в январе 2025?",
+      "query_type": "lookup",
+      "domain": "prices",
+      "status": "failed",
+      "error": "couldn't get a connection after 30.00 sec",
+      "latency_ms": 34077,
+      "sql_hint_ok": false,
+      "result_type_ok": false,
+      "passed": false
+    },
+    {
+      "id": "g002",
+      "question": "Сравни цены на латунь у всех поставщиков в декабре 2025",
+      "query_type": "lookup",
+      "domain": "prices",
+      "status": "failed",
+      "error": "couldn't get a connection after 30.00 sec",
+      "latency_ms": 34078,
+      "sql_hint_ok": false,
+      "result_type_ok": false,
+      "passed": false
+    },
+    {
+      "id": "g003",
+      "question": "Какая средняя цена на никель по всем месяцам?",
+      "query_type": "aggregate",
+      "domain": "prices",
+      "status": "failed",
+      "error": "couldn't get a connection after 30.00 sec",
+      "latency_ms": 34061,
+      "sql_hint_ok": false,
+      "result_type_ok": false,
+      "passed": false
+    },
+    {
+      "id": "g004",
+      "question": "На сколько изменилась цена на медь между январем и февралем 2025?",
+      "query_type": "delta",
+      "domain": "prices",
+      "status": "failed",
+      "error": "couldn't get a connection after 30.00 sec",
+      "latency_ms": 34077,
+      "sql_hint_ok": false,
+      "result_type_ok": false,
+      "passed": false
+    },
+    {
+      "id": "g005",
+      "question": "Какая стартовая цена аукциона на лом меди в марте 2025?",
+      "query_type": "lookup",
+      "domain": "prices",
+      "status": "failed",
+      "error": "couldn't get a connection after 30.00 sec",
+      "latency_ms": 34079,
+      "sql_hint_ok": false,
+      "result_type_ok": false,
+      "passed": false
+    },
+    {
+      "id": "g006",
+      "question": "Кто победил в аукционе по латуни в январе 2025 и по какой цене?",
+      "query_type": "lookup",
+      "domain": "prices",
+      "status": "failed",
+      "error": "couldn't get a connection after 30.00 sec",
+      "latency_ms": 34061,
+      "sql_hint_ok": false,
+      "result_type_ok": false,
+      "passed": false
+    },
+    {
+      "id": "g007",
+      "question": "Покажи все цены на бронзу в апреле 2025",
+      "query_type": "lookup",
+      "domain": "prices",
+      "status": "failed",
+      "error": "couldn't get a connection after 30.00 sec",
+      "latency_ms": 34078,
+      "sql_hint_ok": false,
+      "result_type_ok": false,
+      "passed": false
+    },
+    {
+      "id": "g008",
+      "question": "Какая цена на лом меди у поставщика ООО Металл в январе 2025?",
+      "query_type": "lookup",
+      "domain": "prices",
+      "status": "failed",
+      "error": "couldn't get a connection after 30.00 sec",
+      "latency_ms": 34046,
+      "sql_hint_ok": false,
+      "result_type_ok": false,
+      "passed": false
+    },
+    {
+      "id": "g009",
+      "question": "О скольки месяцах у тебя есть информация?",
+      "query_type": "aggregate",
+      "domain": "prices",
+      "status": "failed",
+      "error": "couldn't get a connection after 30.00 sec",
+      "latency_ms": 34063,
+      "sql_hint_ok": false,
+      "result_type_ok": false,
+      "passed": false
+    },
+    {
+      "id": "g010",
+      "question": "Сколько всего листов в базе данных?",
+      "query_type": "aggregate",
+      "domain": "generic",
+      "status": "failed",
+      "error": "couldn't get a connection after 30.00 sec",
+      "latency_ms": 34061,
+      "sql_hint_ok": false,
+      "result_type_ok": false,
+      "passed": false
+    }
+  ]
+}
