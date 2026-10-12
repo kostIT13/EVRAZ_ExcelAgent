@@ -37,7 +37,9 @@ PRICES_FILE = DATA_DIR / "data_proportional_prices.xlsx"
 
 
 def _run(coro):
-    return asyncio.run(coro)
+    # Общий event loop задан в tests/integration/conftest.py (asyncio.set_event_loop).
+    # asyncio.run() создавал бы новый loop на каждый тест и ломал пул asyncpg.
+    return asyncio.get_event_loop().run_until_complete(coro)
 
 
 @pytest.fixture

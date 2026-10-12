@@ -21,13 +21,22 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from src.core.db.base import Base
 
 # Импорт обязателен: регистрирует все модели в Base.metadata.
+
+
+
 import src.core.db.models  # noqa: F401
 
 
-def _run(coro):
-    """Синхронный запуск корутины (pytest не настроен на asyncio-режим)."""
-    return asyncio.run(coro)
+# Единый event loop для всех тестов: asyncpg-соединения из пула привязаны
+# к loop, в котором созданы. Если каждый тест создаёт свой loop через
+# asyncio.run()— пул ломается с "Event loop is closed" (Windows и не только).
+_LOOP = asyncio.new_event_loop()
+asyncio.set_event_loop(_LOOP)
 
+
+def _run(coro):
+    """Синхронный запуск корутины в общем event loop (pytest не настроен на asyncio-режим)."""
+    return _LOOP.run_until_complete(coro)
 
 def _test_db_url() -> str | None:
     return os.environ.get("TEST_POSTGRES_URL")
@@ -49,7 +58,9 @@ def test_db():
         async with engine.begin() as conn:
             await conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
             await conn.execute(text("CREATE SCHEMA IF NOT EXISTS mart"))
-        await Base.metadata.create_all(engine)
+            # AsyncEngine не поддерживает create_all напрямую — выполняем DDL
+            # через run_sync (SQLAlchemy 2.0).
+            await conn.run_sync(Base.metadata.create_all)
 
     _run(_setup())
 
@@ -62,7 +73,8 @@ def test_db():
 
     async def _teardown():
         try:
-            await Base.metadata.drop_all(engine)
+            async with engine.begin() as conn:
+                await conn.run_sync(Base.metadata.drop_all)
         finally:
             await engine.dispose()
 

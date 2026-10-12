@@ -26,10 +26,7 @@ class File(Base):
 
     sheets: Mapped[List["Sheet"]] = relationship("Sheet", back_populates="file", cascade="all, delete-orphan")
 
-    __table_args__ = (
-        Index("ix_files_status", "status"),
-        Index("ix_files_uploaded_at", "uploaded_at"),
-    )
+    __table_args__ = ()
 
 
 class Sheet(Base):
@@ -52,13 +49,7 @@ class Sheet(Base):
     columns: Mapped[List["ColumnMetadata"]] = relationship("ColumnMetadata", back_populates="sheet", cascade="all, delete-orphan")
     cells: Mapped[List["Cell"]] = relationship("Cell", back_populates="sheet", cascade="all, delete-orphan")
 
-    __table_args__ = (
-        Index("ix_sheets_file_id", "file_id"),
-        Index("ix_sheets_normalized_name", "normalized_name"),
-        Index("ix_sheets_original_name", "original_name"),
-        Index("ix_sheets_period", "period"),
-        Index("ix_sheets_sheet_kind", "sheet_kind"),
-    )
+    __table_args__ = ()
 
 
 class ColumnMetadata(Base):
@@ -76,11 +67,7 @@ class ColumnMetadata(Base):
 
     sheet: Mapped["Sheet"] = relationship("Sheet", back_populates="columns")
 
-    __table_args__ = (
-        Index("ix_column_metadata_sheet_id", "sheet_id"),
-        Index("ix_column_metadata_normalized_name", "normalized_name"),
-        Index("ix_column_metadata_data_type", "data_type"),
-    )
+    __table_args__ = ()
 
 
 class Cell(Base):
@@ -100,10 +87,7 @@ class Cell(Base):
 
     sheet: Mapped["Sheet"] = relationship("Sheet", back_populates="cells")
 
-    __table_args__ = (
-        Index("ix_cells_sheet_id", "sheet_id"),
-        Index("ix_cells_value_number", "value_number"),
-    )
+    __table_args__ = ()
 
 
 class EntityDictionary(Base):
@@ -118,10 +102,7 @@ class EntityDictionary(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, onupdate=func.now())
 
-    __table_args__ = (
-        Index("ix_entity_dictionary_canonical_name", "canonical_name"),
-        Index("ix_entity_dictionary_category", "category"),
-    )
+    __table_args__ = ()
 
 
 class ExcelComment(Base):
@@ -138,10 +119,7 @@ class ExcelComment(Base):
 
     sheet: Mapped["Sheet"] = relationship("Sheet")
 
-    __table_args__ = (
-        Index("ix_excel_comments_sheet_id", "sheet_id"),
-        Index("ix_excel_comments_cell_ref", "cell_ref"),
-    )
+    __table_args__ = ()
 
 
 class QueryCache(Base):
@@ -159,10 +137,7 @@ class QueryCache(Base):
     last_used: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    __table_args__ = (
-        Index("ix_query_cache_question_hash", "question_hash"),
-        Index("ix_query_cache_query_type", "query_type"),
-    )
+    __table_args__ = ()
 
 
 class GoldenDataset(Base):
@@ -180,10 +155,7 @@ class GoldenDataset(Base):
     is_active: Mapped[bool] = mapped_column(Integer, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    __table_args__ = (
-        Index("ix_golden_dataset_category", "category"),
-        Index("ix_golden_dataset_is_active", "is_active"),
-    )
+    __table_args__ = ()
 
 
 class QueryLog(Base):
@@ -202,12 +174,7 @@ class QueryLog(Base):
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    __table_args__ = (
-        Index("ix_query_logs_request_id", "request_id"),
-        Index("ix_query_logs_created_at", "created_at"),
-        Index("ix_query_logs_user_id", "user_id"),
-        Index("ix_query_logs_status", "status"),
-    )
+    __table_args__ = ()
 
 
 class PriceFact(Base):
@@ -228,15 +195,7 @@ class PriceFact(Base):
     is_blank: Mapped[bool] = mapped_column(Integer, default=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    __table_args__ = (
-        Index("ix_mart_price_facts_item_name", "item_name"),
-        Index("ix_mart_price_facts_supplier", "supplier"),
-        Index("ix_mart_price_facts_sheet_period", "sheet_period"),
-        Index("ix_mart_price_facts_file_id", "file_id"),
-        Index("ix_mart_price_facts_sheet_id", "sheet_id"),
-        Index("ix_mart_price_facts_is_blank", "is_blank"),
-        {"schema": "mart"},
-    )
+    __table_args__ = {"schema": "mart"}
 
 
 class SheetTemplate(Base):
@@ -254,11 +213,7 @@ class SheetTemplate(Base):
     confirmed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    __table_args__ = (
-        Index("ix_mart_sheet_templates_status", "status"),
-        Index("ix_mart_sheet_templates_fingerprint", "fingerprint"),
-        {"schema": "mart"},
-    )
+    __table_args__ = {"schema": "mart"}
 
 
 class Metric(Base):
@@ -279,15 +234,7 @@ class Metric(Base):
     is_blank: Mapped[bool] = mapped_column(Integer, default=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    __table_args__ = (
-        Index("ix_mart_metrics_dimension", "dimension"),
-        Index("ix_mart_metrics_metric_type", "metric_type"),
-        Index("ix_mart_metrics_period", "period"),
-        Index("ix_mart_metrics_file_id", "file_id"),
-        Index("ix_mart_metrics_sheet_id", "sheet_id"),
-        Index("ix_mart_metrics_metric", "metric"),
-        {"schema": "mart"},
-    )
+    __table_args__ = {"schema": "mart"}
 
 
 class SupplierAlias(Base):
@@ -301,9 +248,4 @@ class SupplierAlias(Base):
     source_sheet_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    __table_args__ = (
-        Index("ix_mart_supplier_aliases_canonical_name", "canonical_name"),
-        Index("ix_mart_supplier_aliases_alias", "alias"),
-        Index("ix_mart_supplier_aliases_source_sheet_id", "source_sheet_id"),
-        {"schema": "mart"},
-    )
+    __table_args__ = {"schema": "mart"}
