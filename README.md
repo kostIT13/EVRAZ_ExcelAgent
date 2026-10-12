@@ -34,6 +34,7 @@ read-only генерация SQL, наблюдаемость (Prometheus/Grafana
 - [Schema Inference](#schema-inference)
 - [Golden dataset](#golden-dataset)
 - [Тесты](#тесты)
+- [Диаграммы](#диаграммы)
 - [Секреты](#секреты)
 - [Структура проекта](#структура-проекта)
 - [Известные особенности](#известные-особенности)
@@ -59,31 +60,68 @@ read-only генерация SQL, наблюдаемость (Prometheus/Grafana
 
 ## Архитектура
 
+```mermaid
+flowchart TD
+    subgraph User
+        U[Пользователь]
+    end
+
+    subgraph Frontend ["Frontend — React + Vite (Nginx)"]
+        UI[Страницы: Чат, Файлы, Дашборд, Метрики, Трейс]
+    end
+
+    subgraph Backend ["Backend — FastAPI (uvicorn, :8000)"]
+        API[Роутеры: /files, /ask, /trace, /schema, /cache]
+        ING[Excel: парсер → repository → mart-normalizer]
+        QUEUE[Ingestion Queue (async worker)]
+        AGENT[LangGraph агент: classifier → ... → answer]
+        ENT[Entity Resolution: rapidfuzz + BM25]
+        LLM_CLI[LLMClient: OpenAI-совместимый API]
+        CACHE[/Query Cache/]
+        METRICS[/Prometheus /metrics/]
+    end
+
+    subgraph LLM ["LLM-провайдер"]
+        MODEL[DeepSeek / любая OpenAI-совместимая модель]
+    end
+
+    subgraph DB ["PostgreSQL 16"]
+        PUBLIC["public: files, sheets, cells, columns, query_logs ..."]
+        MART["mart: price_facts, metrics, supplier_aliases, sheet_templates"]
+    end
+
+    subgraph Ops ["Мониторинг"]
+        PROM[Prometheus :9090]
+        GRAF[Grafana :3001]
+    end
+
+    U -->|загружает .xlsx / задаёт вопросы| UI
+    UI -->|REST / HTTP| API
+
+    API -->|POST /files/upload| QUEUE
+    QUEUE --> ING
+    ING --> PUBLIC
+    ING -->|нормализация| MART
+    ING --> ENT
+
+    API -->|POST /ask| AGENT
+    AGENT --> LLM_CLI
+    LLM_CLI -->|chat / structured output| MODEL
+    AGENT -->|безопасный SELECT| MART
+    AGENT --> CACHE
+    AGENT --> ENT
+    AGENT -->|результат + SQL| API
+
+    METRICS --> PROM
+    PROM --> GRAF
+    API --> METRICS
+
+    style DB fill:#e8f0fe,stroke:#4a6fa5
+    style MART fill:#e6f4ea,stroke:#2e7d32
+    style LLM fill:#fdf2e9,stroke:#c45800
 ```
-Excel файл
-    │
-    ▼
-Парсинг (src/core/excel): openpyxl/pandas
-    │  → template_fingerprint (кэш схем в mart.sheet_templates)
-    │  → schema_inference (LLM, разово на новый формат) + human confirmation
-    ▼
-RAW-таблицы (public): files, sheets, column_metadata, cells, excel_comments
-    │
-    ▼
-Нормализация (src/services/mart/normalizer)
-    │  → mart.price_facts  (long-факт-таблица цен лома)
-    │  → mart.metrics      (производственные метрики/шихта)
-    │  → entity_resolution (справочники сущностей)
-    ▼
-Вопрос пользователя
-    │
-    ▼
-LangGraph-агент (src/services/agent)
-    Classifier → Disambiguation → Planner → CodeGen → Executor → Verifier → Answer
-    │  (entity-resolution выполняется внутри Classifier/Planner)
-    ▼
-PostgreSQL (mart.* — SQL выполняет Executor-узел)
-```
+
+> Источник: [`diagrams/architecture.mmd`](diagrams/architecture.mmd).
 
 Ключевые принципы:
 
@@ -226,6 +264,79 @@ docker compose exec service alembic upgrade head
 
 Статусы: `uploaded → processing → ready | failed`.
 
+```mermaid
+flowchart TD
+    START(["POST /files/upload"]) --> A{Валидация<br/>.xlsx / .xls, ≤50 МБ}
+    A -- нет --> ERR(["400 ValidationError"])
+    A -- да --> TMP[Запись во временный файл]
+
+    TMP --> Q[["IngestionQueue (async worker)"]]
+    Q -->|1| PENDING[create_pending_file: запись File = upload/pending]
+    PENDING --> PARSER
+
+    subgraph Parse ["Парсинг (src/core/excel)"]
+        PARSER[ExcelParser<br/>unmerge, detect header rows] --> SHEETS[Pydantic ParsedFile: sheets / headers / data / cells]
+        SHEETS --> NORM[ExcelNormalizer: normalize_header, infer_column_type]
+        SHEETS --> KIND[sheet_kind_detector: prices / matrix / generic]
+        SHEETS --> STRUC[TableStructurer: period из имени листа]
+        SHEETS --> COMM[comment_extractor: комментарии ячеек]
+    end
+
+    NORM --> REPO[SQLAlchemyExcelRepository.save_parsed_file]
+    KIND --> REPO
+    STRUC --> REPO
+    COMM --> REPO
+
+    REPO --> RAW[["RAW: files / sheets / column_metadata / cells / excel_comments"]]
+    REPO -->|идемпотентность: удаление старых листов файла| REPO
+
+    RAW --> MART[normalize_file_to_mart]
+
+    subgraph Mart ["Витрина mart (src/services/mart)"]
+        MART --> P1{sheet_kind?}
+        P1 -- prices --> FACTS[price_facts: item_name, supplier, price_type, value, is_blank]
+        P1 -- matrix --> METRICS[metrics: dimension, metric_type, metric, value]
+        MART --> ALIAS[supplier_aliases: canonical + alias]
+        MART --> TPL[sheet_templates по fingerprint]
+    end
+
+    FACTS --> ENT[EntityResolver.index_entities]
+    METRICS --> ENT
+    ENT --> USAGE[item / supplier / period каталог для агента]
+
+    MART --> DONE(["File status = processed"])
+```
+
+```mermaid
+sequenceDiagram
+    actor U as Пользователь
+    participant API as FastAPI /files
+    participant Q as IngestionQueue
+    participant S as ExcelIngestionService
+    participant R as Repository
+    participant N as Mart Normalizer
+    participant DB as PostgreSQL
+
+    U->>API: upload .xlsx
+    API->>Q: enqueue(path)
+    Q->>S: create_pending_file
+    S->>DB: insert files (pending)
+    Q->>S: process_file
+    S->>R: process_file
+    R->>R: parse → save sheets/columns/cells (RAW)
+    R-->>DB: insert files/sheets/column_metadata/cells
+    S->>N: normalize_file_to_mart
+    N->>N: удалить старые факты файла (идемпотентность)
+    N-->>DB: insert mart.price_facts / metrics / supplier_aliases
+    S->>R: index_entities
+    R-->>DB: каталог сущностей (item/supplier/period)
+    S-->>Q: status = processed
+    Q-->>API: file_id + статус
+```
+
+> Источники: [`diagrams/excel_ingestion.mmd`](diagrams/excel_ingestion.mmd),
+> [`diagrams/excel_ingestion_sequence.mmd`](diagrams/excel_ingestion_sequence.mmd).
+
 ---
 
 ## LLM-клиент и устойчивость
@@ -254,6 +365,37 @@ Pydantic-объект. Используется для классификато�
 - `confidence >= 0.7` → `success`;
 - иначе → `low_confidence` (запускает self-correction на уровне pipeline);
 - при ошибках графа → `failed`.
+
+```mermaid
+flowchart TD
+    START([Вопрос пользователя via POST /ask]) --> C[classifier<br/>тип запроса + домен]
+
+    C -- query_type = None --> F[failed]
+    C -- ok --> D[disambiguation<br/>нужно ли уточнение]
+
+    D --> P[planner<br/>план действий]
+
+    P --> G[codegen<br/>генерация безопасного SQL]
+
+    G -- SQL пуст / ошибки валидации, ретраев < 3 --> G
+    G -- SQL пуст и ретраев = 3 --> F
+    G -- валидация не пройдена, ретраев = 3 --> E
+    G -- ок --> E[executor<br/>выполнение SELECT (read-only)]
+
+    E -- sql_error, ретраев < 3 --> G
+    E -- sql_error, ретраев = 3 --> F
+    E -- ок --> V[verifier<br/>LLM-проверка SQL + результата]
+
+    V -- needs_retry, ретраев < 3 --> G
+    V -- needs_retry, ретраев = 3 --> A
+    V -- ок --> A[answer<br/>формирование ответа]
+
+    A --> ENDX([END])
+    F --> ENDX
+```
+
+> Источник: [`diagrams/agent_pipeline.mmd`](diagrams/agent_pipeline.mmd),
+> [`diagrams/agent_status.mmd`](diagrams/agent_status.mmd).
 
 ### Узлы
 
@@ -330,6 +472,159 @@ Executor выполняет только SELECT-запросы с огранич
 - Булевы поля (`is_blank`, `sheet_kind_auto`, `is_active`) объявлены как `Integer (0/1)` — в SQL их нужно
   сравнивать с числами, а не с `TRUE/FALSE`.
 - Расширения Postgres инициализируются в `scripts/init-db/01-extensions.sql`.
+
+### ER-диаграмма
+
+```mermaid
+erDiagram
+    FILES ||--o{ SHEETS : "file_id"
+    SHEETS ||--o{ COLUMN_METADATA : "sheet_id"
+    SHEETS ||--o{ CELLS : "sheet_id"
+    SHEETS ||--o{ EXCEL_COMMENTS : "sheet_id"
+    FILES ||--o{ MART_PRICE_FACTS : "file_id"
+    FILES ||--o{ MART_METRICS : "file_id"
+
+    FILES {
+        int id PK
+        varchar filename
+        varchar file_hash UK
+        int total_sheets
+        int total_rows
+        int total_cells
+        varchar status
+        text error_message
+        json meta
+        timestamp uploaded_at
+    }
+
+    SHEETS {
+        int id PK
+        int file_id FK
+        int sheet_index
+        varchar original_name
+        varchar normalized_name
+        varchar period
+        varchar sheet_kind "prices|matrix|generic"
+        int row_count
+        int col_count
+    }
+
+    COLUMN_METADATA {
+        int id PK
+        int sheet_id FK
+        int col_index
+        varchar original_name
+        varchar normalized_name
+        varchar data_type "text|number|price|date|id"
+        varchar role "item|price|supplier|metric_type"
+        json sample_values
+    }
+
+    CELLS {
+        int id PK
+        int sheet_id FK
+        int row_num
+        int col_index
+        text value_text
+        float value_number
+        timestamp value_date
+        text original_value
+    }
+
+    ENTITY_DICTIONARY {
+        int id PK
+        varchar canonical_name UK
+        json aliases
+        varchar category
+        json embedding
+    }
+
+    EXCEL_COMMENTS {
+        int id PK
+        int sheet_id FK
+        varchar cell_ref
+        int row_num
+        int col_index
+        varchar author
+        text text
+    }
+
+    QUERY_CACHE {
+        int id PK
+        varchar question_hash UK
+        text question
+        text sql_query
+        json result
+        varchar query_type
+    }
+
+    GOLDEN_DATASET {
+        int id PK
+        text question
+        text expected_sql
+        json expected_result
+        varchar category
+        int is_active
+    }
+
+    QUERY_LOGS {
+        int id PK
+        varchar request_id
+        text question
+        text plan
+        text sql_query
+        json result
+        json trace
+        int latency_ms
+        varchar status
+    }
+
+    MART_PRICE_FACTS {
+        int id PK
+        int file_id FK
+        int sheet_id
+        varchar sheet_period
+        text item_name
+        text supplier
+        varchar price_type "среднерыночная|аукцион_старт|аукцион_победитель|поставщик"
+        float value
+        varchar currency
+        varchar unit
+        int is_blank "0|1"
+    }
+
+    MART_METRICS {
+        int id PK
+        int file_id FK
+        int sheet_id
+        varchar dimension_type
+        text dimension
+        varchar period
+        varchar metric_type
+        text metric
+        float value
+        varchar unit
+        int is_blank
+    }
+
+    MART_SUPPLIER_ALIASES {
+        int id PK
+        varchar canonical_name
+        varchar alias UK
+        int source_sheet_id
+    }
+
+    MART_SHEET_TEMPLATES {
+        int id PK
+        varchar fingerprint UK
+        json schema_json
+        varchar sheet_name_pattern
+        varchar status "confirmed|pending_confirmation"
+        float confidence
+    }
+```
+
+> Источник: [`diagrams/database_schema.mmd`](diagrams/database_schema.mmd).
 
 ---
 
@@ -419,7 +714,56 @@ golden-прогон — при наличии секретов `LLM_BASE_URL`, `
 | `test_normalizer_dimension.py` | нормализация измерений |
 | `test_classifier_domain.py` | классификатор доменов |
 | `test_parser_header_detection.py` | определение шапки Excel |
+| `test_price_sheet_*.py` | unit-тесты пайплайна первой таблицы (парсер/структуратор/нормализация) |
+| `test_sheet_kind_detector_domain.py` | детектор типа листа (prices/matrix/generic) |
 | `test_golden_dataset.py` | интеграционные golden-тесты (маркер `golden`) |
+| `tests/integration/` | интеграционные тесты с PostgreSQL (маркер `integration`) |
+
+### CI
+
+```mermaid
+flowchart TD
+    TRIGGER{{"push в main/master или pull_request"}} --> CI
+
+    subgraph CI ["ci.yml — CI (unit + integration)"]
+        U[unit<br/>pytest -m 'not golden and not integration'<br/>Ubuntu, Python 3.12, без БД]
+        I[integration<br/>pytest tests/integration -m integration<br/>service: postgres:16, TEST_POSTGRES_URL]
+    end
+
+    TRIGGER --> GOLD
+
+    U -. "needs" .-> I
+
+    subgraph GOLD ["golden.yml — LLM-регрессия"]
+        U2[unit-tests<br/>pytest -m 'not golden and not integration']
+        G[golden<br/>postgres service + миграции + demo-data]
+        G2[Отчёт по точности<br/>run_golden_report.py]
+    end
+
+    GOLD --> SEC{{secrets: LLM_BASE_URL, LLM_API_KEY, LLM_MODEL_PRIMARY}}
+    SEC -- отсутствуют --> GFALL[golden падает ожидаемо]
+
+    U2 --> G
+    G --> G2
+```
+
+> Источник: [`diagrams/ci_cd.mmd`](diagrams/ci_cd.mmd), [`diagrams/ci_cd_sequence.mmd`](diagrams/ci_cd_sequence.mmd).
+
+---
+
+## Диаграммы
+
+Полный набор Mermaid-диаграмм проекта лежит в [`diagrams/`](diagrams/README.md) (файлы `.mmd` —
+чистый Mermaid-код, `.md` — диаграммы с пояснениями):
+
+| Диаграмма | Файлы | Тип |
+|---|---|---|
+| Архитектура системы | [`architecture`](diagrams/architecture.md) | flowchart |
+| Пайплайн Excel-инжеста | [`excel_ingestion`](diagrams/excel_ingestion.md) | flowchart + sequence |
+| Граф LLM-агента | [`agent_pipeline`](diagrams/agent_pipeline.md) | flowchart |
+| Схема БД | [`database_schema`](diagrams/database_schema.md) | erDiagram |
+| CI (unit/integration/golden) | [`ci_cd`](diagrams/ci_cd.md) | flowchart + sequence |
+| Docker Compose | [`deployment`](diagrams/deployment.md) | flowchart |
 
 ---
 
@@ -436,6 +780,7 @@ golden-прогон — при наличии секретов `LLM_BASE_URL`, `
 ```
 ├── alembic/                  # миграции БД
 ├── data/                     # рабочие данные, bm25_index.pkl, примеры xlsx
+├── diagrams/                 # Mermaid-диаграммы (.mmd / .md)
 ├── docs/                     # примеры запросов
 ├── frontend/
 │   └── src/
