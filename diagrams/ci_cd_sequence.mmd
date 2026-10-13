@@ -3,7 +3,6 @@ sequenceDiagram
     participant UJ as Job "unit" (Ubuntu)
     participant IJ as Job "integration" (Ubuntu)
     participant PG as Service postgres:16
-    participant GJ as Job "golden" (Ubuntu)
 
     GH->>UJ: checkout + setup-python + pip install -e .
     UJ->>UJ: pytest -m "not golden and not integration"
@@ -12,6 +11,3 @@ sequenceDiagram
     IJ->>IJ: pytest tests/integration -m integration
     IJ->>PG: TEST_POSTGRES_URL → public+mart схемы
     Note over IJ,PG: интеграционные тесты создают и удаляют таблицы
-    GH->>GJ: golden (только при наличии LLM-секретов)
-    GJ->>PG: alembic upgrade + load_demo_data
-    GJ->>GJ: pytest -m golden tests/test_golden_dataset.py

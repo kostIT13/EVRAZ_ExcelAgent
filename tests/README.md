@@ -47,12 +47,9 @@ TEST_POSTGRES_URL=postgresql+asyncpg://evraz:evraz_secret@localhost:5432/evraz_t
 
 ## Golden-тесты
 
-Требуют живую LLM-модель и загруженные данные (см.
-[`.github/workflows/golden.yml`](../.github/workflows/golden.yml)).
+Требуют живую LLM-модель и загруженные данные. В CI не запускаются — только локально.
 
 ## CI
 
-- [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) — юнит-тесты и
-  интеграционные тесты с service-контейнером PostgreSQL (без LLM);
-- [`.github/workflows/golden.yml`](../.github/workflows/golden.yml) — golden-прогон
-  с LLM (требует секреты `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL_PRIMARY`).
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) — юнит-тесты и
+интеграционные тесты с service-контейнером PostgreSQL (без LLM).

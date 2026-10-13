@@ -6,18 +6,4 @@ flowchart TD
         I["integration<br/>pytest tests/integration -m integration<br/>service: postgres:16, TEST_POSTGRES_URL"]
     end
 
-    TRIGGER --> GOLD
-
     U -. "needs" .-> I
-
-    subgraph GOLDJOB ["golden.yml — LLM-регрессия"]
-        U2["unit-tests<br/>pytest -m 'not golden and not integration'"]
-        G["golden<br/>postgres service + миграции + demo-data"]
-        G2["Отчёт по точности<br/>run_golden_report.py"]
-    end
-
-    GOLD --> SEC{{"secrets: LLM_BASE_URL, LLM_API_KEY, LLM_MODEL_PRIMARY"}}
-    SEC -- "отсутствуют" --> GFALL["golden падает ожидаемо"]
-
-    U2 --> G
-    G --> G2

@@ -700,9 +700,8 @@ python scripts/run_golden_report.py --json out/golden_report.json  # отчёт 
 python scripts/seed_golden_db.py --drop         # загрузка эталонов в таблицу golden_dataset
 ```
 
-CI-прогон настроен в `.github/workflows/golden.yml`: юнит-тесты всегда,
-golden-прогон — при наличии секретов `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL_PRIMARY`.
-Запускайте в CI при каждом изменении промптов/схемы/нормализации.
+Golden-прогон в CI не запускается — только локально (см. раздел «Тесты»).
+В CI выполняются юнит-тесты и интеграционные тесты (`.github/workflows/ci.yml`).
 
 ---
 
@@ -730,21 +729,7 @@ flowchart TD
         I[integration<br/>pytest tests/integration -m integration<br/>service: postgres:16, TEST_POSTGRES_URL]
     end
 
-    TRIGGER --> GOLD
-
     U -. "needs" .-> I
-
-    subgraph GOLD ["golden.yml — LLM-регрессия"]
-        U2[unit-tests<br/>pytest -m 'not golden and not integration']
-        G[golden<br/>postgres service + миграции + demo-data]
-        G2[Отчёт по точности<br/>run_golden_report.py]
-    end
-
-    GOLD --> SEC{{secrets: LLM_BASE_URL, LLM_API_KEY, LLM_MODEL_PRIMARY}}
-    SEC -- отсутствуют --> GFALL[golden падает ожидаемо]
-
-    U2 --> G
-    G --> G2
 ```
 
 > Источник: [`diagrams/ci_cd.mmd`](diagrams/ci_cd.mmd), [`diagrams/ci_cd_sequence.mmd`](diagrams/ci_cd_sequence.mmd).

@@ -5,7 +5,7 @@ name: CI (unit + integration)
 #
 # Интеграционные тесты используют переменную TEST_POSTGRES_URL,
 # которая задаётся в job через service-контейнер postgres.
-# LLM-зависимые golden-тесты остаются в .github/workflows/golden.yml.
+# Golden-тесты (LLM) в CI не запускаются — только локально.
 
 on:
   push:
