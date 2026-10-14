@@ -38,7 +38,8 @@ def test_prices_has_item_and_price_columns():
 
 @pytest.mark.skipif(not FAKED_FILE.exists(), reason="нет файла данных")
 def test_faked_2_blok_parses_real_headers():
-    assert _header_rows_for(FAKED_FILE, "2 блок") == 11
+    # Schichta-парсер: шапка из 2 строк (R11-R12), титульный блок не входит.
+    assert _header_rows_for(FAKED_FILE, "2 блок") == 2
     cols = _sheet_columns(FAKED_FILE, "2 блок")
     names = {v for v in cols.values()}
     assert any("поставщик" in n for n in names), names
@@ -47,7 +48,8 @@ def test_faked_2_blok_parses_real_headers():
 
 @pytest.mark.skipif(not FAKED_FILE.exists(), reason="нет файла данных")
 def test_faked_3_blok_parses_real_headers():
-    assert _header_rows_for(FAKED_FILE, "3 блок") == 4
+    # Schichta-парсер: шапка из 2 строк (R4-R5), титульный блок не входит.
+    assert _header_rows_for(FAKED_FILE, "3 блок") == 2
     cols = _sheet_columns(FAKED_FILE, "3 блок")
     names = {v for v in cols.values()}
     assert any("поставщик" in n for n in names), names
