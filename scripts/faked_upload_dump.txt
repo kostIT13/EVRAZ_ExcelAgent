@@ -1,0 +1,61 @@
+upload: {"message": "File uploaded, processing started asynchronously", "file": {"id": 7, "filename": "tmpn0y76s7f.xlsx", "file_hash": "bd22ff84666624c0", "total_sheets": 3, "total_rows": 0, "total_cells": 0, "uploaded_at": "2026-10-13T15:44:34.947369Z", "processed_at": null, "status": "uploaded", "error_me
+file_id: 7
+attempt 0: status=processing
+attempt 1: status=processing
+attempt 2: status=processed
+final: {
+  "id": 7,
+  "filename": "tmpn0y76s7f.xlsx",
+  "file_hash": "bd22ff84666624c0",
+  "total_sheets": 3,
+  "total_rows": 0,
+  "total_cells": 0,
+  "uploaded_at": "2026-10-13T15:44:34.947369Z",
+  "processed_at": null,
+  "status": "processed",
+  "error_message": null,
+  "sheets": [
+    {
+      "id": 70,
+      "file_id": 7,
+      "sheet_index": 0,
+      "original_name": "2 блок",
+      "normalized_name": "2_блок",
+      "description": null,
+      "row_count": 65,
+      "col_count": 67,
+      "period": "unknown",
+      "sheet_kind": "matrix",
+      "sheet_kind_auto": true,
+      "created_at": "2026-10-13T16:25:07.816130Z"
+    },
+    {
+      "id": 71,
+      "file_id": 7,
+      "sheet_index": 1,
+      "original_name": "3 блок",
+      "normalized_name": "3_блок",
+      "description": null,
+      "row_count": 56,
+      "col_count": 146,
+      "period": "unknown",
+      "sheet_kind": "matrix",
+      "sheet_kind_auto": true,
+      "created_at": "2026-10-13T16:25:07.816130Z"
+    },
+    {
+      "id": 72,
+      "file_id": 7,
+      "sheet_index": 2,
+      "original_name": "Отклонения от БЮДЖЕТА и ПЛАНА",
+      "normalized_name": "отклонения_от_бюджета_и_плана",
+      "description": null,
+      "row_count": 55,
+      "col_count": 34,
+      "period": "unknown",
+      "sheet_kind": "matrix",
+      "sheet_kind_auto": true,
+      "created_at": "2026-10-13T16:25:07.816130Z"
+    }
+  ]
+}

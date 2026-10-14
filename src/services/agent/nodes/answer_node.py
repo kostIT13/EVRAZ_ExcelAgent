@@ -66,6 +66,28 @@ def _deterministic_answer(sql_result: list, is_concise: bool) -> str:
     )
 
 
+def _result_has_numbers(sql_result: list) -> bool:
+    """True, если в результате запроса есть хотя бы одно числовое значение.
+
+    Число в ответе критично для вопросов «какая цена/сумма/дельта» — если LLM
+    сгенерировал усечённый ответ без числа, его нельзя отдавать пользователю.
+    """
+    for row in sql_result or []:
+        if not isinstance(row, dict):
+            continue
+        for v in row.values():
+            if isinstance(v, bool):
+                continue
+            if isinstance(v, (int, float)):
+                return True
+    return False
+
+
+def _has_digit(text: str) -> bool:
+    """True, если в тексте есть хотя бы одна цифра."""
+    return any(ch.isdigit() for ch in (text or ""))
+
+
 async def answer_node(
     state: GraphState,
     llm: Optional[LLMClient] = None,
@@ -111,7 +133,7 @@ async def answer_node(
                     "на основе этих данных."
                 )
                 temperature = 0.2
-                max_tokens = 256
+                max_tokens = 512
 
             memory_ctx = build_memory_context(state.get("conversation_history", []))
             memory_section = (
@@ -141,7 +163,19 @@ SQL-запрос:
 
             min_len = 1 if is_concise else 10
             if generated and len(generated) > min_len:
-                answer = generated
+                # Страховка от усечённых ответов LLM: если в данных есть числовое
+                # значение (цена/сумма/дельта), а сгенерированный ответ потерял
+                # все цифры ("Минимальная среднерыночная цена на цинковый...") —
+                # отдаём детерминированный ответ, где число гарантированно есть.
+                if not is_concise and _result_has_numbers(sql_result) and not _has_digit(generated):
+                    logger.warning(
+                        "Answer Node [{}]: generated answer lost the numeric value, "
+                        "using deterministic fallback",
+                        request_id,
+                    )
+                    answer = deterministic
+                else:
+                    answer = generated
                 logger.info(
                     "Answer Node [{}]: natural answer generated ({} chars, mode={})",
                     request_id,

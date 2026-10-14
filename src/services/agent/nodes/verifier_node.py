@@ -40,6 +40,20 @@ VERIFIER_SYSTEM_PROMPT = """Ты — верификатор SQL-запросов
 - SQL должен использовать правильные имена таблиц и колонок
 - Не будь излишне строгим к синтаксису — сосредоточься на семантике
 
+ВАЖНО — НЕ считай перечисленное ниже ошибками и НЕ снижай из-за этого confidence:
+- Фильтр price_type = 'среднерыночная', когда вопрос спрашивает «цену» без явного
+  указания источника (среднерыночная/поставщик/аукцион). Среднерыночная — источник
+  цены по умолчанию.
+- Фильтр item_name ILIKE '%<металл>%' для поиска по названию лома — это стандартный
+  способ поиска, а не «слишком широкий» фильтр. Даже если в данных есть только один
+  вид лома с этим металлом (например, «Лом цинка» по запросу «цинковый лом») —
+  фильтр %цинк% корректен и НЕ является ошибкой.
+- Точное сравнение item_name = 'Лом цинка' (или другого вида) — тоже корректно.
+- Отсутствие GROUP BY, если вопрос подразумевает одно агрегированное значение.
+- Если SQL синтаксически корректен, использует правильную таблицу (mart.price_facts
+  для цен, mart.metrics для метрик) и вернул непустой результат — confidence должен
+  быть не ниже 0.7, а needs_retry=false.
+
 Верни ТОЛЬКО JSON без дополнительного текста.
 """
 
@@ -97,11 +111,17 @@ def _format_result_deterministically(sql_result: List[Dict[str, Any]], max_rows:
                 parts.append(f"поставщик: {val_str}")
             elif col_lower == "item_name_normalized" or col_lower == "item_name":
                 parts.append(f"материал: {val_str}")
-            elif "max" in col_lower and "price" in col_lower:
-                parts.append(f"макс. цена: {val_str} руб/тн")
-            elif "min" in col_lower and "price" in col_lower:
-                parts.append(f"мин. цена: {val_str} руб/тн")
-            elif "avg" in col_lower and "price" in col_lower:
+            elif ("max" in col_lower or "макс" in col_lower) and (
+                "price" in col_lower or "цена" in col_lower
+            ):
+                parts.append(f"максимальная цена: {val_str} руб/тн")
+            elif ("min" in col_lower or "мин" in col_lower) and (
+                "price" in col_lower or "цена" in col_lower
+            ):
+                parts.append(f"минимальная цена: {val_str} руб/тн")
+            elif ("avg" in col_lower or "средн" in col_lower) and (
+                "price" in col_lower or "цена" in col_lower
+            ):
                 parts.append(f"средняя цена: {val_str} руб/тн")
             elif col_lower == "price_value_diff" or "diff" in col_lower:
                 parts.append(f"изменение: {val_str} руб/тн")
@@ -276,6 +296,13 @@ SQL-запрос:
             confidence *= 0.8
         if "all_null_values" in sanity_issues:
             confidence *= 0.5
+
+        # Если SQL признан корректным и вернул непустые данные — не позволяем LLM
+        # «занизить» уверенность ниже порога self-correction (0.5). Иначе pipeline
+        # запускает второй полный прогон графа и запрос упирается в таймаут nginx
+        # (см. запрос «минимальная цена на цинковый лом», confidence=0.39).
+        if is_correct and sql_result and not state["needs_retry"]:
+            confidence = max(confidence, 0.7)
 
         state["confidence"] = max(0.0, min(1.0, confidence))
 

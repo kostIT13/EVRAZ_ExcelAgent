@@ -4,7 +4,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import delete, insert, select
 from loguru import logger
 from typing import Any, Dict, List, Optional
-from src.core.db.models import File, Sheet, ColumnMetadata, Cell, EntityDictionary, ExcelComment, PriceFact
+from src.core.db.models import (
+    File,
+    Sheet,
+    ColumnMetadata,
+    Cell,
+    EntityDictionary,
+    ExcelComment,
+    Metric,
+    PriceFact,
+)
 from src.core.excel.schemas import ParsedFile
 from src.core.excel.table_structurer import TableStructurer
 from src.core.excel.comment_extractor import ParsedComment
@@ -242,6 +251,16 @@ class SQLAlchemyExcelRepository(ExcelRepository):
                 items.append(pf.item_name)
             if pf.supplier:
                 suppliers.append(pf.supplier)
+
+        # Для шихтовочных листов поставщики/материалы лежат в mart.metrics.dimension.
+        metrics_result = await self.session.execute(
+            select(Metric.dimension)
+            .where(Metric.file_id == file_id)
+            .distinct()
+        )
+        for dim in metrics_result.scalars().all():
+            if dim and str(dim).strip().lower() not in ("сводная_строка", ""):
+                suppliers.append(str(dim).strip())
 
         # Fallback: если mart.price_facts пуст, берём item-колонку из cells.
         if not items:

@@ -3,10 +3,11 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from src.core.config import settings
 from src.core.logging_settings import logger
+from src.core.material_synonyms import MATERIAL_ADJECTIVE_TO_NOUN
 from src.services.agent.graph_state import Domain, GraphState, NODE_CODEGEN
 from src.services.agent.sql_compiler import compile_spec, validate_generated_sql
 from src.services.llm.llm_client import LLMClient
@@ -135,7 +136,9 @@ CODEGEN_SYSTEM_PROMPT = """Ты — генератор SQL-запросов дл
 2. Для вопросов о ценах используй mart.price_facts — единственная таблица
 3. Для фильтрации по названию лома используй ILIKE с item_name
 4. Для фильтрации по периоду используй sheet_period (формат: 'YYYY-MM')
-5. Для фильтрации по типу цены используй price_type
+5. Для фильтрации по типу цены используй price_type. Если вопрос спрашивает «цену»
+   без явного указания источника (среднерыночная/поставщик/аукцион) — используй
+   price_type = 'среднерыночная' (источник цены по умолчанию).
 6. Для фильтрации по поставщику используй supplier ILIKE '%текст%'
 7. Если нужна агрегация (AVG, SUM, MIN, MAX) — используй GROUP BY
 8. Если нужно сравнение между периодами — используй подзапросы или JOIN mart.price_facts
@@ -196,17 +199,29 @@ METRICS_CODEGEN_SYSTEM_PROMPT = """Ты — генератор SQL-запрос�
   с короткой маской (например '%расход%', '%силос%', '%остаток%').
 - value: DOUBLE PRECISION — числовое значение метрики
 - unit: TEXT — единица измерения
-- is_blank: BOOL — пустая ячейка (исключай из агрегаций)
+- is_blank: INTEGER (0/1) — 1 если ячейка пустая (исключай из агрегаций,
+  сравнивай с 0/1, а не с TRUE/FALSE)
 
 ПРАВИЛА:
 1. Только SELECT запросы (read-only), схема mart.metrics
 2. Поставщик/материал фильтруй по dimension ILIKE '%текст%'
-3. Нужную меру фильтруй по metric ILIKE '%ключ%' (расход -> '%расход%силос%' или '%расход%')
+3. Нужную меру фильтруй по metric ILIKE '%ключ%' (расход -> '%расход%силос%' или '%силос%')
 4. Агрегации (SUM/AVG/MIN/MAX) применяй к value; при суммировании добавляй
    AND m.value IS NOT NULL
 5. При необходимости фильтруй по листу через sheet_id из схемы или по period
 6. Не выдумывай значения dimension — используй сущности из вопроса
 7. Используй понятные алиасы для колонок
+
+ВАРИАНТЫ ИМЁН МЕТРИК (реальные колонки шихтовочных листов):
+- расход из силосов: 'силосов_т' (2 блок), 'расход_из_силосов_т' (3 блок) — ищи '%силос%'
+- расход в сутки: 'расход_в_сутки_т' — ищи '%расход%сутки%'
+- план/факт доли: 'состав_шихты_на_май_%_утв_план', 'состав_шихты_на_май_%_факт_средн_за_период' — ищи '%утв_план%' / '%факт%'
+- стоимость: 'стоимость' — ищи '%стоимость%'
+- запас угля: 'запас_угля_сут' — ищи '%запас%'
+- влага/зола: 'влага_wr_%', 'зола_ad_%' — ищи '%влага%' / '%зола%'
+- лист «Отклонения от БЮДЖЕТА и ПЛАНА»: метрики вида '2_блок_факт', '2_блок_утв_план',
+  '3_блок_факт', 'отклонение_факт', 'отклонение_утв_план' — ищи '%2_блок%факт%',
+  '%3_блок%факт%', '%отклонение%'. Сводные строки имеют dimension='сводная_строка'.
 
 ПРИМЕРЫ ЗАПРОСОВ (few-shot):
 {few_shot_examples}
@@ -301,6 +316,60 @@ def _refine_all_kinds_filter(question: str, sql: str) -> str:
     return sql[: m.start()] + f"item_name ILIKE '{prefix}%'" + sql[m.end():]
 
 
+def _find_exact_item_candidate(
+    entity_candidates: List[Dict[str, Any]],
+    noun_root: str,
+) -> Optional[str]:
+    """Ищет кандидата item_name вида «Лом <металла>» по корню металла.
+
+    Например, для «цинк» вернёт «Лом цинка» из entity_candidates.
+    Предпочитает самое короткое/точное значение (без лишних слов в названии).
+    """
+    best: Optional[str] = None
+    for c in entity_candidates or []:
+        if c.get("entity_type") != "item":
+            continue
+        val = str(c.get("entity_value", "")).strip()
+        if not val:
+            continue
+        low = val.lower()
+        if noun_root in low and low.startswith("лом"):
+            if best is None or len(val) < len(best):
+                best = val
+    return best
+
+
+def _refine_material_adjective_filter(
+    question: str,
+    sql: str,
+    entity_candidates: List[Dict[str, Any]],
+) -> str:
+    """Заменяет широкий item_name ILIKE '%<металл>%' на точное значение
+    'Лом <металла>' из entity_candidates, когда вопрос использует прилагательное
+    материала («цинковый лом» -> item_name = 'Лом цинка').
+
+    Без этого агент не понимает, что «цинковый лом» == «лом цинка», и генерирует
+    слишком широкий фильтр %цинк%, который верификатор помечает как ошибку
+    (низкая уверенность -> self-correction -> таймаут).
+    """
+    q = (question or "").lower()
+    for adj, noun in MATERIAL_ADJECTIVE_TO_NOUN.items():
+        if adj not in q:
+            continue
+        exact = _find_exact_item_candidate(entity_candidates, noun)
+        if not exact:
+            continue
+        # item_name ILIKE '%<root>%' (с префиксом таблицы 'fp.' или без)
+        pattern = re.compile(
+            r"(?i)([\w.]*)item_name\s+ILIKE\s+'%[^']*"
+            + re.escape(noun)
+            + r"[^']*%'"
+        )
+        if pattern.search(sql):
+            return pattern.sub(lambda m: f"{m.group(1)}item_name = '{exact}'", sql)
+    return sql
+
+
 def _refine_supplier_in_filter(sql: str) -> str:
     """Заменяет <prefix>supplier IN ('a','b',...) на группу OR
     <prefix>supplier ILIKE '%a%', убирая дефисы/пробелы, чтобы перекрыть
@@ -347,6 +416,34 @@ def _refine_supplier_ilike_any(sql: str) -> str:
         return m.group(1) + ", ".join(cleaned) + m.group(3)
 
     return pattern.sub(_repl, sql)
+
+
+def _normalize_is_blank_filters(sql: str) -> str:
+    """Заменяет булевы литералы в фильтрах is_blank на целые (0/1).
+
+    Колонка is_blank хранится как INTEGER (0/1), а модель часто генерирует
+    is_blank = FALSE / COALESCE(is_blank, FALSE) = FALSE, что падает с
+    'operator does not exist: integer = boolean'.
+    """
+    # COALESCE(x.is_blank, FALSE) = FALSE  ->  x.is_blank = 0
+    sql = re.sub(
+        r"(?i)COALESCE\(\s*([\w.]+\.)?is_blank\s*,\s*(?:FALSE|TRUE)\s*\)\s*=\s*(FALSE|TRUE)",
+        lambda m: f"{m.group(1) or ''}is_blank = {0 if m.group(2).upper() == 'FALSE' else 1}",
+        sql,
+    )
+    # is_blank = FALSE / is_blank = TRUE (с префиксом или без)
+    sql = re.sub(
+        r"(?i)([\w.]+\.)?is_blank\s*=\s*(FALSE|TRUE)\b",
+        lambda m: f"{m.group(1) or ''}is_blank = {0 if m.group(2).upper() == 'FALSE' else 1}",
+        sql,
+    )
+    # is_blank IS FALSE / IS TRUE
+    sql = re.sub(
+        r"(?i)([\w.]+\.)?is_blank\s+IS\s+(FALSE|TRUE)\b",
+        lambda m: f"{m.group(1) or ''}is_blank = {0 if m.group(2).upper() == 'FALSE' else 1}",
+        sql,
+    )
+    return sql
 
 
 def _build_metrics_user_message(
@@ -473,6 +570,11 @@ async def codegen_node(
 Для поиска по названию лома используй ILIKE с item_name.
 Для поиска по поставщику используй supplier ILIKE (если price_type = 'поставщик').
 
+ИСТОЧНИК ЦЕНЫ ПО УМОЛЧАНИЮ: если вопрос спрашивает «цену» без явного указания
+источника (среднерыночная/поставщик/аукцион) — добавляй условие
+price_type = 'среднерыночная'. Это важно: без него MIN/MAX/AVG захватят цены
+поставщиков и аукционов и дадут неверный ответ.
+
 КРИТИЧЕСКОЕ ПРАВИЛО РАЗЛИЧЕНИЯ ВИДОВ ЛОМА:
 - item_name — ЭТО ТОЧНОЕ название конкретного вида лома (например, "Лом меди кусок",
   "Лом меди трубка с оребрением медь 87,2%", "Лом алюминия (блоки УБРС)" — это
@@ -489,6 +591,17 @@ async def codegen_node(
 - ILIKE '%...%' применяй ТОЛЬКО если пользователь явно просит "все виды"/"любой"/обобщение.
 - НЕ выдумывай название вида, которого нет в entity_candidates — если его нет, значит
   такого вида в данных нет, и его не нужно включать в запрос.
+
+СИНОНИМЫ МАТЕРИАЛОВ (прилагательное == родительный падеж):
+- «цинковый лом» == «Лом цинка», «медный лом» == «Лом меди»,
+  «алюминиевый лом» == «Лом алюминия», «латунный лом» == «Лом латуни»,
+  «бронзовый лом» == «Лом бронзы», «никелевый лом» == «Лом никеля»,
+  «свинцовый лом» == «Лом свинца», «баббитовый лом» == «Лом баббита».
+- Если в вопросе прилагательное материала («цинковый», «медный», «алюминиевый»),
+  ищи в entity_candidates ТОЧНОЕ значение item_name вида «Лом <металла>»
+  (например, «Лом цинка») и используй его: WHERE fp.item_name = 'Лом цинка'.
+- НЕ используй широкую подстроку вида item_name ILIKE '%цинк%' для единичного
+  вида лома — она считается слишком широкой и верификатор помечает её как ошибку.
 
 КРИТИЧЕСКОЕ ПРАВИЛО ДЛЯ "ВСЕХ ВИДОВ" МЕТАЛЛА:
 Когда пользователь просит "все виды <металла>" (например, "все виды меди",
@@ -605,6 +718,17 @@ item_name в родительном падеже: item_name ILIKE 'Лом <ме�
                 request_id,
             )
 
+        # Детерминированная правка: «цинковый лом» -> item_name = 'Лом цинка'.
+        # Заменяет широкий %цинк% на точное значение из entity_candidates, чтобы
+        # агент понимал, что «цинковый лом» == «лом цинка».
+        refined_adj = _refine_material_adjective_filter(question, sql, entity_candidates)
+        if refined_adj != sql:
+            sql = refined_adj
+            logger.info(
+                "CodeGen Node [{}]: refined material adjective filter to exact item_name",
+                request_id,
+            )
+
         # Детерминированная правка: supplier IN (...) -> OR supplier ILIKE '%x%'
         # (нормализуем дефисы/пробелы в названиях поставщиков).
         refined_suppliers = _refine_supplier_in_filter(sql)
@@ -621,6 +745,15 @@ item_name в родительном падеже: item_name ILIKE 'Лом <ме�
             sql = refined_any
             logger.info(
                 "CodeGen Node [{}]: normalized supplier ILIKE ANY(ARRAY[...]) values",
+                request_id,
+            )
+
+        # Булевы литералы is_blank = FALSE/TRUE -> целые 0/1 (колонка INTEGER).
+        refined_blank = _normalize_is_blank_filters(sql)
+        if refined_blank != sql:
+            sql = refined_blank
+            logger.info(
+                "CodeGen Node [{}]: normalized is_blank boolean literals to 0/1",
                 request_id,
             )
 

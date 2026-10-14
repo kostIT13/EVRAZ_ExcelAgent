@@ -34,6 +34,18 @@ class ExcelParser:
 
             self._unmerge_cells(ws)
 
+            # Шихтовочные листы (план/факт/отклонения по углю и шихте) имеют
+            # титульный блок и многоуровневую шапку — разбираем их отдельным
+            # парсером, чтобы не ломать общий путь для ценовых листов.
+            from src.core.excel.schichta_parser import is_schichta_sheet, parse_schichta_sheet
+            if is_schichta_sheet(sheet_name):
+                sheets.append(parse_schichta_sheet(
+                    ws,
+                    sheet_name,
+                    self.workbook.sheetnames.index(sheet_name),
+                ))
+                continue
+
             header_rows = self._header_rows or self._detect_header_rows(ws)
             logger.debug("Sheet '{}': detected {} header rows", sheet_name, header_rows)
 

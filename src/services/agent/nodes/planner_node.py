@@ -150,7 +150,7 @@ def _default_columns(table: str) -> List[Dict[str, str]]:
             {"name": "metric_type", "type": "TEXT", "description": "план / факт / отклонение / percent"},
             {"name": "metric", "type": "TEXT", "description": "наименование метрики"},
             {"name": "value", "type": "FLOAT", "description": "значение метрики"},
-            {"name": "is_blank", "type": "BOOL", "description": "пустая ячейка (не считать в средних)"},
+            {"name": "is_blank", "type": "INTEGER", "description": "0/1 — пустая ячейка (не считать в средних)"},
         ]
     return [
         {"name": "sheet_period", "type": "TEXT", "description": "период (например, '2025-11')"},
@@ -158,7 +158,7 @@ def _default_columns(table: str) -> List[Dict[str, str]]:
         {"name": "supplier", "type": "TEXT", "description": "поставщик или None"},
         {"name": "price_type", "type": "TEXT", "description": "среднерыночная / аукцион_старт / аукцион_победитель / поставщик"},
         {"name": "value", "type": "FLOAT", "description": "значение цены в руб/тн"},
-        {"name": "is_blank", "type": "BOOL", "description": "пустая ячейка (не считать в средних)"},
+        {"name": "is_blank", "type": "INTEGER", "description": "0/1 — пустая ячейка (не считать в средних)"},
     ]
 
 

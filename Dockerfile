@@ -11,11 +11,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN pip install uv
 
 COPY pyproject.toml ./
+COPY src/ ./src/
 
 RUN uv pip install --system --no-cache-dir \
     -e .
 
-COPY src/ ./src/
 COPY alembic/ ./alembic/
 COPY alembic.ini ./
 
