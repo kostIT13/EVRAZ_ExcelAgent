@@ -342,7 +342,6 @@ def build_parser(description: str, default_json: str) -> argparse.ArgumentParser
 
 
 if __name__ == "__main__":
-    # Быстрая самопроверка парсинга и извлечения чисел
     items = parse_questions(DEFAULT_SOURCE)
     print(f"Распарсено вопросов: {len(items)}")
     for it in items:
