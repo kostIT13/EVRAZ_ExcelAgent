@@ -1,4 +1,3 @@
-"""Временный скрипт: проверка нормализации is_blank."""
 import sys
 from pathlib import Path
 

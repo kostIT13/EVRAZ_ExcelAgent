@@ -1,24 +1,4 @@
-"""
-Прогон golden-датасета через LangGraph-агента и отчёт по качеству.
-
-Скрипт даёт живую метрику точности (pass rate) для презентации:
-каждый вопрос из tests/golden_questions.json прогоняется через агента,
-проверяется статус ответа, соответствие SQL-сигнатуре (expected_sql_hint)
-и типу результата (expected_result_type).
-
-Использование:
-    python scripts/run_golden_report.py                 # полный прогон
-    python scripts/run_golden_report.py --limit 5       # только первые N вопросов
-    python scripts/run_golden_report.py --json out/golden_report.json
-    python scripts/run_golden_report.py --top-k 30      # больше релевантных листов
-
-Требования:
-  - запущенная PostgreSQL со схемой (alembic upgrade head);
-  - данные загружены (python scripts/load_demo_data.py);
-  - LLM_* переменные окружения настроены в .env.
-"""
 from __future__ import annotations
-
 import argparse
 import asyncio
 import json

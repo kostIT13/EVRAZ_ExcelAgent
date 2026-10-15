@@ -1,9 +1,3 @@
-"""Проверка фикса: «цинковый лом» == «Лом цинка».
-
-Проверяет:
-1. Расширение слов вопроса синонимами материалов (entity_resolver).
-2. Детерминированную правку codegen: item_name ILIKE '%цинк%' -> item_name = 'Лом цинка'.
-"""
 import asyncio
 import sys
 from pathlib import Path
@@ -19,7 +13,6 @@ from src.services.agent.nodes.codegen_node import (
 
 QUESTION = "Какова была минимальная цена на цинковый лом за все месяцы?"
 
-# Кандидаты, как их вернёт entity_resolver (после фикса «Лом цинка» — первый).
 CANDIDATES = [
     {"entity_type": "item", "entity_value": "Лом цинка", "score": 1.0303, "method": "trigram"},
     {"entity_type": "item", "entity_value": "Лом Р18", "score": 0.5, "method": "trigram"},

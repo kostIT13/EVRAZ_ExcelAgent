@@ -1,7 +1,5 @@
 import asyncio
-
 from sqlalchemy import text
-
 from src.core.db.database import async_session_maker
 
 

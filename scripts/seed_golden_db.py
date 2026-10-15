@@ -1,22 +1,4 @@
-"""
-Загрузка tests/golden_questions.json в таблицу golden_dataset.
-
-Полезно, когда нужно хранить эталонные вопросы в БД (для оценки через API
-или отчётов админа) — сервис GoldenDatasetService уже существует, а вот
-наполнителя таблицы в репозитории не было.
-
-Использование:
-    python scripts/seed_golden_db.py            # дозапись вопросов
-    python scripts/seed_golden_db.py --drop     # очистить таблицу перед загрузкой
-    python scripts/seed_golden_db.py --dry-run  # показать, что будет загружено
-
-Требования:
-  - PostgreSQL запущена, применены миграции (alembic upgrade head),
-    таблица golden_dataset существует;
-  - POSTGRES_* / POSTGRES_URL настроены в .env.
-"""
 from __future__ import annotations
-
 import argparse
 import asyncio
 import json

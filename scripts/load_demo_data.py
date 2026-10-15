@@ -1,21 +1,4 @@
-"""
-Загрузка демо-данных (data/*.xlsx) в БД для прогона golden-датасета.
-
-Использование:
-    python scripts/load_demo_data.py                # все файлы из data/
-    python scripts/load_demo_data.py --file data/data_proportional_prices.xlsx
-    python scripts/load_demo_data.py --check-mart   # дополнительно проверить витрину
-
-Требования:
-  - PostgreSQL запущена и схема применена (alembic upgrade head);
-  - POSTGRES_* / POSTGRES_URL настроены в .env.
-
-Скрипт использует тот же путь обработки, что и прод-очередь
-(ExcelIngestionService.process_file), поэтому данные попадают в RAW-таблицы
-и витрину mart ровно так же, как при загрузке через веб-интерфейс.
-"""
 from __future__ import annotations
-
 import argparse
 import asyncio
 import sys

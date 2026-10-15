@@ -1,4 +1,3 @@
-"""Временный скрипт: инжест Faked-файла и проверка mart.metrics."""
 import asyncio
 import sys
 from pathlib import Path

@@ -1,4 +1,3 @@
-"""Временный скрипт: дамп структуры Faked_List_proportional (2).xlsx."""
 import openpyxl
 
 PATH = "data/Faked_List_proportional (2).xlsx"

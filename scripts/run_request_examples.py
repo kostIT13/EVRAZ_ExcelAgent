@@ -1,4 +1,3 @@
-"""Прогон примеров запросов из docs/request_examples.txt через API агента."""
 import json
 import re
 import sys

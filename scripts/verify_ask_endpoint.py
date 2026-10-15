@@ -1,4 +1,3 @@
-"""Проверка /ask эндпоинта: «Какова была минимальная цена на цинковый лом за все месяцы?»"""
 import json
 import sys
 import urllib.request

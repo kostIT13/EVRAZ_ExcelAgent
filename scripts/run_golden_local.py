@@ -1,19 +1,4 @@
-"""
-Запуск golden-прогона с хоста разработчика без правки .env.
-
-Проблема: в .env (для docker compose) хост БД указан как 'postgres'.
-С хоста Windows это имя не резолвится — нужен 'localhost'.
-Этот скрипт читает .env, заменяет docker-имя на localhost ТОЛЬКО
-в переменных окружения запускаемого процесса и выполняет
-run_golden_report.py. Файл .env и docker-стек не затрагиваются.
-
-Использование:
-    python scripts/run_golden_local.py                        # полный прогон
-    python scripts/run_golden_local.py --limit 5              # первые 5 вопросов
-    python scripts/run_golden_local.py --json out/report.json # сохранить отчёт
-"""
 from __future__ import annotations
-
 import os
 import re
 import subprocess

@@ -11,9 +11,6 @@ logger.add(
            "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - {message}",
     level=settings.LOG_LEVEL,
 )
-# Файловый лог — опционально: в свежем checkout (CI) директории logs/ может
-# не существовать (git не хранит пустые директории), поэтому создаём её
-# и при ошибке (нет прав и т.п.) продолжаем писать только в stderr.
 
 try:
     Path("logs").mkdir(parents=True, exist_ok=True)

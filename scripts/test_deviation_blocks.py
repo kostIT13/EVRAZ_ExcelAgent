@@ -1,4 +1,3 @@
-"""Временный скрипт: отладка блоков листа отклонений."""
 import sys
 from pathlib import Path
 

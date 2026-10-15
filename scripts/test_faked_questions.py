@@ -1,4 +1,3 @@
-"""Временный скрипт: прогон вопросов из request_examples_2.txt через API."""
 import json
 import time
 import urllib.request

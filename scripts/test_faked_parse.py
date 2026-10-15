@@ -1,4 +1,3 @@
-"""Временный скрипт: проверка парсинга Faked-файла текущим ExcelParser."""
 import sys
 from pathlib import Path
 

@@ -1,4 +1,3 @@
-"""Временный скрипт: загрузка Faked-файла через API и проверка статуса."""
 import json
 import time
 import urllib.request

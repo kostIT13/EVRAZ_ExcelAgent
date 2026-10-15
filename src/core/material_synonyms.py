@@ -1,26 +1,6 @@
-"""Синонимы материалов для поиска лома.
-
-Помогает агенту понимать, что «цинковый лом» == «лом цинка»,
-«медный лом» == «лом меди», «алюминиевый лом» == «лом алюминия»
-(прилагательное + лом == лом + родительный падеж существительного).
-
-Используется в:
-- entity_resolver (расширение слов вопроса синонимами для pg_trgm-поиска);
-- codegen_node (детерминированная правка широкого ILIKE-фильтра на точное
-  значение item_name из entity_candidates).
-
-Модуль намеренно размещён в src.core (а не src.services.agent), чтобы не
-провоцировать циклический импорт: src.services.agent.__init__ тянет graph ->
-entity_resolution_node -> entity_resolver, а entity_resolver импортирует этот
-модуль.
-"""
-
 from __future__ import annotations
-
 from typing import Optional
 
-# Прилагательное (корень) -> корень существительного.
-# «цинковый» -> «цинк», «медный» -> «медь», «алюминиевый» -> «алюминий».
 MATERIAL_ADJECTIVE_TO_NOUN: dict[str, str] = {
     "цинков": "цинк",
     "медн": "медь",
@@ -44,7 +24,6 @@ MATERIAL_ADJECTIVE_TO_NOUN: dict[str, str] = {
     "магниев": "магний",
 }
 
-# Корень существительного -> родительный падеж (для префикса «Лом <металла>»).
 MATERIAL_NOUN_TO_GENITIVE: dict[str, str] = {
     "медь": "меди",
     "алюминий": "алюминия",
@@ -69,11 +48,6 @@ MATERIAL_NOUN_TO_GENITIVE: dict[str, str] = {
 
 
 def material_noun_from_adjective(word: str) -> Optional[str]:
-    """Возвращает корень существительного для прилагательного материала.
-
-    «цинковый» -> «цинк», «медный» -> «медь», «алюминиевый» -> «алюминий».
-    Возвращает None, если слово не является прилагательным материала.
-    """
     w = (word or "").lower()
     for adj, noun in MATERIAL_ADJECTIVE_TO_NOUN.items():
         if adj in w:
@@ -82,5 +56,4 @@ def material_noun_from_adjective(word: str) -> Optional[str]:
 
 
 def genitive_for_material(noun_root: str) -> Optional[str]:
-    """Родительный падеж для корня существительного («цинк» -> «цинка»)."""
     return MATERIAL_NOUN_TO_GENITIVE.get((noun_root or "").lower())
