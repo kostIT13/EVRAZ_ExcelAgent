@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>EVRAZ Agent — предпросмотр слайдов</title>
+<style>
+  body { background:#111; color:#eee; font-family: Arial, sans-serif; margin:0; padding:20px; }
+  h1 { text-align:center; color:#FF5A36; }
+  .grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); gap:20px; }
+  .card { background:#1B1F24; border:1px solid #3D4A57; border-radius:8px; padding:10px; }
+  .card h3 { margin:0 0 8px 0; font-size:14px; color:#8A97A6; }
+  .card img { width:100%; border-radius:4px; display:block; }
+</style>
+</head>
+<body>
+<h1>EVRAZ Agent — предпросмотр (41 слайд)</h1>
+<div class="grid">
+  <script>
+    for (let i = 1; i <= 41; i++) {
+      const n = String(i).padStart(2, '0');
+      document.write(`<div class="card"><h3>Слайд ${i}</h3><img src="slide_${n}.png" alt="slide ${i}"></div>`);
+    }
+  </script>
+</div>
+</body>
+</html>

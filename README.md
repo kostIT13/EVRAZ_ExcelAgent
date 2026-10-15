@@ -2,16 +2,20 @@
 
 **AI-агент для интеллектуальной работы с Excel-файлами металлургической компании ЕВРАЗ.**
 
+![Python](https://img.shields.io/badge/Python-3.12-blue) ![FastAPI](https://img.shields.io/badge/FastAPI-0.139-green) ![React](https://img.shields.io/badge/React-18-61dafb) ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-336791) ![Docker](https://img.shields.io/badge/Docker-Compose-2496ed) ![Version](https://img.shields.io/badge/version-0.2.0-lightgrey)
+
 Система позволяет загружать Excel-файлы с ценами на металлы, автоматически парсить и нормализовать их
 в факт-таблицы витрины данных (`mart.price_facts`, `mart.metrics`) и отвечать на вопросы пользователя
 на естественном языке через LangGraph-агент с безопасной генерацией и выполнением SQL в PostgreSQL.
 
-
 Проект спроектирован как prod-ready: асинхронный ingestion файлов, entity-resolution по справочникам,
-read-only генерация SQL, наблюдаемость (Prometheus/Grafana), auth и rate limiting, golden-датасет для
-регрессионного тестирования.
+read-only генерация SQL, диалоговая память и уточняющие вопросы, построение графиков, наблюдаемость
+(Prometheus/Grafana), auth и rate limiting, golden-датасет для регрессионного тестирования.
 
-> Подробный технический обзор — см. [`PROJECT.md`](PROJECT.md).
+> **Документация проекта:**
+> - [`PROJECT.md`](PROJECT.md) — подробное техническое описание;
+> - [`INSTRUCTIONS.md`](INSTRUCTIONS.md) — инструкция по запуску (Docker / локально);
+> - [`docs/PRESENTATION.md`](docs/PRESENTATION.md) — презентация проекта.
 
 ---
 
@@ -26,6 +30,7 @@ read-only генерация SQL, наблюдаемость (Prometheus/Grafana
 - [Поток обработки файла](#поток-обработки-файла)
 - [LLM-клиент и устойчивость](#llm-клиент-и-устойчивость)
 - [Агент (LangGraph)](#агент-langgraph)
+- [Диалоги, уточнения и графики](#диалоги-уточнения-и-графики)
 - [Безопасность SQL](#безопасность-sql)
 - [База данных](#база-данных)
 - [Entity Resolution](#entity-resolution)
@@ -33,28 +38,38 @@ read-only генерация SQL, наблюдаемость (Prometheus/Grafana
 - [Auth и rate limiting](#auth-и-rate-limiting)
 - [Schema Inference](#schema-inference)
 - [Golden dataset](#golden-dataset)
+- [Бенчмарк](#бенчмарк)
 - [Тесты](#тесты)
 - [Диаграммы](#диаграммы)
 - [Секреты](#секреты)
 - [Структура проекта](#структура-проекта)
-- [Известные особенности](#известные-особенности)
+- [Документация](#документация)
 - [Лицензия](#лицензия)
 
 ---
 
 ## Возможности
 
-- **Загрузка Excel** (`.xlsx`) с асинхронной фоновой обработкой и опросом статуса.
+- **Загрузка Excel** (`.xlsx` / `.xls`, до 50 МБ) с асинхронной фоновой обработкой и опросом статуса.
 - **Нормализация в витрину** `mart.price_facts` (цены лома) и `mart.metrics` (производственные метрики),
   идемпотентная — повторная заливка файла не дублирует факты.
-- **LangGraph-агент**: Classifier → Disambiguation → Planner → CodeGen → Executor → Verifier → Answer.
-- **Безопасная генерация SQL**: whitelist таблиц/колонок, keyword-blacklist, баланс скобок и кавычек.
-- **Entity-resolution** по справочникам (item_name / supplier / sheet_period) с fuzzy-поиском.
+- **LangGraph-агент**: Classifier → Disambiguation → Planner → CodeGen → Executor → Verifier → Answer,
+  с чекпоинтами в PostgreSQL и ретраями на каждом узле.
+- **Безопасная генерация SQL**: whitelist таблиц/колонок, keyword-blacklist, баланс скобок и кавычек,
+  read-only выполнение с `statement_timeout`.
+- **Entity-resolution** по справочникам (item_name / supplier / sheet_period) с fuzzy-поиском (rapidfuzz + pg_trgm).
+- **Диалоговая память** — `conversation_id` / `thread_id` сохраняют контекст между вопросами.
+- **Уточняющие вопросы** — при неоднозначности граф приостанавливается (`waiting_for_input`),
+  пользователь отвечает через `POST /ask/resume`.
+- **Графики** — ответ-временной ряд сразу содержит `chart_data`; кнопка «Сделай график» строит
+  timeseries через `POST /ask/chart` без повторного вызова LLM.
+- **Режимы ответа** — `detailed` (полный) и `concise` (только число/слово).
 - **Кэш запросов** (`query_cache`): нормализованный вопрос → SQL → результат.
 - **Schema Inference** (LLM) + Template Fingerprint для разнородных форматов таблиц.
 - **API-key auth** + **rate limiting** (slowapi).
-- **Prometheus-метрики** `/metrics` и расширенный журнал `query_logs` (трейсы узлов графа).
-- **Golden dataset** (pytest, marker `golden`) для регрессионного тестирования качества.
+- **Prometheus-метрики** `/metrics` + JSON-сводка `/metrics/summary` (токены и стоимость LLM),
+  расширенный журнал `query_logs` (трейсы узлов графа).
+- **Golden dataset** (pytest, marker `golden`) и **бенчмарк** запросов для контроля качества.
 
 ---
 
@@ -75,7 +90,7 @@ flowchart TD
         ING[Excel: парсер → repository → mart-normalizer]
         QUEUE["Ingestion Queue (async worker)"]
         AGENT[LangGraph агент: classifier → ... → answer]
-        ENT[Entity Resolution: rapidfuzz + BM25]
+        ENT[Entity Resolution: rapidfuzz + pg_trgm + BM25]
         LLM_CLI[LLMClient: OpenAI-совместимый API]
         CACHE[/Query Cache/]
         METRICS[/Prometheus /metrics/]
@@ -160,11 +175,11 @@ flowchart TD
 
 | Сервис | Порт | Назначение |
 |---|---|---|
-| `postgres` | 5432 | PostgreSQL 16 |
+| `postgres` | 5432 | PostgreSQL 16 (+ `pg_trgm`) |
 | `service` (backend) | 8000 | FastAPI-приложение |
 | `frontend` | 8080/80 | React (Nginx) |
 | `prometheus` | 9090 | сбор метрик |
-| `grafana` | 3001 | дашборды |
+| `grafana` | 3001 | дашборды (admin/admin) |
 
 ---
 
@@ -187,6 +202,9 @@ docker compose exec service alembic upgrade head
 После запуска загрузите Excel-файл через страницу **«Файлы»** — система распарсит и нормализует его,
 после чего можно задавать вопросы в **«Чате»**.
 
+> Подробная инструкция по запуску (Docker Compose, локальная разработка, миграции, устранение
+> неполадок) — в [`INSTRUCTIONS.md`](INSTRUCTIONS.md).
+
 ---
 
 ## Конфигурация
@@ -207,10 +225,12 @@ docker compose exec service alembic upgrade head
 | `POSTGRES_HOST/PORT/DB/USER/PASSWORD` | параметры подключения | — |
 | `DB_STATEMENT_TIMEOUT_MS` | statement_timeout для SQL | `30000` |
 | `TRIGRAM_THRESHOLD` | порог fuzzy-совпадения сущностей | `0.25` |
-| `API_KEY` | ключ для `/files/*`, `/ask/*` (пусто = dev без auth) | `` |
+| `API_KEY` | ключ для `/files/*`, `/ask/*`, `/cache/*` (пусто = dev без auth) | `` |
 | `RATE_LIMIT_ASK` | лимит вопросов | `30/minute` |
 | `RATE_LIMIT_UPLOAD` | лимит загрузок | `10/minute` |
+| `RATE_LIMIT_CACHE_CLEAR` | лимит очистки кэша | `10/minute` |
 | `INGESTION_QUEUE_MODE` | режим очереди ingestion | `inproc` |
+| `INGESTION_STATUS_MAX_AGE_DAYS` | срок хранения статусов ingestion | `7` |
 | `LOG_LEVEL` / `DEBUG` | логирование | `INFO` / `false` |
 
 ---
@@ -223,15 +243,28 @@ docker compose exec service alembic upgrade head
 
 - `POST /files/upload` — загрузка файла (асинхронно, возвращает `file_id`).
 - `GET /files/{id}/status` — опрос статуса обработки.
-- `GET /files` — список файлов.
+- `GET /files` — список файлов (пагинация `skip`/`limit`, фильтр `status`).
 - `GET /files/{id}` — детали файла.
-- `GET /files/{id}/sheets`, `/columns`, `/cells` — просмотр raw-структуры.
+- `DELETE /files/{id}` — удаление файла.
+- `GET /files/{id}/sheets` — список листов.
+- `GET /files/{id}/sheets/{sheet_id}` — детали листа (с колонками).
+- `GET /files/{id}/sheets/{sheet_id}/columns` — колонки листа.
+- `GET /files/{id}/sheets/{sheet_id}/cells` — ячейки листа (пагинация `skip`/`limit`).
 - `POST /files/{id}/sheets/{sheet_id}/infer-schema` — Schema Inference (LLM).
 - `POST /files/{id}/sheets/{sheet_id}/confirm-schema` — подтверждение схемы.
 
 ### Agent (`/ask/*`)
 
-- `POST /ask` — вопрос к агенту. Тело: `{ "question": "...", "top_k": 10, "mode": "agent|auto", "retry": false }`.
+- `POST /ask` — вопрос к агенту.
+  Тело: `{ "question", "top_k": 10, "mode": "auto|rag|agent", "response_mode": "detailed|concise",
+  "conversation_history": [...], "conversation_id": "..." }`.
+  Ответ: `answer`, `confidence`, `status` (`success` / `low_confidence` / `failed` / `waiting_for_input`),
+  `sql_query`, `sql_result_preview`, `query_type`, `retry_count`, `self_corrected`, `thread_id`,
+  `chart_available`, `chart_data`.
+- `POST /ask/resume` — продолжение прерванного на уточняющем вопросе диалога.
+  Тело: `{ "thread_id", "user_answer", "response_mode" }`.
+- `POST /ask/chart` — построение временного ряда по контексту диалога (без LLM).
+  Тело: `{ "thread_id" }`.
 
 ### Кэш
 
@@ -240,8 +273,9 @@ docker compose exec service alembic upgrade head
 ### Прочее
 
 - `GET /health` — проверка живости.
-- `GET /trace/...` — трассировка выполнения графа.
+- `GET /trace` — список трейсов; `GET /trace/{request_id}` — детальный трейс выполнения графа.
 - `GET /metrics` — метрики Prometheus.
+- `GET /metrics/summary` — JSON-сводка метрик (запросы, latency, токены и стоимость LLM).
 
 ---
 
@@ -359,12 +393,18 @@ Pydantic-объект. Используется для классификато�
 ## Агент (LangGraph)
 
 Граф описывается в [`src/services/agent/graph.py`](src/services/agent/graph.py), состояние — в
-`graph_state.py`. Компилируется с чекпоинтером на Postgres.
+`graph_state.py`. Компилируется с чекпоинтером на Postgres (лениво, при первом запуске).
 
-**Статусы результата** (по `confidence`):
+**Статусы результата:**
 - `confidence >= 0.7` → `success`;
-- иначе → `low_confidence` (запускает self-correction на уровне pipeline);
-- при ошибках графа → `failed`.
+- `0.5 <= confidence < 0.7` → `low_confidence`;
+- ошибки графа → `failed`;
+- граф приостановлен на уточняющем вопросе → `waiting_for_input` (продолжение через `POST /ask/resume`).
+
+**Self-correction** (уровень pipeline, [`src/services/generation/pipeline.py`](src/services/generation/pipeline.py))
+запускается **только при реальном провале**: статус `failed`, `confidence < 0.5`, пустой ответ или
+ответ короче 10 символов (в режиме `detailed`). Статус `low_confidence` (0.5–0.7) повторный прогон
+**не** запускает — это защита от удвоения латентности (45→90+ сек) и 504 в nginx.
 
 ```mermaid
 flowchart TD
@@ -373,7 +413,9 @@ flowchart TD
     C -- query_type = None --> F[failed]
     C -- ok --> D[disambiguation<br/>нужно ли уточнение]
 
-    D --> P[planner<br/>план действий]
+    D -- interrupt --> W[waiting_for_input<br/>уточняющий вопрос пользователю]
+    W -- POST /ask/resume --> P
+    D -- авто-разрешение --> P[planner<br/>план действий]
 
     P --> G[codegen<br/>генерация безопасного SQL]
 
@@ -402,7 +444,7 @@ flowchart TD
 1. **Classifier** — тип запроса (`lookup`/`aggregate`/`cross_sheet`/`delta`/`sum_by_supplier`/`find_period`/`unknown`)
    и домен (`prices`/`metrics`/`generic`), извлечение сущностей.
 2. **Disambiguation** — проверяет необходимость уточнения (`DisambiguationResult`). Может ветвиться через
-   `interrupt()` (ожидание ответа пользователя) или авто-разрешать.
+   `interrupt()` (статус `waiting_for_input`, ожидание ответа пользователя) или авто-разрешать.
 3. **Planner** — текстовый план действий.
 4. **CodeGen** — генерация SQL (LLM или детерминированно из спеки через `sql_compiler`). Применяет правки:
    - «все виды меди» → префиксный `item_name ILIKE 'Лом меди%'`;
@@ -421,6 +463,34 @@ flowchart TD
 - `route_after_codegen`: пустой SQL/ошибки валидации → повторный codegen (до 3 раз).
 - `route_after_executor`: SQL-ошибка → codegen; успех → verifier.
 - `route_after_verifier`: `needs_retry` → codegen; иначе → answer.
+
+---
+
+## Диалоги, уточнения и графики
+
+### Память диалога
+
+Каждый запуск агента получает `thread_id` (стабильный `conversation_id` из запроса или новый UUID).
+Чекпоинтер LangGraph хранит состояние диалога в PostgreSQL, поэтому:
+
+- последние N пар «вопрос-ответ» (`conversation_history`) передаются как контекст;
+- уточняющие вопросы и построение графиков работают по `thread_id` без повторного прогона всего графа.
+
+### Уточняющие вопросы (interrupt / resume)
+
+Если вопрос неоднозначен (например, не указан период или поставщик), узел Disambiguation вызывает
+`interrupt()`:
+
+1. `POST /ask` возвращает `status = "waiting_for_input"`, `thread_id` и `waiting_question` (вопрос + варианты).
+2. Пользователь отвечает через `POST /ask/resume` с `thread_id` и `user_answer`.
+3. Граф продолжается с точки прерывания (`Command(resume=...)`).
+
+### Графики
+
+- Если результат SQL уже является временным рядом (несколько периодов), ответ сразу содержит
+  `chart_data: [{period, value}, ...]` и `chart_available = true`.
+- Кнопка **«Сделай график»** в чате вызывает `POST /ask/chart` — лёгкий timeseries по уже
+  резолвнутому контексту из checkpoint (фильтры извлекаются из выполненного SQL), **без вызова LLM**.
 
 ---
 
@@ -633,7 +703,8 @@ erDiagram
 `src/services/entity_resolution/`:
 
 - `entity_resolver.py` — сопоставление упомянутых в вопросе сущностей с реальными
-  (item_name / supplier / sheet_period) через нечёткое сравнение (rapidfuzz) и справочники.
+  (item_name / supplier / sheet_period) через нечёткое сравнение (rapidfuzz) и триграммный поиск
+  PostgreSQL (`pg_trgm`).
 - `query_cache.py` — кэш результатов разрешения.
 - `data/bm25_index.pkl` — BM25-индекс для поиска релевантных листов/сущностей (`top_k`).
 
@@ -649,7 +720,10 @@ Entity-resolution выполняется на этапе Classifier/Planner и �
 - RPS и латентность `/ask` (по статусу).
 - Per-node latency графа (classifier/planner/codegen/executor/verifier/answer).
 - Доля `failed` / `low_confidence`.
-- Token usage LLM (`observe_llm_tokens`).
+- Token usage LLM (`observe_llm_tokens`) и оценочная стоимость вызовов (`evraz_llm_cost_rub_total`).
+
+`GET /metrics/summary` — JSON-сводка для UI: `total_requests`, `requests_by_status`,
+`avg_latency_ms`, `total_tokens`, `tokens_by_node`, `total_cost_rub`, `cost_by_node`.
 
 `query_logs` дополнительно хранит: latency по узлам, тексты ошибок, трейсы.
 
@@ -660,9 +734,9 @@ Grafana (порт 3001) подключена к Prometheus через provisioni
 
 ## Auth и rate limiting
 
-- `/files/*` и `/ask/*` защищены API-ключом (заголовок `X-API-Key`); проверка через `verify_api_key`.
+- `/files/*`, `/ask/*` и `/cache/*` защищены API-ключом (заголовок `X-API-Key`); проверка через `verify_api_key`.
   Если `API_KEY` пуст — auth отключён (dev-режим).
-- Rate limiting через **slowapi** (`RATE_LIMIT_ASK`, `RATE_LIMIT_UPLOAD`).
+- Rate limiting через **slowapi** (`RATE_LIMIT_ASK`, `RATE_LIMIT_UPLOAD`, `RATE_LIMIT_CACHE_CLEAR`).
 
 ---
 
@@ -705,6 +779,29 @@ Golden-прогон в CI не запускается — только лока�
 
 ---
 
+## Бенчмарк
+
+Каталог [`benchmark/`](benchmark/README.md) — прогон запросов из
+[`docs/request_examples.txt`](docs/request_examples.txt) через API агента с метрикой точности
+(pass rate). Сравнение ответов выполняется **по числу**: из ответа модели и эталона извлекается
+первое число и сравнивается с относительным допуском (по умолчанию 1%).
+
+| Скрипт | Что делает |
+|---|---|
+| [`run_first6.py`](benchmark/run_first6.py) | прогон первых 6 запросов |
+| [`run_all.py`](benchmark/run_all.py) | прогон всех запросов (`--top-k`, `--limit`, `--json`) |
+| [`benchmark_core.py`](benchmark/benchmark_core.py) | ядро метрики + самопроверка парсинга |
+
+```bash
+python benchmark/run_first6.py
+python benchmark/run_all.py --top-k 20 --json benchmark/results.json
+```
+
+Требования: запущенный сервер API и данные в PostgreSQL (`python scripts/load_demo_data.py`).
+Подробности — в [`benchmark/README.md`](benchmark/README.md).
+
+---
+
 ## Тесты
 
 | Файл | Что проверяет |
@@ -712,6 +809,7 @@ Golden-прогон в CI не запускается — только лока�
 | `test_sql_compiler.py` | безопасный компилятор SQL |
 | `test_normalizer_dimension.py` | нормализация измерений |
 | `test_classifier_domain.py` | классификатор доменов |
+| `test_material_synonyms.py` | синонимы материалов |
 | `test_parser_header_detection.py` | определение шапки Excel |
 | `test_price_sheet_*.py` | unit-тесты пайплайна первой таблицы (парсер/структуратор/нормализация) |
 | `test_sheet_kind_detector_domain.py` | детектор типа листа (prices/matrix/generic) |
@@ -746,6 +844,7 @@ flowchart TD
 | Архитектура системы | [`architecture`](diagrams/architecture.md) | flowchart |
 | Пайплайн Excel-инжеста | [`excel_ingestion`](diagrams/excel_ingestion.md) | flowchart + sequence |
 | Граф LLM-агента | [`agent_pipeline`](diagrams/agent_pipeline.md) | flowchart |
+| Статусы агента | [`agent_status`](diagrams/agent_status.mmd) | flowchart |
 | Схема БД | [`database_schema`](diagrams/database_schema.md) | erDiagram |
 | CI (unit/integration/golden) | [`ci_cd`](diagrams/ci_cd.md) | flowchart + sequence |
 | Docker Compose | [`deployment`](diagrams/deployment.md) | flowchart |
@@ -764,18 +863,19 @@ flowchart TD
 
 ```
 ├── alembic/                  # миграции БД
-├── data/                     # рабочие данные, bm25_index.pkl, примеры xlsx
+├── benchmark/                # бенчмарк запросов (run_first6, run_all, benchmark_core)
+├── data/                     # рабочие данные, bm25_index.pkl, примеры xlsx, pptx
 ├── diagrams/                 # Mermaid-диаграммы (.mmd / .md)
-├── docs/                     # примеры запросов
+├── docs/                     # презентация, примеры запросов
 ├── frontend/
 │   └── src/
 │       ├── api/              # клиент API
-│       ├── components/       # UI-компоненты
+│       ├── components/       # UI-компоненты (chat, files, layout, trace, ui)
 │       ├── hooks/            # хуки (useToast)
 │       ├── lib/              # утилиты
 │       ├── pages/            # Chat, Files, Dashboard, Metrics, Trace
 │       └── types/            # TS-типы
-├── scripts/                  # init-db, prometheus, grafana, verify-скрипты
+├── scripts/                  # init-db, prometheus, grafana, mermaid, verify-скрипты
 ├── src/
 │   ├── main.py               # FastAPI app, lifespan, /metrics, /health
 │   ├── api/                  # роутеры (agent, cache, schema, trace, security, errors)
@@ -791,10 +891,36 @@ flowchart TD
 │       ├── mart/             # normalizer
 │       ├── excel/            # ingestion_service, ingestion_queue, repository
 │       ├── entity_resolution/# entity-resolver, query_cache
+│       ├── generation/       # pipeline (self-correction, resume, логирование)
+│       ├── evaluation/       # golden_dataset
 │       └── db_tables/        # сервисы доступа к таблицам (cell/column/file/query_log/sheet)
 ├── tests/                    # pytest, golden dataset
-└── PROJECT.md                # подробное техническое описание
+├── .env.example              # шаблон конфигурации
+├── docker-compose.yml        # инфраструктура
+├── INSTRUCTIONS.md           # инструкция по запуску
+├── PROJECT.md                # подробное техническое описание
+└── LICENSE                   # MIT
 ```
 
 ---
 
+## Документация
+
+| Документ | Содержание |
+|---|---|
+| [`README.md`](README.md) | этот файл — обзор проекта |
+| [`PROJECT.md`](PROJECT.md) | подробное техническое описание (архитектура, модули, БД) |
+| [`INSTRUCTIONS.md`](INSTRUCTIONS.md) | инструкция по запуску (Docker / локально, миграции, тесты) |
+| [`docs/PRESENTATION.md`](docs/PRESENTATION.md) | презентация проекта |
+| [`diagrams/README.md`](diagrams/README.md) | каталог Mermaid-диаграмм |
+| [`benchmark/README.md`](benchmark/README.md) | описание бенчмарка запросов |
+| [`frontend/README.md`](frontend/README.md) | документация фронтенда |
+| [`src/README.md`](src/README.md) | документация backend-пакета |
+| [`src/services/agent/README.md`](src/services/agent/README.md) | документация агента |
+| [`src/core/db/README.md`](src/core/db/README.md) | документация слоя БД |
+
+---
+
+## Лицензия
+
+Проект распространяется под лицензией **MIT** — см. [`LICENSE`](LICENSE).
