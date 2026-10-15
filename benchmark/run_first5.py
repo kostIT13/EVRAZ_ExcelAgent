@@ -5,12 +5,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from benchmark_core import build_parser, parse_questions, run_benchmark  
 
-FIRST_N = 6
+FIRST_N = 5
 
 
 def main() -> int:
     parser = build_parser(
-        "Бенчмарк: первые 6 запросов из docs/request_examples.txt",
+        "Бенчмарк: первые 5 запросов из docs/request_examples.txt",
         default_json="benchmark/results_first6.json",
     )
     args = parser.parse_args()
