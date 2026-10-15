@@ -1,11 +1,5 @@
-"""Unit-тесты детектора типа листа (prices / matrix / generic).
-
-Использует реальные заголовки первой таблицы как эталон PRICES-листа
-и типовые матричные листы (шихтовочный лист) как эталон MATRIX.
-"""
 from src.core.excel.sheet_kind_detector import SheetKind, detect_sheet_kind
 
-# Заголовки первого листа data/data_proportional_prices.xlsx (цв.лом(на дек25)).
 PRICES_HEADERS = [
     "пп",
     "наименование_лома",

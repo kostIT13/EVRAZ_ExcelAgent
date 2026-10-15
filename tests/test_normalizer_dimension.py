@@ -1,5 +1,4 @@
 from types import SimpleNamespace
-
 from src.services.mart.normalizer import _pick_dimension_column
 
 

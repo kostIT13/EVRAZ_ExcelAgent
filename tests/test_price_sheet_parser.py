@@ -1,13 +1,5 @@
-"""Unit-тесты парсинга первой таблицы: data/data_proportional_prices.xlsx.
-
-Проверяют пайплайн чтения Excel-файла средствами ExcelParser:
-количество листов, распознавание шапки, ключевые колонки, строки данных,
-период из имени листа и тип листа (prices).
-"""
 from pathlib import Path
-
 import pytest
-
 from src.core.excel.parser import ExcelParser
 from src.core.excel.sheet_kind_detector import detect_sheet_kind
 from src.core.excel.table_structurer import extract_period_from_sheet_name

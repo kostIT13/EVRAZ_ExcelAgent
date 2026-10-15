@@ -1,13 +1,5 @@
-"""Unit-тесты структурирования первой таблицы (TableStructurer).
-
-Проверяют извлечение периода из имени листа и построение фактов цен:
-наименование лома, источники цен (среднерыночная / аукцион_старт /
-аукцион_победитель / поставщики), пропуск служебных строк.
-"""
 from pathlib import Path
-
 import pytest
-
 from src.core.excel.parser import ExcelParser
 from src.core.excel.table_structurer import TableStructurer, extract_period_from_sheet_name
 

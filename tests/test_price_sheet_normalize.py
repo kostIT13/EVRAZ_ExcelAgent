@@ -1,6 +1,4 @@
-"""Unit-тесты нормализации значений и типов колонок первой таблицы."""
 from types import SimpleNamespace
-
 from src.core.excel.normalize import (
     COLUMN_TYPE_NUMBER,
     COLUMN_TYPE_PRICE,

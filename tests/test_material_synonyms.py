@@ -1,12 +1,4 @@
-"""Регрессионные тесты: «цинковый лом» == «лом цинка» (синонимы материалов).
-
-Проверяют:
-1. Словарь синонимов материалов (src.core.material_synonyms).
-2. Расширение слов вопроса в entity_resolver.
-3. Детерминированную правку codegen: item_name ILIKE '%цинк%' -> item_name = 'Лом цинка'.
-"""
 from __future__ import annotations
-
 from src.core.material_synonyms import genitive_for_material, material_noun_from_adjective
 from src.services.agent.nodes.answer_node import _has_digit, _result_has_numbers
 from src.services.agent.nodes.codegen_node import (

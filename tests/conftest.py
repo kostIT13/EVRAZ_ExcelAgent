@@ -1,9 +1,3 @@
-# Общие фикстуры и настройка pytest.
-
-# Важно: conftest.py импортируется ДО всех тестовых модулей, поэтому здесь
-# задаются переменные окружения по умолчанию. Без них `src.core.config.Settings()`
-# (обязательные поля LLM_*, POSTGRES_*) упадёт на этапе импорта в окружениях,
-# где нет файла `.env` (GitHub Actions, чистый CI).
 import asyncio
 import os
 import sys
@@ -21,13 +15,11 @@ for _key, _default in {
 }.items():
     os.environ.setdefault(_key, _default)
 
-# Windows: asyncpg/psycopg несовместимы с ProactorEventLoop
-# (asyncio.run по умолчанию) — переключаемся на selector-политику.
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 
-import pytest  # noqa: E402
+import pytest  
 
 
 def pytest_configure(config):
@@ -54,8 +46,6 @@ def pytest_addoption(parser):
 def pytest_collection_modifyitems(config, items):
     if config.getoption("--golden"):
         return
-    # Если пользователь явно выбрал golden-тесты через `pytest -m golden`,
-    # не добавляем skip — прогон должен выполниться.
     markexpr = getattr(config.option, "markexpr", "") or ""
     if "golden" in [m.strip().lstrip("!") for m in markexpr.split(" and ")]:
         return

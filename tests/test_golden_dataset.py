@@ -1,16 +1,12 @@
 from __future__ import annotations
-
 import asyncio
 import json
 import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List
-
 import pytest
 
-# Windows: psycopg несовместим с ProactorEventLoop (asyncio.run по умолчанию).
-# На Linux/macOS дефолтная политика подходит и без этого блока.
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
@@ -23,18 +19,6 @@ def _load_golden() -> List[Dict[str, Any]]:
 
 
 def _check_sql_signature(sql: str, hint: str) -> bool:
-    """Проверяет, что сгенерированный SQL соответствует golden-хинту.
-
-    Хинт — набор частей, разделённых AND; каждая часть должна присутствовать
-    в нормализованном SQL. Целевая таблица определяется автоматически:
-      - ``FROM sheets``              → таблица ``sheets``;
-      - ``metric_type``/``dimension`` → витрина ``mart.metrics``;
-      - иначе                         → витрина ``mart.price_facts``.
-
-    Конструкции вида ``col IN ('a','b')`` дополнительно считаются выполненными,
-    если SQL содержит обе формы ``col='a'`` и ``col='b'`` (агент может
-    сгенерировать эквивалентный OR-вариант вместо IN).
-    """
     sql_lower = sql.lower()
     hint_lower = hint.lower().strip()
 
