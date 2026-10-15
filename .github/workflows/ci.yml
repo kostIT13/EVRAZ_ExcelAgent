@@ -1,11 +1,5 @@
 name: CI (unit + integration)
 
-# Быстрый CI без LLM: юнит-тесты (без БД) и интеграционные тесты
-# с реальным PostgreSQL (repository + mart normalizer).
-#
-# Интеграционные тесты используют переменную TEST_POSTGRES_URL,
-# которая задаётся в job через service-контейнер postgres.
-# Golden-тесты (LLM) в CI не запускаются — только локально.
 
 on:
   push:
