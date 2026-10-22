@@ -219,6 +219,26 @@ def next_page():
     return PAGE[0]
 
 
+LOGO_W_IN = 2.0          # ширина логотипа EVRAZ на слайде, дюймы
+LOGO_MARGIN_R = 0.35     # отступ справа
+LOGO_MARGIN_T = 0.35     # отступ сверху
+
+
+def add_logos():
+    """Добавляет логотип EVRAZ (белый на прозрачном) в правый верхний угол каждого слайда.
+
+    Подготовленный PNG: data/evraz_logo_white.png (см. scripts/make_logo_variants.py).
+    """
+    logo = "data/evraz_logo_white.png"
+    sw = prs.slide_width.inches
+    h_in = LOGO_W_IN * 540.0 / 960.0  # пропорция исходника 960x540
+    for slide in prs.slides:
+        pic = slide.shapes.add_picture(
+            logo, Inches(sw - LOGO_MARGIN_R - LOGO_W_IN),
+            Inches(LOGO_MARGIN_T), Inches(LOGO_W_IN))
+        pic.name = "EVRAZ_LOGO"
+
+
 # ---------------------------------------------------------------------------
 # СЛАЙД 1 — Титульный
 # ---------------------------------------------------------------------------
@@ -1109,6 +1129,8 @@ def build():
     slide_future()
     slide_demo()
     slide_thanks()
+
+    add_logos()
 
     out = "data/EVRAZ_Agent_defense.pptx"
     prs.save(out)
