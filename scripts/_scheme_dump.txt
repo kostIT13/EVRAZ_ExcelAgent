@@ -1,8 +1,0 @@
-schemeClr val= accent1 | parent: lnRef | grandparent: style
-    <a:schemeClr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocum
-schemeClr val= accent1 | parent: fillRef | grandparent: style
-    <a:schemeClr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocum
-schemeClr val= accent1 | parent: effectRef | grandparent: style
-    <a:schemeClr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocum
-schemeClr val= lt1 | parent: fontRef | grandparent: style
-    <a:schemeClr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocum

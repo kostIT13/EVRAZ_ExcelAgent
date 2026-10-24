@@ -1,5 +1,0 @@
-'AND m.is_blank = FALSE' -> 'AND m.is_blank = 0'
-'AND COALESCE(m.is_blank, FALSE) = FALSE' -> 'AND m.is_blank = 0'
-'AND fp.is_blank = TRUE' -> 'AND fp.is_blank = 1'
-'AND is_blank IS FALSE' -> 'AND is_blank = 0'
-'AND m.is_blank = 0' -> 'AND m.is_blank = 0'
