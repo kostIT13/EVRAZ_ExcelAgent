@@ -377,6 +377,12 @@ class LangGraphAgent:
         thread_id = conversation_id or request_id
         is_retry = bool(conversation_history)
 
+        try:
+            from src.core.metrics import observe_ask_start
+            observe_ask_start()
+        except Exception:
+            pass
+
         logger.info(
             "LangGraphAgent [{}]: starting for '{}' (retry={}, thread={})",
             request_id[:8],
@@ -397,6 +403,11 @@ class LangGraphAgent:
                 "LangGraphAgent [{}]: cache HIT, returning cached result",
                 request_id[:8],
             )
+            try:
+                from src.core.metrics import observe_ask_finish
+                observe_ask_finish()
+            except Exception:
+                pass
             return AgentResult(
                 answer=cached.get("result", {}).get("formatted_answer", "Данные из кэша."),
                 confidence=1.0,
@@ -500,6 +511,12 @@ class LangGraphAgent:
             result.confidence,
             result.latency_ms,
         )
+
+        try:
+            from src.core.metrics import observe_ask_finish
+            observe_ask_finish()
+        except Exception:
+            pass
 
         return result
 

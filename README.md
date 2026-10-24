@@ -717,18 +717,29 @@ Entity-resolution выполняется на этапе Classifier/Planner и �
 
 `GET /metrics` (Prometheus):
 
-- RPS и латентность `/ask` (по статусу).
+- RPS и латентность `/ask` (по статусу), гистограммы для p50/p95 (`histogram_quantile`).
 - Per-node latency графа (classifier/planner/codegen/executor/verifier/answer).
 - Доля `failed` / `low_confidence`.
-- Token usage LLM (`observe_llm_tokens`) и оценочная стоимость вызовов (`evraz_llm_cost_rub_total`).
+- Token usage LLM (`evraz_llm_tokens_total`) и оценочная стоимость вызовов
+  (`evraz_llm_cost_rub_total`).
+- Gauge `evraz_ask_inflight` — запросы `/ask` в обработке прямо сейчас.
 
 `GET /metrics/summary` — JSON-сводка для UI: `total_requests`, `requests_by_status`,
-`avg_latency_ms`, `total_tokens`, `tokens_by_node`, `total_cost_rub`, `cost_by_node`.
+`success_rate`, `avg_latency_ms`, `latency_p50_ms`, `latency_p95_ms`, `inflight`,
+`total_tokens`, `tokens_by_node`, `total_cost_rub`, `cost_by_node`.
+
+`GET /metrics/history?hours=24` — почасовые ряды из `query_logs` для тайм-серий в
+frontend: `labels`, `requests`, `by_status`, `avg_latency_ms`, `latency_p50_ms`,
+`latency_p95_ms`.
 
 `query_logs` дополнительно хранит: latency по узлам, тексты ошибок, трейсы.
 
 Grafana (порт 3001) подключена к Prometheus через provisioning
-(`scripts/grafana/datasources/prometheus.yml`).
+(`scripts/grafana/datasources/prometheus.yml`). Дашборд **«EVRAZ Agent — Observability»**
+(`scripts/grafana/dashboards/evraz.json`) подключается автоматически
+(`scripts/grafana/provisioning/dashboards/dashboards.yml`) и содержит панели:
+суммарные запросы, успешность ответов, латентность p95/p50, in-flight, запросы по
+статусам, латентность по узлам графа, токены LLM по типу, ошибки и стоимость вызовов.
 
 ---
 

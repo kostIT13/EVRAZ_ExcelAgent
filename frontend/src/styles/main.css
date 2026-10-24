@@ -1973,6 +1973,7 @@ body {
 .stat-card--gold::before { background: var(--evraz-gold); }
 .stat-card--cyan::before { background: var(--color-rag); }
 .stat-card--green::before { background: var(--color-success); }
+.stat-card--blue::before { background: #2FA6C9; }
 
 .stat-card__icon {
   width: 44px;
@@ -1988,6 +1989,7 @@ body {
 .stat-card--red .stat-card__icon { color: var(--evraz-red); }
 .stat-card--cyan .stat-card__icon { color: var(--color-rag); }
 .stat-card--green .stat-card__icon { color: var(--color-success); }
+.stat-card--blue .stat-card__icon { color: #2FA6C9; }
 
 .stat-card__value { font-size: 1.7rem; font-weight: 700; color: var(--color-text); }
 .stat-card__title { font-size: 0.78rem; color: var(--color-text-muted); }
@@ -2032,6 +2034,27 @@ body {
   gap: 18px;
   flex: 1;
   min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--evraz-gold, #E5B53D) rgba(255, 255, 255, 0.06);
+}
+
+.metrics::-webkit-scrollbar {
+  width: 10px;
+}
+.metrics::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 8px;
+}
+.metrics::-webkit-scrollbar-thumb {
+  background: rgba(229, 181, 61, 0.55);
+  border-radius: 8px;
+}
+.metrics::-webkit-scrollbar-thumb:hover {
+  background: rgba(229, 181, 61, 0.85);
 }
 
 .metrics__header {
@@ -2060,7 +2083,7 @@ body {
   gap: 14px;
 }
 
-.metrics__row {
+.metrics__charts {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: 14px;
@@ -2070,17 +2093,36 @@ body {
 
 .metrics__panel {
   padding: 16px;
-  min-height: 320px;
+  min-height: 300px;
+}
+.metrics__panel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
 }
 .metrics__panel-title {
-  margin: 0 0 12px;
-  font-size: 0.95rem;
+  margin: 0;
+  font-size: 0.9rem;
   font-weight: 600;
   color: var(--evraz-gold);
 }
+.metrics__panel-now {
+  flex-shrink: 0;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--color-text);
+  background: var(--glass-bg);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.06));
+  border-radius: 8px;
+  padding: 3px 9px;
+  white-space: nowrap;
+}
 .metrics__chart {
   position: relative;
-  height: 260px;
+  height: 250px;
 }
 
 .stat-card__sub {

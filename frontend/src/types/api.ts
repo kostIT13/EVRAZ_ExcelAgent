@@ -148,11 +148,25 @@ export interface TraceListItem {
 export interface MetricsSummary {
   total_requests: number;
   requests_by_status: Record<string, number>;
+  success_rate?: number;
   avg_latency_ms: number;
+  latency_p95_ms?: number;
+  latency_p50_ms?: number;
+  inflight?: number;
   total_tokens: number;
   tokens_by_node: Record<string, Record<string, number>>;
   total_cost_rub: number;
   cost_by_node: Record<string, number>;
+}
+
+export interface MetricsHistory {
+  period_hours: number;
+  labels: string[];
+  requests: number[];
+  by_status: Record<string, number[]>;
+  avg_latency_ms: number[];
+  latency_p50_ms: number[];
+  latency_p95_ms: number[];
 }
 
 export type HealthResponse = {

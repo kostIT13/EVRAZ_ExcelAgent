@@ -7,6 +7,7 @@ import type {
   FileDetailResponse,
   FileListResponse,
   HealthResponse,
+  MetricsHistory,
   MetricsSummary,
   SheetDetailResponse,
   SheetResponse,
@@ -151,6 +152,10 @@ export function getMetricsSummary() {
   return get<MetricsSummary>('/metrics/summary');
 }
 
+export function getMetricsHistory(params: { hours?: number } = {}) {
+  return get<MetricsHistory>('/metrics/history', { params });
+}
+
 export const api = {
   checkHealth,
   uploadFile,
@@ -167,6 +172,7 @@ export const api = {
   listTraces,
   getTrace,
   getMetricsSummary,
+  getMetricsHistory,
 };
 
 export default api;

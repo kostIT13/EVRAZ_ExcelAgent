@@ -92,3 +92,9 @@ async def metrics():
 async def metrics_summary_endpoint():
     from src.core.metrics import metrics_summary
     return metrics_summary()
+
+
+@app.get("/metrics/history")
+async def metrics_history_endpoint(hours: int = 24):
+    from src.core.metrics import metrics_history
+    return await metrics_history(hours=hours)
