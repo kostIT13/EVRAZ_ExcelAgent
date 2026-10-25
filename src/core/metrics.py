@@ -38,6 +38,10 @@ LOW_CONFIDENCE_TOTAL = Counter(
     "evraz_low_confidence_total", "Число запросов со статусом low_confidence"
 )
 
+CACHE_HITS = Counter(
+    "evraz_cache_hits_total", "Ответы /ask, отданные из query_cache без прогона графа"
+)
+
 LLM_TOKENS = Counter(
     "evraz_llm_tokens_total", "Потреблённые токены LLM", ["node", "kind"]
 )
@@ -77,6 +81,14 @@ def observe_ask(status: str, latency_s: float) -> None:
 
 def observe_node(node: str, latency_s: float) -> None:
     NODE_LATENCY.labels(node=node).observe(latency_s)
+
+
+def observe_cache_hit() -> None:
+    """Ответ отдан из query_cache: граф не прогонялся."""
+    try:
+        CACHE_HITS.inc()
+    except Exception:
+        pass
 
 
 def observe_llm_tokens(node: str, kind: str, count: float) -> None:
@@ -126,6 +138,12 @@ def _histogram_quantile(metric, q: float = 0.95) -> float:
                 total = float(smp.value)
     if not buckets or total <= 0:
         return s / total if total else 0.0
+    return _quantile_from_buckets(buckets, total, q)
+
+
+def _quantile_from_buckets(
+    buckets: List[tuple], total: float, q: float
+) -> float:
     target = q * total
     prev_le, prev_cum = 0.0, 0.0
     for le, c in sorted(buckets):
@@ -134,6 +152,42 @@ def _histogram_quantile(metric, q: float = 0.95) -> float:
             return prev_le + (le - prev_le) * frac
         prev_le, prev_cum = le, c
     return prev_le
+
+
+def _node_latency_stats() -> Dict[str, Dict[str, float]]:
+    """avg/p50/p95 по каждому узлу графа из гистограммы NODE_LATENCY."""
+    buckets_by_node: Dict[str, List[tuple]] = {}
+    sum_by_node: Dict[str, float] = {}
+    count_by_node: Dict[str, float] = {}
+
+    for m in NODE_LATENCY.collect():
+        for smp in m.samples:
+            node = smp.labels.get("node")
+            if node is None:
+                continue
+            name = smp.name
+            if name.endswith("_bucket"):
+                le = smp.labels.get("le", "+Inf")
+                buckets_by_node.setdefault(node, []).append(
+                    (float("inf") if le == "+Inf" else float(le), float(smp.value))
+                )
+            elif name.endswith("_sum"):
+                sum_by_node[node] = float(smp.value)
+            elif name.endswith("_count"):
+                count_by_node[node] = float(smp.value)
+
+    stats: Dict[str, Dict[str, float]] = {}
+    for node, count in count_by_node.items():
+        if not count:
+            continue
+        buckets = buckets_by_node.get(node, [])
+        stats[node] = {
+            "count": int(count),
+            "avg_ms": round((sum_by_node.get(node, 0.0) / count) * 1000, 1),
+            "p50_ms": round(_quantile_from_buckets(buckets, count, 0.50) * 1000, 1),
+            "p95_ms": round(_quantile_from_buckets(buckets, count, 0.95) * 1000, 1),
+        }
+    return stats
 
 
 def metrics_summary() -> dict:
@@ -162,6 +216,13 @@ def metrics_summary() -> dict:
     p95_ms = round(_histogram_quantile(ASK_LATENCY, 0.95) * 1000, 1)
     p50_ms = round(_histogram_quantile(ASK_LATENCY, 0.50) * 1000, 1)
 
+    cache_hits = int(sum(v for _, v in _counter_values(CACHE_HITS)))
+    # Ветка кэша выходит из /ask раньше observe_ask, поэтому в total_requests хитов нет.
+    answered_total = total_requests + cache_hits
+    cache_hit_rate = (
+        round(100.0 * cache_hits / answered_total, 1) if answered_total else 0.0
+    )
+
     return {
         "total_requests": int(total_requests),
         "requests_by_status": {k: int(v) for k, v in ask_by_status.items()},
@@ -172,6 +233,9 @@ def metrics_summary() -> dict:
         "latency_p95_ms": p95_ms,
         "latency_p50_ms": p50_ms,
         "inflight": int(ASK_INFLIGHT._value.get()),
+        "latency_by_node": _node_latency_stats(),
+        "cache_hits": cache_hits,
+        "cache_hit_rate": cache_hit_rate,
         "total_tokens": int(total_tokens),
         "tokens_by_node": {
             k: {kk: int(vv) for kk, vv in v.items()} for k, v in tokens_by_node.items()

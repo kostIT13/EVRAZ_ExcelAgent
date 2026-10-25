@@ -202,3 +202,21 @@ class TraceResponse(BaseModel):
     latency_ms: int = Field(default=0, description="Время выполнения")
     trace: Dict[str, Any] = Field(default_factory=dict, description="Полный trace всех шагов")
     steps: List[TraceStepInfo] = Field(default_factory=list, description="Шаги для отображения")
+    confidence: float = Field(default=0.0, description="Уверенность ответа 0-1")
+    confidence_source: str = Field(
+        default="unknown",
+        description="Откуда взята уверенность: result / verifier / unknown",
+    )
+    sql_query: str = Field(default="", description="Выполненный SQL")
+    query_type: str = Field(default="", description="Тип запроса: lookup/aggregate/delta/…")
+    retry_count: int = Field(default=0, description="Число повторов генерации/проверки")
+    error_message: str = Field(default="", description="Текст ошибки, если запрос упал")
+    from_cache: bool = Field(default=False, description="Ответ взят из кэша")
+    created_at: Optional[str] = Field(default=None, description="Время запроса (ISO)")
+
+
+class TraceListResponse(BaseModel):
+    items: List[Dict[str, Any]] = Field(default_factory=list, description="Страница трейсов")
+    total: int = Field(default=0, description="Всего записей под фильтры")
+    limit: int = Field(default=20, description="Размер страницы")
+    offset: int = Field(default=0, description="Смещение страницы")

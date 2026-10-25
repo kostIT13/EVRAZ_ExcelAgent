@@ -1,4 +1,5 @@
 from __future__ import annotations
+import functools
 import re
 import time
 import uuid
@@ -8,6 +9,7 @@ from langgraph.graph import END, StateGraph
 from langgraph.types import Command
 
 from src.core.logging_settings import logger
+from src.core.metrics import observe_node
 from src.services.agent.checkpointer import CheckpointerManager
 from src.services.agent.graph_state import (
     GraphState,
@@ -44,6 +46,38 @@ INTERRUPT_KEY = "__interrupt__"
 STATUS_WAITING = "waiting_for_input"
 
 
+def _record_node_duration(state: GraphState, node_name: str, elapsed_s: float) -> None:
+    trace = state.setdefault("trace", {})
+    step = trace.get(node_name)
+    if not isinstance(step, dict):
+        step = {}
+        trace[node_name] = step
+    # При ретраях узел выполняется несколько раз: в трейсе остаётся последняя попытка.
+    step["duration_ms"] = int(elapsed_s * 1000)
+    observe_node(node_name, elapsed_s)
+
+
+def _timed(node_name: str, node):
+    """Замеряет длительность узла в trace[node]["duration_ms"] и в Prometheus.
+
+    Длительность пишется и на исключении (например interrupt у disambiguation),
+    но в этом случае LangGraph отбрасывает обновление состояния вместе с трейсом.
+    """
+
+    @functools.wraps(node)
+    async def wrapper(state: GraphState, **kwargs: Any) -> GraphState:
+        start = time.monotonic()
+        try:
+            return await node(state, **kwargs)
+        finally:
+            try:
+                _record_node_duration(state, node_name, time.monotonic() - start)
+            except Exception as exc:
+                logger.warning("Node timer [{}] failed: {}", node_name, exc)
+
+    return wrapper
+
+
 async def failed_node(state: GraphState, **kwargs: Any) -> GraphState:
     request_id = state.get("request_id", "?")[:8]
     logger.error("Failed Node [{}]: graph reached failed state", request_id)
@@ -59,14 +93,14 @@ def build_agent_graph() -> StateGraph:
     """
     workflow = StateGraph(GraphState)
 
-    workflow.add_node(NODE_CLASSIFIER, classifier_node)
-    workflow.add_node(NODE_DISAMBIGUATION, disambiguation_node)
-    workflow.add_node(NODE_PLANNER, planner_node)
-    workflow.add_node(NODE_CODEGEN, codegen_node)
-    workflow.add_node(NODE_EXECUTOR, executor_node)
-    workflow.add_node(NODE_VERIFIER, verifier_node)
-    workflow.add_node(NODE_ANSWER, answer_node)
-    workflow.add_node(NODE_FAILED, failed_node)
+    workflow.add_node(NODE_CLASSIFIER, _timed(NODE_CLASSIFIER, classifier_node))
+    workflow.add_node(NODE_DISAMBIGUATION, _timed(NODE_DISAMBIGUATION, disambiguation_node))
+    workflow.add_node(NODE_PLANNER, _timed(NODE_PLANNER, planner_node))
+    workflow.add_node(NODE_CODEGEN, _timed(NODE_CODEGEN, codegen_node))
+    workflow.add_node(NODE_EXECUTOR, _timed(NODE_EXECUTOR, executor_node))
+    workflow.add_node(NODE_VERIFIER, _timed(NODE_VERIFIER, verifier_node))
+    workflow.add_node(NODE_ANSWER, _timed(NODE_ANSWER, answer_node))
+    workflow.add_node(NODE_FAILED, _timed(NODE_FAILED, failed_node))
 
     workflow.set_entry_point(NODE_CLASSIFIER)
 
@@ -404,7 +438,8 @@ class LangGraphAgent:
                 request_id[:8],
             )
             try:
-                from src.core.metrics import observe_ask_finish
+                from src.core.metrics import observe_ask_finish, observe_cache_hit
+                observe_cache_hit()
                 observe_ask_finish()
             except Exception:
                 pass

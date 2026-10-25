@@ -1,0 +1,49 @@
+
+======================================================================
+SLIDE 12
+  [0] name=AUTO_SHAPE (1) id=38 'Rectangle 37'
+      pos=(0,0) size=(12192000,6858000) rot=0.0
+  [1] name=AUTO_SHAPE (1) id=39 'Rectangle 38'
+      pos=(548640,457200) size=(457200,64008) rot=0.0
+  [2] name=TEXT_BOX (17) id=40 'TextBox 39'
+      pos=(548640,566928) size=(8229600,274320) rot=0.0
+      TEXT: НАБЛЮДАЕМОСТЬ
+  [3] name=TEXT_BOX (17) id=41 'TextBox 40'
+      pos=(548640,868680) size=(11064240,685800) rot=0.0
+      TEXT: Трейсы, метрики и дашборды
+  [4] name=TEXT_BOX (17) id=57 'TextBox 56'
+      pos=(548640,6473952) size=(3657600,274320) rot=0.0
+      TEXT: EVRAZ Agent
+  [5] name=TEXT_BOX (17) id=7 'TextBox 6'
+      pos=(10881360,6473952) size=(777240,274320) rot=0.0
+      TEXT: 9
+  [6] name=AUTO_SHAPE (1) id=58 'Rounded Rectangle 57'
+      pos=(548640,1554480) size=(3383280,4206240) rot=0.0
+  [7] name=TEXT_BOX (17) id=59 'TextBox 58'
+      pos=(777240,1719072) size=(2926080,365760) rot=0.0
+      TEXT: Трейсы запросов
+  [8] name=PICTURE (13) id=60 'Picture 59'
+      pos=(749808,2395728) size=(2980944,2313432) rot=0.0
+  [9] name=TEXT_BOX (17) id=61 'TextBox 60'
+      pos=(777240,4937760) size=(2926080,731520) rot=0.0
+      TEXT: Каждый вопрос — отдельный request_id: виден каждый шаг агента, SQL и уверенность. API: /trace/{request_id}
+  [10] name=AUTO_SHAPE (1) id=62 'Rounded Rectangle 61'
+      pos=(4251960,1554480) size=(3383280,4206240) rot=0.0
+  [11] name=TEXT_BOX (17) id=63 'TextBox 62'
+      pos=(4480560,1719072) size=(2926080,365760) rot=0.0
+      TEXT: Метрики Prometheus
+  [12] name=PICTURE (13) id=64 'Picture 63'
+      pos=(4453128,2395728) size=(2980944,2313432) rot=0.0
+  [13] name=TEXT_BOX (17) id=65 'TextBox 64'
+      pos=(4480560,4937760) size=(2926080,731520) rot=0.0
+      TEXT: /metrics в реальном времени: число запросов, статусы, задержки и токены LLM.
+  [14] name=AUTO_SHAPE (1) id=66 'Rounded Rectangle 65'
+      pos=(7955279,1554480) size=(3383280,4206240) rot=0.0
+  [15] name=TEXT_BOX (17) id=67 'TextBox 66'
+      pos=(8183879,1719072) size=(2926080,365760) rot=0.0
+      TEXT: Дашборды Grafana
+  [16] name=PICTURE (13) id=68 'Picture 67'
+      pos=(8156448,2395728) size=(2980944,2313432) rot=0.0
+  [17] name=TEXT_BOX (17) id=69 'TextBox 68'
+      pos=(8183879,4937760) size=(2926080,731520) rot=0.0
+      TEXT: Панели на метриках Prometheus: время ответа, статусы, точность · :3001

@@ -360,9 +360,6 @@ async def executor_node(
     session: Optional[AsyncSession] = None,
     **kwargs: Any,
 ) -> GraphState:
-    from src.core.metrics import observe_node
-    import time as _time
-    _node_start = _time.monotonic()
     request_id = state.get("request_id", "?")[:8]
     sql_query = state.get("sql_query", "")
     validation_errors = state.get("validation_errors", [])
@@ -529,11 +526,5 @@ async def executor_node(
         "fallback_used": len(fallback_chain) > 0,
         "fallbacks_tried": [label for label, _ in fallback_chain],
     }
-
-    # Латентность узла для Prometheus.
-    try:
-        observe_node("executor", _time.monotonic() - _node_start)
-    except Exception:
-        pass
 
     return state

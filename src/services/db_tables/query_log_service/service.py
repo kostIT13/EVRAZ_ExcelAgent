@@ -1,6 +1,7 @@
 from src.services.db_tables.query_log_service.repository import SQLAlchemyQueryLogRepository
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Optional, List
+from datetime import datetime
+from typing import Optional, List, Tuple
 from src.core.db.models import QueryLog
 from src.core.db.database import async_session_maker
 from fastapi import HTTPException, status
@@ -22,10 +23,40 @@ class TraceService:
                 await session.commit()
             return result
 
-    async def list_all(self, skip: int = 0, limit: int = 20) -> List[QueryLog]:
+    async def list_page(
+        self,
+        *,
+        skip: int = 0,
+        limit: int = 20,
+        q: Optional[str] = None,
+        status: Optional[str] = None,
+        since: Optional[datetime] = None,
+        until: Optional[datetime] = None,
+    ) -> Tuple[List[QueryLog], int]:
+        """Страница трейсов и общее число записей, подходящих под фильтры."""
+        async def _page(session):
+            repo = SQLAlchemyQueryLogRepository(session)
+            logs = await repo.list_all(
+                skip=skip, limit=limit, q=q, status=status, since=since, until=until
+            )
+            total = await repo.count_all(q=q, status=status, since=since, until=until)
+            return logs, total
+        return await self._run(_page, commit=False)
+
+    async def list_all(
+        self,
+        skip: int = 0,
+        limit: int = 20,
+        q: Optional[str] = None,
+        status: Optional[str] = None,
+        since: Optional[datetime] = None,
+        until: Optional[datetime] = None,
+    ) -> List[QueryLog]:
         async def _list(session):
             repo = SQLAlchemyQueryLogRepository(session)
-            return await repo.list_all(skip=skip, limit=limit)
+            return await repo.list_all(
+                skip=skip, limit=limit, q=q, status=status, since=since, until=until
+            )
         return await self._run(_list, commit=False)
 
     async def get_by_request_id(self, request_id: str) -> QueryLog:
@@ -34,7 +65,7 @@ class TraceService:
             record = await repo.get_by_request_id(request_id)
             if not record:
                 raise HTTPException(
-                    status_code=404,
+                    status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"Trace not found for request_id: {request_id}",
                 )
             return record

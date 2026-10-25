@@ -1,18 +1,21 @@
 import { motion } from 'framer-motion';
-import { useState } from 'react';
+import { useState, type MouseEvent as ReactMouseEvent } from 'react';
 import {
+  Activity,
+  AlertTriangle,
+  Brain,
+  Check,
+  CheckCircle2,
   ChevronDown,
+  Copy,
   Database,
   FileCode2,
-  Brain,
-  Zap,
-  CheckCircle2,
-  Search,
-  Sparkles,
   MessageSquare,
+  Search,
   ShieldCheck,
+  Sparkles,
   Timer,
-  Activity,
+  Zap,
 } from 'lucide-react';
 import type { TraceStepInfo } from '@/types/api';
 import { formatMs } from '@/lib/utils';
@@ -20,6 +23,7 @@ import { formatMs } from '@/lib/utils';
 interface TraceStepCardProps {
   step: TraceStepInfo;
   index: number;
+  totalMs?: number;
 }
 
 const STEP_ICONS: Record<string, { icon: typeof Brain; accent: string }> = {
@@ -56,14 +60,30 @@ function renderField(label: string, value: unknown) {
   );
 }
 
-export default function TraceStepCard({ step, index }: TraceStepCardProps) {
+export default function TraceStepCard({ step, index, totalMs = 0 }: TraceStepCardProps) {
   const data = (step.data as Record<string, unknown>) || {};
   const stepName = step.step as string;
   const meta = STEP_ICONS[stepName] || { icon: Activity, accent: 'blue' };
   const Icon = meta.icon;
   const label = (data.label as string) || stepName || `Шаг ${index + 1}`;
   const durationMs = (data.duration_ms as number) || 0;
+  const share = totalMs > 0 ? Math.min(100, (durationMs / totalMs) * 100) : 0;
   const [open, setOpen] = useState(index < 4);
+  const [copied, setCopied] = useState(false);
+
+  const error = typeof data.error === 'string' && data.error.trim() ? data.error.trim() : '';
+  const fullJson = JSON.stringify(data, null, 2);
+
+  const copyJson = async (e: ReactMouseEvent) => {
+    e.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(fullJson);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1600);
+    } catch {
+      /* clipboard недоступен */
+    }
+  };
 
   // Определяем ключи для отображения (без внутренних служебных полей)
   const knownMeta = ['icon', 'label', 'duration_ms', 'question'];
@@ -91,11 +111,26 @@ export default function TraceStepCard({ step, index }: TraceStepCardProps) {
             <Timer size={12} /> {formatMs(durationMs)}
           </span>
         )}
+        {error && (
+          <span className="trace-step-card__error-ico" title={error} onClick={(e) => e.stopPropagation()}>
+            <AlertTriangle size={14} />
+          </span>
+        )}
+        <button className="trace-step-card__copy" onClick={copyJson} title="Скопировать JSON шага">
+          {copied ? <Check size={13} className="trace-step-card__copied" /> : <Copy size={13} />}
+        </button>
         <ChevronDown
           size={16}
           className={`trace-step-card__chevron${open ? ' trace-step-card__chevron--open' : ''}`}
         />
       </button>
+
+      {durationMs > 0 && totalMs > 0 && (
+        <div className="trace-step-card__bar" title={`${formatMs(durationMs)} · ${share.toFixed(0)}% времени шагов`}>
+          <div className="trace-step-card__bar-fill" style={{ width: `${Math.max(share, 2)}%` }} />
+          <span className="trace-step-card__bar-label">{share.toFixed(0)}%</span>
+        </div>
+      )}
 
       {open && (
         <motion.div
@@ -105,6 +140,13 @@ export default function TraceStepCard({ step, index }: TraceStepCardProps) {
           exit={{ height: 0, opacity: 0 }}
           transition={{ duration: 0.25 }}
         >
+          {error && (
+            <div className="trace-inspector__error trace-inspector__error--compact">
+              <AlertTriangle size={13} />
+              <span>{error}</span>
+            </div>
+          )}
+
           {stepName === 'question' && data.question ? (
             <div className="trace-question">
               <MessageSquare size={18} />

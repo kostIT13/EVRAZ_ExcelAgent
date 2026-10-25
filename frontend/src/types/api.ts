@@ -135,6 +135,14 @@ export interface TraceResponse {
   latency_ms: number;
   trace: Record<string, unknown>;
   steps: TraceStepInfo[];
+  confidence: number;
+  confidence_source?: 'result' | 'verifier' | 'unknown';
+  sql_query?: string;
+  query_type?: string;
+  retry_count?: number;
+  error_message?: string;
+  from_cache?: boolean;
+  created_at?: string | null;
 }
 
 export interface TraceListItem {
@@ -143,6 +151,24 @@ export interface TraceListItem {
   status: string;
   latency_ms: number;
   created_at?: string | null;
+  confidence?: number;
+  query_type?: string;
+  error_message?: string;
+  from_cache?: boolean;
+}
+
+export interface TraceListResponse {
+  items: TraceListItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface NodeLatency {
+  count: number;
+  avg_ms: number;
+  p50_ms: number;
+  p95_ms: number;
 }
 
 export interface MetricsSummary {
@@ -153,6 +179,9 @@ export interface MetricsSummary {
   latency_p95_ms?: number;
   latency_p50_ms?: number;
   inflight?: number;
+  latency_by_node?: Record<string, NodeLatency>;
+  cache_hits?: number;
+  cache_hit_rate?: number;
   total_tokens: number;
   tokens_by_node: Record<string, Record<string, number>>;
   total_cost_rub: number;

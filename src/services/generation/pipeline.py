@@ -155,8 +155,9 @@ class GenerationPipeline:
             s.add(QueryLog(
                 request_id=result.request_id,
                 question=result.question,
-                result={"answer": result.answer},
+                result={"answer": result.answer, "confidence": result.confidence},
                 trace=trace,
+                sql_query=result.sql_query,
                 latency_ms=result.latency_ms,
                 status=result.status,
             ))

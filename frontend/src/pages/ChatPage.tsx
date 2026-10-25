@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { RotateCcw, Send, Sparkles, Trash2 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import api from '@/api';
@@ -14,9 +14,10 @@ import AgentProgress from '@/components/chat/AgentProgress';
 import TypingIndicator from '@/components/chat/TypingIndicator';
 
 const SUGGESTIONS = [
-  'Средняя цена лома меди по Ферроком в феврале 2025',
-  'Сравни цены на латунь у всех поставщиков в декабре 2025',
-  'Дельта между мин и макс ценой на медь по поставщикам',
+  'Сколько составила среднерыночная цена на Лом твердых сплавов (без припоя) в декабре 2025 года?',
+  'Какова была максимальная цена по результатам предложения победителя на аукционе за Лом латуни ЛАЖМц в январе 2025 - декабре 2025 года?',
+  'Какова была средняя цена на все виды медного лома по данным Ферроком в феврале 2025 года?',
+  'Сколько составила среднерыночная цена на Лом алюминия в ноябре 2025 года?',
 ];
 
 // Память агента: сколько последних пар «вопрос-ответ» запоминаем и отправляем.
@@ -51,6 +52,10 @@ export default function ChatPage() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const idRef = useRef(0);
+
+  // Актуальная ссылка на handleSend для вызова из эффектов (latest-ref).
+  const sendLatestRef = useRef<(text?: string) => void>(() => {});
+  const [searchParams] = useSearchParams();
 
   const autoResize = () => {
     const el = textareaRef.current;
@@ -126,6 +131,19 @@ export default function ChatPage() {
       setIsAsking(false);
     }
   };
+
+  useEffect(() => {
+    sendLatestRef.current = handleSend;
+  });
+
+  // Автозапуск запроса, пришедшего из вкладки «Демо» через query-параметр ?q=.
+  useEffect(() => {
+    const q = searchParams.get('q');
+    if (q && q.trim()) {
+      const t = window.setTimeout(() => sendLatestRef.current(q.trim()), 120);
+      return () => window.clearTimeout(t);
+    }
+  }, [searchParams]);
 
   // Уточнение по конкретному предыдущему запросу.
   const handleClarify = (refinement: string) => {

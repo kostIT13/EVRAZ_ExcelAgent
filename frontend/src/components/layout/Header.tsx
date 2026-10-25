@@ -1,11 +1,12 @@
 import { NavLink } from 'react-router-dom';
-import { MessageSquare, FolderOpen, Search, LayoutDashboard, Gauge } from 'lucide-react';
+import { MessageSquare, FolderOpen, Search, LayoutDashboard, Gauge, MonitorPlay } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useEffect, useState } from 'react';
 import { checkHealth } from '@/api';
 
 const navItems = [
   { to: '/', label: 'Чат', icon: MessageSquare },
+  { to: '/demo', label: 'Демо', icon: MonitorPlay },
   { to: '/dashboard', label: 'Дашборд', icon: LayoutDashboard },
   { to: '/files', label: 'Файлы', icon: FolderOpen },
   { to: '/trace', label: 'Трассировка', icon: Search },

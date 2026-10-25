@@ -11,7 +11,7 @@ import type {
   MetricsSummary,
   SheetDetailResponse,
   SheetResponse,
-  TraceListItem,
+  TraceListResponse,
   TraceResponse,
   UploadResponse,
 } from '@/types/api';
@@ -139,8 +139,16 @@ export function clearCache() {
 }
 
 // ---------- Trace ----------
-export function listTraces(params: { limit?: number } = {}) {
-  return get<TraceListItem[]>(`/trace`, { params });
+export interface TraceListParams {
+  limit?: number;
+  offset?: number;
+  q?: string;
+  status?: string;
+  since?: string;
+}
+
+export function listTraces(params: TraceListParams = {}) {
+  return get<TraceListResponse>(`/trace`, { params: { ...params } });
 }
 
 export function getTrace(requestId: string) {
