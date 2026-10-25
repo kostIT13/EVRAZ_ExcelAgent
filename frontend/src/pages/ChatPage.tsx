@@ -42,7 +42,6 @@ export default function ChatPage() {
   const [history, setHistory] = useState<ConversationTurn[]>([]);
   const [question, setQuestion] = useState('');
   const [isAsking, setIsAsking] = useState(false);
-  const [topK, setTopK] = useState(10);
   const [responseMode, setResponseMode] = useState<'detailed' | 'concise'>('detailed');
   const [agentStep, setAgentStep] = useState(-1);
   const [sourcesModal, setSourcesModal] = useState<SourceInfo[] | null>(null);
@@ -101,7 +100,6 @@ export default function ChatPage() {
     try {
       const result = await api.askQuestion({
         question: q,
-        top_k: topK,
         mode: 'agent',
         response_mode: responseMode,
         conversation_id: conversationId,
@@ -311,17 +309,6 @@ export default function ChatPage() {
                 <option value="detailed">📝 Полный ответ</option>
                 <option value="concise">🔢 Только число</option>
               </select>
-            </label>
-            <label className="chat-settings__item">
-              <span className="chat-settings__label">Top-K:</span>
-              <input
-                className="chat-settings__input"
-                type="number"
-                value={topK}
-                min={1}
-                max={50}
-                onChange={(e) => setTopK(parseInt(e.target.value) || 10)}
-              />
             </label>
             <button
               type="button"

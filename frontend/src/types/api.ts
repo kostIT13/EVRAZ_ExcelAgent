@@ -115,7 +115,6 @@ export interface ChartResponse {
 
 export interface AskRequest {
   question: string;
-  top_k?: number;
   mode?: 'agent';
   response_mode?: 'detailed' | 'concise';
   conversation_history?: ConversationTurn[];

@@ -119,7 +119,6 @@ export function askQuestion(req: AskRequest) {
   return post<AskResponse>('/ask', {
     body: {
       question: req.question,
-      top_k: req.top_k ?? 10,
       mode: 'agent',
       response_mode: req.response_mode ?? 'detailed',
       conversation_history: req.conversation_history ?? [],
