@@ -408,31 +408,31 @@ Pydantic-объект. Используется для классификато�
 
 ```mermaid
 flowchart TD
-    START([Вопрос пользователя via POST /ask]) --> C[classifier<br/>тип запроса + домен]
+    START(["Вопрос пользователя via POST /ask"]) --> C["classifier<br/>тип запроса + домен"]
 
-    C -- query_type = None --> F[failed]
-    C -- ok --> D[disambiguation<br/>нужно ли уточнение]
+    C -- "query_type = None" --> F["failed"]
+    C -- "ok" --> D["disambiguation<br/>нужно ли уточнение"]
 
-    D -- interrupt --> W[waiting_for_input<br/>уточняющий вопрос пользователю]
-    W -- POST /ask/resume --> P
-    D -- авто-разрешение --> P[planner<br/>план действий]
+    D -- "interrupt" --> W["waiting_for_input<br/>уточняющий вопрос пользователю"]
+    W -- "POST /ask/resume" --> P
+    D -- "авто-разрешение" --> P["planner<br/>план действий"]
 
-    P --> G[codegen<br/>генерация безопасного SQL]
+    P --> G["codegen<br/>генерация безопасного SQL"]
 
-    G -- SQL пуст / ошибки валидации, ретраев < 3 --> G
-    G -- SQL пуст и ретраев = 3 --> F
-    G -- валидация не пройдена, ретраев = 3 --> E
-    G -- ок --> E[executor<br/>выполнение SELECT (read-only)]
+    G -- "SQL пуст / ошибки валидации, ретраев < 3" --> G
+    G -- "SQL пуст и ретраев = 3" --> F
+    G -- "валидация не пройдена, ретраев = 3" --> E
+    G -- "ок" --> E["executor<br/>выполнение SELECT (read-only)"]
 
-    E -- sql_error, ретраев < 3 --> G
-    E -- sql_error, ретраев = 3 --> F
-    E -- ок --> V[verifier<br/>LLM-проверка SQL + результата]
+    E -- "sql_error, ретраев < 3" --> G
+    E -- "sql_error, ретраев = 3" --> F
+    E -- "ок" --> V["verifier<br/>LLM-проверка SQL + результата"]
 
-    V -- needs_retry, ретраев < 3 --> G
-    V -- needs_retry, ретраев = 3 --> A
-    V -- ок --> A[answer<br/>формирование ответа]
+    V -- "needs_retry, ретраев < 3" --> G
+    V -- "needs_retry, ретраев = 3" --> A
+    V -- "ок" --> A["answer<br/>формирование ответа"]
 
-    A --> ENDX([END])
+    A --> ENDX(["END"])
     F --> ENDX
 ```
 
