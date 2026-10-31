@@ -3,6 +3,7 @@ import functools
 import re
 import time
 import uuid
+import numbers
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 from langgraph.graph import END, StateGraph
@@ -40,6 +41,7 @@ from src.services.agent.nodes.routing import (
 )
 from src.services.llm.llm_client import LLMClient
 from src.services.entity_resolution.query_cache import query_cache_service
+from src.services.agent.chart_intent import build_chart_sql
 
 # Ключ, в котором LangGraph возвращает активные interrupt-точки после ainvoke.
 INTERRUPT_KEY = "__interrupt__"
@@ -168,6 +170,64 @@ def build_agent_graph() -> StateGraph:
     return workflow
 
 
+def _is_chart_number(v: Any) -> bool:
+    """Число для оси значений: int/float/Decimal (bool исключаем).
+
+    Decimal приходит из NUMERIC-колонок БД, если executor не успел
+    привести значение к float.
+    """
+    return isinstance(v, numbers.Number) and not isinstance(v, bool)
+
+
+def _is_chart_number(v: Any) -> bool:
+    """Число для оси значений: int/float/Decimal (bool исключаем).
+
+    Decimal приходит из NUMERIC-колонок БД, если executor не успел
+    привести значение к float.
+    """
+    return isinstance(v, numbers.Number) and not isinstance(v, bool)
+
+
+def _extract_chart_data_by_supplier(
+    sql_result: List[Dict[str, Any]],
+) -> Optional[List[Dict[str, Any]]]:
+    """Агрегирует sql_result по поставщику: [{period: <supplier>, value}, ...].
+
+    Используется при явном запросе «построй столбчатую диаграмму … по
+    поставщикам», если codegen уже вернул строки с поставщиком и числом.
+    Ключ 'period' сохранён для совместимости с фронтендом (ChartPoint).
+    """
+    if not sql_result:
+        return None
+    row = sql_result[0]
+    if not isinstance(row, dict):
+        return None
+    supplier_key = next(
+        (k for k in row if "supplier" in k.lower() or "поставщик" in k.lower()),
+        None,
+    )
+    value_key = next(
+        (k for k, v in row.items() if k != supplier_key and _is_chart_number(v)),
+        None,
+    )
+    if not supplier_key or not value_key:
+        return None
+    agg: Dict[str, float] = {}
+    for r in sql_result:
+        s = r.get(supplier_key)
+        v = r.get(value_key)
+        if s is None or v is None:
+            continue
+        try:
+            agg[str(s)] = agg.get(str(s), 0.0) + float(v)
+        except (TypeError, ValueError):
+            continue
+    points = [{"period": k, "value": v} for k, v in agg.items()]
+    if len(points) < 2:
+        return None
+    return points
+
+
 def _extract_chart_data(sql_result: List[Dict[str, Any]]) -> Optional[List[Dict[str, Any]]]:
     """Case A: если sql_result уже является временным рядом (несколько периодов),
     формирует структурированный chart_data [{period, value}, ...]."""
@@ -181,8 +241,7 @@ def _extract_chart_data(sql_result: List[Dict[str, Any]]) -> Optional[List[Dict[
         None,
     )
     value_key = next(
-        (k for k, v in row.items()
-         if k != period_key and isinstance(v, (int, float))),
+        (k for k, v in row.items() if k != period_key and _is_chart_number(v)),
         None,
     )
     if not period_key or not value_key:
@@ -264,6 +323,7 @@ class AgentResult:
     waiting_options: Optional[List[str]] = field(default_factory=list)
     chart_available: bool = False
     chart_data: Optional[List[Dict[str, Any]]] = None
+    chart_type: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -284,6 +344,7 @@ class AgentResult:
             "waiting_options": self.waiting_options,
             "chart_available": self.chart_available,
             "chart_data": self.chart_data,
+            "chart_type": self.chart_type,
         }
 
 
@@ -363,7 +424,15 @@ class LangGraphAgent:
             answer = ""
 
         # Case A: если результат уже является временным рядом — отдаём chart_data сразу.
-        chart_data = _extract_chart_data(sql_result)
+        # При явном запросе «по поставщикам» сначала пробуем агрегировать
+        # sql_result по поставщику (если codegen уже сгруппировал данные).
+        chart_request = final_state.get("chart_request") or {}
+        if chart_request.get("group_by") == "supplier":
+            chart_data = _extract_chart_data_by_supplier(sql_result)
+            if chart_data is None:
+                chart_data = _extract_chart_data(sql_result)
+        else:
+            chart_data = _extract_chart_data(sql_result)
         # Кнопка доступна, если есть что резолвить (item/supplier) или уже есть chart_data.
         chart_available = (
             chart_data is not None
@@ -395,6 +464,7 @@ class LangGraphAgent:
             waiting_options=waiting_options,
             chart_available=chart_available,
             chart_data=chart_data,
+            chart_type=chart_request.get("chart_type"),
         )
 
     async def run(
@@ -468,6 +538,7 @@ class LangGraphAgent:
             "conversation_history": conversation_history or [],
             "entity_candidates": [],
             "entities_for_prompt": None,
+            "chart_request": None,
             "query_type": None,
             "entities": [],
             "relevant_sheets": [],
@@ -517,6 +588,9 @@ class LangGraphAgent:
         result = self._finalize(
             final_state, question, request_id, thread_id, start_time, response_mode
         )
+
+        # Явный запрос графика: строим, если chart_data ещё не сформирован.
+        await self._apply_chart_request(result, final_state, thread_id)
 
         # Кэшируем только успешные завершённые ответы.
         if (
@@ -610,6 +684,9 @@ class LangGraphAgent:
             final_state, question, request_id, thread_id, start_time, response_mode
         )
 
+        # Явный запрос графика: строим, если chart_data ещё не сформирован.
+        await self._apply_chart_request(result, final_state, thread_id)
+
         if result.sql_query and result.status == "success" and question:
             try:
                 await query_cache_service.store(
@@ -628,16 +705,61 @@ class LangGraphAgent:
 
         return result
 
+    async def _apply_chart_request(
+        self,
+        result: AgentResult,
+        final_state: Dict[str, Any],
+        thread_id: Optional[str],
+    ) -> None:
+        """Строит график, если пользователь явно попросил («построй график …»).
+
+        Chart_data уже мог быть сформирован в _finalize из sql_result; здесь —
+        фолбэк: лёгкий SQL по checkpoint-контексту (группировка по месяцам
+        или по поставщикам) без повторного прохода через LLM.
+        """
+        chart_request = final_state.get("chart_request")
+        if not chart_request or not thread_id:
+            return
+        if result.status in ("failed", STATUS_WAITING):
+            return
+        if result.chart_data is not None:
+            return
+
+        chart_data, chart_err = await self.build_chart(
+            thread_id, chart_request=chart_request
+        )
+        if chart_data:
+            result.chart_data = chart_data
+            result.chart_available = True
+            result.chart_type = chart_request.get("chart_type")
+            # Ответ-объяснение графика формируется в answer_node (CHART_SYSTEM_PROMPT),
+            # поэтому дополнительных приписок к answer не добавляем.
+            logger.info(
+                "LangGraphAgent [{}]: chart built on request ({})",
+                result.request_id[:8],
+                chart_request,
+            )
+        else:
+            logger.info(
+                "LangGraphAgent [{}]: chart request failed: {}",
+                result.request_id[:8],
+                chart_err,
+            )
+
     async def build_chart(
         self,
         thread_id: str,
+        chart_request: Optional[Dict[str, str]] = None,
     ) -> tuple[List[Dict[str, Any]], Optional[str]]:
         """Case B: лёгкий timeseries по уже резолвнутому контексту из checkpoint.
 
         Не проходит через Router/Entity Resolver и не дёргает LLM — берём последний
         checkpoint по ``thread_id`` и извлекаем фильтры (item/supplier/price_type)
-        из уже выполненного ``sql_query`` (надёжнее, чем entity-candidates), строя
-        временной ряд по всем месяцам.
+        из уже выполненного ``sql_query`` (надёжнее, чем entity-candidates).
+
+        Без ``chart_request`` — ряд по месяцам (кнопка в UI). С ``chart_request`` —
+        явный запрос пользователя: ``group_by='period'`` (по месяцам) или
+        ``group_by='supplier'`` (по поставщикам).
         """
         graph = await self._get_graph()
         config = {"configurable": {"thread_id": thread_id}}
@@ -648,6 +770,8 @@ class LangGraphAgent:
         except Exception as exc:
             logger.warning("build_chart [{}]: get_state failed: {}", thread_id[:8], exc)
             return [], "Не удалось получить контекст диалога"
+
+        group_by = (chart_request or {}).get("group_by", "period")
 
         domain = values.get("domain")
         table = "mart.metrics" if getattr(domain, "value", None) == "metrics" else "mart.price_facts"
@@ -664,6 +788,13 @@ class LangGraphAgent:
         supplier = filters.get("supplier")
         price_type = filters.get("price_type")
 
+        # Группировка по поставщикам: сам поставщик из фильтров убираем
+        # (иначе получится одна точка), нужен фильтр по товару.
+        if group_by == "supplier":
+            supplier = None
+            if not category:
+                return [], "Нет контекста для построения графика по поставщикам"
+
         if not category and not supplier:
             return [], "Нет контекста для построения графика"
 
@@ -671,25 +802,16 @@ class LangGraphAgent:
         category_value = category
         supplier_value = supplier
 
+        where = []
+        params: Dict[str, Any] = {}
         if table == "mart.metrics":
-            where = []
-            params: Dict[str, Any] = {}
             if category_value:
-                where.append("dimension ILIKE :cat")
+                where.append("fp.dimension ILIKE :cat")
                 params["cat"] = f"%{category_value}%"
             if supplier_value:
-                where.append("supplier ILIKE :sup")
+                where.append("fp.supplier ILIKE :sup")
                 params["sup"] = f"%{supplier_value}%"
-            where_sql = f"WHERE {' AND '.join(where)}" if where else ""
-            sql = f"""
-SELECT period, AVG(value) AS value
-FROM mart.metrics
-{where_sql}
-GROUP BY period
-ORDER BY period"""
         else:
-            where = []
-            params = {}
             if category_value:
                 where.append("fp.item_name ILIKE :cat")
                 params["cat"] = f"%{category_value}%"
@@ -699,13 +821,8 @@ ORDER BY period"""
             if price_type:
                 where.append("fp.price_type = :ptype")
                 params["ptype"] = price_type
-            where_sql = f"WHERE {' AND '.join(where)}" if where else ""
-            sql = f"""
-SELECT fp.sheet_period AS period, AVG(fp.value) AS value
-FROM mart.price_facts fp
-{where_sql}
-GROUP BY fp.sheet_period
-ORDER BY fp.sheet_period"""
+        where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+        sql, params = build_chart_sql(table, where_sql, params, group_by)
 
         from src.core.db.database import async_session_maker
         from sqlalchemy import text
