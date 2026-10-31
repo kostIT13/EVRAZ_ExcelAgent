@@ -1,6 +1,6 @@
 from __future__ import annotations
 import json
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 from src.core.logging_settings import logger
 from src.services.agent.graph_state import GraphState, NODE_ANSWER
 from src.services.agent.prompts import build_memory_context
@@ -28,6 +28,31 @@ ANSWER_SYSTEM_PROMPT = """Ты — финальный ассистент по д
 Вопрос: "Средняя цена всех видов медного лома по Сплав-21 в декабре 2025?"
 Результат: [{"средняя_цена": 759991.4}]
 Ответ: "Средняя цена всех видов медного лома по данным компании Сплав-21 в декабре 2025 года составила 759 991.4 руб./тн."
+"""
+
+CHART_SYSTEM_PROMPT = """Ты — ассистент, который только что построил график по данным о ценах на цветной лом.
+
+У тебя есть:
+1. Исходный запрос пользователя (просьба построить график)
+2. SQL-запрос (что было выполнено)
+3. Данные — точки построенного графика
+
+Твоя задача — КРАТКО и ПО ДЕЛУ объяснить построенный график на русском языке:
+- Что изображено: какой показатель (цена/средняя цена и т.п.), какой товар, какая
+  группировка (по месяцам — динамика, по поставщикам — сравнение).
+- Главный вывод: динамика (цена растёт/падает/стабильна) или лидер/аутсайдер
+  среди поставщиков.
+- Минимум и максимум с числами и единицами (руб/тн), если они есть в данных.
+
+Требования:
+- 1-3 предложения, без markdown и без перечисления полей JSON.
+- Используй ТОЛЬКО данные из точек графика, ничего не выдумывай.
+- Не пиши «на графике видно то-то» про то, чего нет в данных.
+- НЕ отвечай «только число» — пользователь просил график, объясни его словами.
+
+Пример:
+Данные: [{"месяц": "2025-01", "средняя_цена": 100000}, {"месяц": "2025-02", "средняя_цена": 105000}]
+Ответ: "Линейный график динамики средней цены на медь по месяцам: за январь–февраль 2025 цена выросла со 100 000 до 105 000 руб/тн."
 """
 
 CONCISE_SYSTEM_PROMPT = """Ты — краткий ассистент по данным о ценах на цветной лом.
@@ -88,6 +113,35 @@ def _has_digit(text: str) -> bool:
     return any(ch.isdigit() for ch in (text or ""))
 
 
+def _chart_fallback_answer(sql_result: list, chart_request: Optional[Dict[str, str]]) -> str:
+    """Детерминированное описание графика, если LLM не смог сформулировать.
+
+    Используется при графическом запросе вместо общего fallback-ответа,
+    чтобы пользователь получил внятное пояснение к построенному графику.
+    """
+    chart_request = chart_request or {}
+    group_by = chart_request.get("group_by", "period")
+    kind = (
+        "Линейный график"
+        if chart_request.get("chart_type") == "line"
+        else "Столбчатая диаграмма"
+    )
+    grouping = "по месяцам" if group_by == "period" else "по поставщикам"
+    nums = [
+        v
+        for row in sql_result or []
+        if isinstance(row, dict)
+        for v in row.values()
+        if isinstance(v, (int, float)) and not isinstance(v, bool)
+    ]
+    if nums:
+        return (
+            f"{kind} {grouping}: точек — {len(nums)}, "
+            f"минимум — {min(nums):,.2f}, максимум — {max(nums):,.2f} (руб/тн)."
+        ).replace(",", " ")
+    return f"Построен {kind.lower()} {grouping}."
+
+
 async def answer_node(
     state: GraphState,
     llm: Optional[LLMClient] = None,
@@ -101,6 +155,8 @@ async def answer_node(
     sql_query = state.get("sql_query", "")
     response_mode = state.get("response_mode", "detailed")
     is_concise = response_mode == "concise"
+    chart_request = state.get("chart_request")
+    is_chart_request = bool(chart_request)
 
     logger.info(
         "Answer Node [{}]: finalizing answer ({} chars, mode={})",
@@ -115,7 +171,47 @@ async def answer_node(
     else:
         deterministic = answer
 
-    if sql_result and question:
+    if is_chart_request and sql_result and question:
+        # Графический запрос: объясняем построенный график, а не отвечаем числом
+        # (игнорируем concise-режим — «только число» к графику не имеет смысла).
+        try:
+            user_message = f"""Запрос пользователя: {question}
+
+SQL-запрос:
+{sql_query}
+
+Данные графика ({len(sql_result)} точек):
+{json.dumps(sql_result[:15], ensure_ascii=False, indent=2, default=str)}
+
+Кратко объясни построенный график."""
+            messages = [
+                {"role": "system", "content": CHART_SYSTEM_PROMPT},
+                {"role": "user", "content": user_message},
+            ]
+            generated = (await llm.chat(
+                messages=messages,
+                model=None,
+                temperature=0.2,
+                max_tokens=256,
+            )).strip()
+
+            if generated and len(generated) > 10:
+                answer = generated
+                logger.info(
+                    "Answer Node [{}]: chart explanation generated ({} chars)",
+                    request_id,
+                    len(answer),
+                )
+            else:
+                answer = _chart_fallback_answer(sql_result, chart_request)
+        except Exception as exc:
+            logger.warning(
+                "Answer Node [{}]: chart explanation failed ({}), using fallback",
+                request_id,
+                exc,
+            )
+            answer = _chart_fallback_answer(sql_result, chart_request)
+    elif sql_result and question:
         # Пытаемся сгенерировать ответ по вопросу + данным в выбранном режиме.
         try:
             system_prompt = (
@@ -202,6 +298,7 @@ SQL-запрос:
         "answer_length": len(answer),
         "confidence": state.get("confidence", 0.0),
         "response_mode": response_mode,
+        "chart_request": chart_request,
     }
 
     logger.info(
