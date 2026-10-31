@@ -170,7 +170,9 @@ export default function ChatMessage({
         </div>
       )}
 
-      {chartData && chartData.length > 0 && <ResultChart data={chartData} />}
+      {chartData && chartData.length > 0 && (
+        <ResultChart data={chartData} chartType={meta?.chart_type ?? undefined} />
+      )}
 
       {showClarify && onClarify && (
         <form
