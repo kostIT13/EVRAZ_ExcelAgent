@@ -3,7 +3,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from benchmark_core import build_parser, parse_questions, run_benchmark  
+from benchmark_core import build_parser, default_results_path, parse_questions, run_benchmark
 
 FIRST_N = 5
 
@@ -11,7 +11,7 @@ FIRST_N = 5
 def main() -> int:
     parser = build_parser(
         "Бенчмарк: первые 5 запросов из docs/request_examples.txt",
-        default_json="benchmark/results_first6.json",
+        default_json=default_results_path("run_first5"),
     )
     args = parser.parse_args()
 
