@@ -48,6 +48,7 @@ def _build_agent_response(result: AgentResult, response_mode: str = "detailed") 
         waiting_question=waiting,
         chart_available=result.chart_available,
         chart_data=result.chart_data,
+        chart_type=result.chart_type,
     )
 
 
