@@ -10,6 +10,13 @@ from typing import Any, Dict, List, Optional
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SOURCE = ROOT / "docs" / "request_examples.txt"
+RESULTS_DIR = ROOT / "benchmark" / "results"
+
+
+def default_results_path(prefix: str) -> str:
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    return str(RESULTS_DIR / f"{prefix}_{stamp}.json")
 
 EXPECTED_OVERRIDES: Dict[str, float] = {
     "разница (дельта) между максимальной и минимальной ценой на Лом меди кусок": 141346.5,
@@ -130,6 +137,12 @@ def extract_number(text: str) -> Optional[float]:
         s = m.group(0).strip()
         negative = s.startswith("-")
         digits = s.lstrip("+-").replace(" ", "").replace(",", ".")
+        # Дефис перед числом, прилепленный к букве, — часть названия
+        # («Сплав-21», «ВРП-1»), а не знак минус: пропускаем, иначе
+        # парсер принимает «-21» из «Сплав-21» за ответ.
+        start = m.start()
+        if negative and start > 0 and text[start - 1].isalpha():
+            continue
         # Пропускаем «годы» вида 2025 (4 цифры без разделителей)
         if re.fullmatch(r"\d{4}", digits) and 1900 <= float(digits) <= 2100:
             continue
@@ -202,6 +215,62 @@ def check(
     if expected == 0:
         return abs(actual) < 1.0
     return abs(actual - expected) / abs(expected) * 100 <= tol_pct
+
+
+def _fmt_num(v: Optional[float]) -> str:
+    if v is None:
+        return "—"
+    s = f"{v:,.2f}".replace(",", " ")
+    if s.endswith(".00"):
+        s = s[:-3]
+    return s
+
+
+def _render_text_report(
+    results: List[Dict[str, Any]],
+    total: int,
+    passed: int,
+    failed: int,
+    skipped: int,
+    rate: float,
+    mode: str,
+) -> str:
+    """Человекочитаемый отчёт бенчмарка (.txt)."""
+    lines: List[str] = []
+    lines.append("=" * 78)
+    lines.append("ОТЧЁТ БЕНЧМАРКА EVRAZ AGENT")
+    lines.append(f"Дата: {time.strftime('%Y-%m-%d %H:%M:%S')} | Режим: {mode}")
+    lines.append("=" * 78)
+    lines.append(
+        f"Итог: {passed} из {total} прошло | провалено: {failed} | "
+        f"пропущено (нечисловые): {skipped} | PASS RATE: {rate:.1f}%"
+    )
+    lines.append("")
+    for r in results:
+        if r.get("error"):
+            marker = "ERROR"
+        elif r.get("passed") is True:
+            marker = "OK"
+        elif r.get("passed") is None:
+            marker = "SKIP"
+        else:
+            marker = "FAIL"
+        lines.append("-" * 78)
+        latency = r.get("latency_ms")
+        lines.append(
+            f"[{r['id']:02d}] {marker} | статус: {r.get('status', '?')} | "
+            f"{latency if latency is not None else '—'} мс"
+        )
+        lines.append(f"Вопрос: {r['question']}")
+        lines.append(
+            f"Эталон: {_fmt_num(r.get('expected'))} | "
+            f"Ответ агента (число): {_fmt_num(r.get('actual_number'))}"
+        )
+        lines.append(f"Ответ: {r.get('answer') or '—'}")
+        if r.get("error"):
+            lines.append(f"Ошибка: {r['error']}")
+    lines.append("=" * 78)
+    return "\n".join(lines) + "\n"
 
 
 def run_benchmark(
@@ -283,6 +352,14 @@ def run_benchmark(
             encoding="utf-8",
         )
         print(f"Результаты сохранены: {json_out}")
+
+        # Человекочитаемый отчёт (.txt) рядом с JSON.
+        txt_out = json_out.with_suffix(".txt")
+        txt_out.write_text(
+            _render_text_report(results, total, passed, failed, skipped, rate, mode),
+            encoding="utf-8",
+        )
+        print(f"Читаемый отчёт:     {txt_out}")
 
     return 0 if failed == 0 else 1
 
