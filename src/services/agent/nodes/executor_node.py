@@ -1,5 +1,8 @@
 from __future__ import annotations
 import re
+import uuid
+from datetime import date, datetime
+from decimal import Decimal
 from typing import Any, Dict, List, Optional, Set
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,6 +13,25 @@ from src.services.agent.graph_state import GraphState, NODE_EXECUTOR
 MAX_RESULT_ROWS = 100
 
 QUERY_TIMEOUT_SECONDS = 30
+
+
+def _json_safe(value: Any) -> Any:
+    """Приводит значения из БД к JSON-сериализуемым.
+
+    NUMERIC-колонки приходят как Decimal — без конверсии падают
+    json-сериализаторы (query_cache, chart-экстракторы).
+    """
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, uuid.UUID):
+        return str(value)
+    return value
+
+
+def _sanitize_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [{k: _json_safe(v) for k, v in row.items()} for row in rows]
 
 
 def _extract_iliase_from_sql(sql: str) -> List[str]:
@@ -332,7 +354,9 @@ async def _execute_sql(
             if result.returns_rows:
                 columns = result.keys()
                 rows = result.fetchmany(MAX_RESULT_ROWS)
-                rows_list = [dict(zip(columns, row)) for row in rows]
+                rows_list = _sanitize_rows(
+                    [dict(zip(columns, row)) for row in rows]
+                )
                 logger.info(
                     "Executor Node [{}]: query returned {} rows",
                     request_id,
