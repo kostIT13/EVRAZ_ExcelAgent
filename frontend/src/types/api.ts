@@ -99,6 +99,7 @@ export interface AskResponse {
   thread_id?: string | null;
   chart_available?: boolean;
   chart_data?: ChartPoint[] | null;
+  chart_type?: 'line' | 'bar' | null;
 }
 
 export interface ChartPoint {
