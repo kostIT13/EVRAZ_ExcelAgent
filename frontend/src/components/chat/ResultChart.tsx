@@ -6,13 +6,15 @@ Chart.register(...registerables);
 
 interface ResultChartProps {
   data: unknown[];
+  /** Явный тип графика из запроса пользователя («линейный график»/«столбчатая диаграмма»). */
+  chartType?: 'line' | 'bar';
 }
 
 function isNumericString(v: unknown): boolean {
   return typeof v === 'string' && !Number.isNaN(parseFloat(v));
 }
 
-export default function ResultChart({ data }: ResultChartProps) {
+export default function ResultChart({ data, chartType }: ResultChartProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const chartRef = useRef<Chart | null>(null);
 
@@ -47,19 +49,21 @@ export default function ResultChart({ data }: ResultChartProps) {
     if (labels.length === 0 || values.every((v) => v === 0)) return;
 
     const isTimeSeries = labels.some((l) => /^\d{4}-\d{2}$/.test(l));
+    // Приоритет — тип, запрошенный пользователем; иначе авто-определение.
+    const resolvedType: 'line' | 'bar' = chartType ?? (isTimeSeries ? 'line' : 'bar');
     const colors = values.map((_, i) => CHART_COLORS[i % CHART_COLORS.length]);
 
     chartRef.current?.destroy();
 
     chartRef.current = new Chart(canvas, {
-      type: isTimeSeries ? 'line' : 'bar',
+      type: resolvedType,
       data: {
         labels,
         datasets: [
           {
             label: valueKey,
             data: values,
-            ...(isTimeSeries
+            ...(resolvedType === 'line'
               ? {
                   borderColor: EVRAZ_COLORS.gold,
                   backgroundColor: 'rgba(200, 168, 78, 0.08)',
