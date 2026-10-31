@@ -2,12 +2,36 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from datetime import date, datetime
+from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
+from uuid import UUID
 from sqlalchemy import select, func, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.db.database import async_session_maker
 from src.core.db.models import QueryCache
 from src.core.logging_settings import logger
+
+
+def _json_safe(value: Any) -> Any:
+    """Приводит значения результата к JSON-сериализуемым (Decimal/date/UUID)."""
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, UUID):
+        return str(value)
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    return value
+
+
+def _json_safe_result(result: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if result is None:
+        return None
+    return {k: _json_safe(v) for k, v in result.items()}
 
 
 def _normalize_question(question: str) -> str:
@@ -79,6 +103,7 @@ class QueryCacheService:
                 select(QueryCache).where(QueryCache.question_hash == question_hash)
             )
             existing_record = existing.scalar_one_or_none()
+            result = _json_safe_result(result)
             if existing_record is not None:
                 # Обновляем существующую запись
                 existing_record.sql_query = sql_query
