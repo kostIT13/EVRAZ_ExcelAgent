@@ -31,7 +31,7 @@ services:
     volumes:
       - ./data:/app/data
       - ./src:/app/src
-    command: uvicorn src.main:app --host 0.0.0.0 --port 8000
+    command: sh -c "alembic upgrade head && uvicorn src.main:app --host 0.0.0.0 --port 8000"
     networks:
       - app_network
 
