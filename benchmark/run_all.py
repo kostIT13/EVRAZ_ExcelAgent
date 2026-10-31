@@ -3,13 +3,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from benchmark_core import build_parser, parse_questions, run_benchmark 
+from benchmark_core import build_parser, default_results_path, parse_questions, run_benchmark
 
 
 def main() -> int:
     parser = build_parser(
         "Бенчмарк: все запросы из docs/request_examples.txt",
-        default_json="benchmark/results_all.json",
+        default_json=default_results_path("run_all"),
     )
     parser.add_argument(
         "--limit",
