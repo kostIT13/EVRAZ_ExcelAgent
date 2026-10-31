@@ -13,6 +13,7 @@ from src.services.agent.graph_state import (
     NODE_PLANNER,
 )
 from src.services.agent.prompts import build_memory_context
+from src.services.agent.chart_intent import parse_chart_intent
 from src.services.agent.structured_schemas import ClassifierResult
 from src.services.llm.llm_client import LLMClient
 from src.services.llm.structured import ainvoke_structured, get_structured_llm
@@ -103,6 +104,18 @@ async def classifier_node(
             exc,
         )
         state["entity_candidates"] = []
+
+    # Графический интент: «построй линейный график … по месяцам» /
+    # «построй столбчатую диаграмму … по поставщикам». Детерминированный
+    # regex-парсер без LLM — дёшево и стабильно.
+    chart_request = parse_chart_intent(question)
+    if chart_request:
+        state["chart_request"] = chart_request
+        logger.info(
+            "Classifier Node [{}]: chart intent detected: {}",
+            request_id,
+            chart_request,
+        )
 
     # Сохраняем резолвнутый контекст для лёгкого /chart (переиспользуется из checkpoint).
     state["last_category_id"] = _pick_best_candidate(
@@ -201,6 +214,7 @@ async def classifier_node(
         "domain": state.get("domain", Domain.GENERIC).value,
         "entities": state["entities"],
         "relevant_sheets": state["relevant_sheets"],
+        "chart_request": state.get("chart_request"),
     }
 
     return state
