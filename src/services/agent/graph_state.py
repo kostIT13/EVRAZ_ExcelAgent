@@ -38,6 +38,10 @@ class GraphState(TypedDict, total=False):
     last_semantic_keys: List[str]
     last_supplier_filter: Optional[str]
 
+    # Графический интент («построй линейный график … по месяцам»):
+    # {"chart_type": "line"|"bar", "group_by": "period"|"supplier"} или None.
+    chart_request: Optional[Dict[str, str]]
+
     query_type: QueryType
     entities: List[str]
     relevant_sheets: List[Dict[str, Any]]
