@@ -176,6 +176,11 @@ class AskResponse(BaseModel):
         default=None,
         description="Данные графика [{period, value}, ...], если ответ уже временной ряд",
     )
+    chart_type: Optional[str] = Field(
+        default=None,
+        pattern="^(line|bar)$",
+        description="Тип графика из запроса пользователя: line (линейный) / bar (столбчатая)",
+    )
 
 
 class ChartRequest(BaseModel):
