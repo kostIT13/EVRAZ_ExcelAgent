@@ -56,16 +56,28 @@ CLASSIFIER_SYSTEM_PROMPT = """Ты — классификатор запросо
 
 
 async def get_all_sheets() -> List[Dict[str, Any]]:
+    from src.core.db.models import File as FileModel
+
     async with async_session_maker() as session:
         result = await session.execute(
-            select(Sheet.id, Sheet.normalized_name, Sheet.description)
+            select(
+                Sheet.id,
+                Sheet.normalized_name,
+                Sheet.original_name,
+                Sheet.period,
+                Sheet.description,
+                FileModel.filename.label("file_name"),
+            ).join(FileModel, Sheet.file_id == FileModel.id)
         )
         sheets = []
         for row in result.all():
             sheets.append({
                 "id": row.id,
                 "name": row.normalized_name,
+                "original_name": row.original_name,
+                "period": row.period or "",
                 "description": row.description or "",
+                "file_name": row.file_name,
             })
         return sheets
 
