@@ -324,6 +324,7 @@ class AgentResult:
     chart_available: bool = False
     chart_data: Optional[List[Dict[str, Any]]] = None
     chart_type: Optional[str] = None
+    sources: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -346,6 +347,62 @@ class AgentResult:
             "chart_data": self.chart_data,
             "chart_type": self.chart_type,
         }
+
+
+async def _sources_from_cached_sql(sql_query: str) -> List[Dict[str, Any]]:
+    """Восстанавливает источники (файл · лист · период) для ответа из кэша.
+
+    Периоды берутся из закэшированного SQL ('2025-MM'), листы — из БД.
+    """
+    import re
+
+    from sqlalchemy import select
+
+    from src.core.db.database import async_session_maker
+    from src.core.db.models import File as FileModel
+    from src.core.db.models import Sheet as SheetModel
+
+    periods = sorted(set(re.findall(r"'(\d{4}-\d{2})'", sql_query or "")))
+    if not periods:
+        return []
+
+    try:
+        async with async_session_maker() as session:
+            result = await session.execute(
+                select(
+                    SheetModel.id,
+                    SheetModel.normalized_name,
+                    SheetModel.original_name,
+                    SheetModel.period,
+                    FileModel.filename,
+                )
+                .join(FileModel, SheetModel.file_id == FileModel.id)
+                .where(SheetModel.period.in_(periods))
+                .order_by(SheetModel.period)
+            )
+            rows = result.all()
+    except Exception as exc:
+        logger.warning("Sources from cached SQL failed: {}", exc)
+        return []
+
+    return [
+        {
+            "chunk": " · ".join(
+                part
+                for part in (
+                    row.filename,
+                    f"лист «{row.original_name or row.normalized_name}»",
+                    row.period or "",
+                )
+                if part
+            ),
+            "score": 1.0,
+            "source_type": "sheet",
+            "source_id": row.id,
+            "rank": idx + 1,
+        }
+        for idx, row in enumerate(rows)
+    ]
 
 
 class LangGraphAgent:
@@ -441,6 +498,26 @@ class LangGraphAgent:
             or bool(final_state.get("last_supplier_filter"))
         )
 
+        # Источники (Ф-2/Ф-9): файл · лист · период по релевантным листам из classifier.
+        sources = [
+            {
+                "chunk": " · ".join(
+                    part
+                    for part in (
+                        s.get("file_name"),
+                        f"лист «{s.get('original_name') or s.get('name')}»",
+                        s.get("period") or "",
+                    )
+                    if part
+                ),
+                "score": 1.0,
+                "source_type": "sheet",
+                "source_id": s.get("id", 0),
+                "rank": idx + 1,
+            }
+            for idx, s in enumerate(final_state.get("relevant_sheets", []))
+        ]
+
         return AgentResult(
             answer=answer,
             confidence=confidence,
@@ -454,6 +531,7 @@ class LangGraphAgent:
             retry_count=final_state.get("retry_count", 0),
             status=status,
             from_cache=from_cache,
+            sources=sources,
             thread_id=thread_id,
             waiting_question={
                 "question": waiting_question,
@@ -513,6 +591,7 @@ class LangGraphAgent:
                 observe_ask_finish()
             except Exception:
                 pass
+            cached_sources = await _sources_from_cached_sql(cached["sql_query"])
             return AgentResult(
                 answer=cached.get("result", {}).get("formatted_answer", "Данные из кэша."),
                 confidence=1.0,
@@ -527,6 +606,7 @@ class LangGraphAgent:
                 status="success",
                 from_cache=True,
                 thread_id=thread_id,
+                sources=cached_sources,
             )
 
         initial_state: GraphState = {
