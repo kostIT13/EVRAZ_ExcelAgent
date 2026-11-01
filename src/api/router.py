@@ -61,7 +61,7 @@ async def upload_file(
 
     try:
         from src.services.excel.ingestion_queue import ingestion_queue
-        file_id = await ingestion_queue.enqueue(tmp_path)
+        file_id = await ingestion_queue.enqueue(tmp_path, original_name=file.filename)
         file_record = await service.get_file(file_id)
         logger.info("File queued for processing: id={}, filename={}", file_id, file.filename)
         return UploadResponse(
