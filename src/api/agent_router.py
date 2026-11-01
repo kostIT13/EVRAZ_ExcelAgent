@@ -7,6 +7,7 @@ from src.api.schemas import (
     AskResponse,
     ChartRequest,
     ChartResponse,
+    SourceInfo,
     WaitForInputInfo,
 )
 from src.api.security import verify_api_key
@@ -33,7 +34,9 @@ def _build_agent_response(result: AgentResult, response_mode: str = "detailed") 
     return AskResponse(
         answer=result.answer,
         confidence=result.confidence,
-        sources=[],
+        sources=[
+            SourceInfo.model_validate(s) for s in getattr(result, "sources", [])
+        ],
         request_id=result.request_id,
         latency_ms=result.latency_ms,
         mode_used="agent",
