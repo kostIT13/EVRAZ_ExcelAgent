@@ -27,11 +27,15 @@ class IngestionQueue:
             except asyncio.CancelledError:
                 pass
 
-    async def enqueue(self, file_path: Path) -> int:
+    async def enqueue(self, file_path: Path, original_name: Optional[str] = None) -> int:
         service = ExcelIngestionService()
-        file_record = await service.create_pending_file(file_path)
+        file_record = await service.create_pending_file(file_path, original_name=original_name)
         file_id = file_record.id
-        self._status[file_id] = {"status": "uploaded", "path": str(file_path)}
+        self._status[file_id] = {
+            "status": "uploaded",
+            "path": str(file_path),
+            "original_name": original_name,
+        }
         await self.start()
         await self._queue.put(file_id)
         return file_id
@@ -55,12 +59,16 @@ class IngestionQueue:
                 self._queue.task_done()
 
     async def _process(self, file_id: int) -> None:
-        path = self._status[file_id].get("path")
+        entry = self._status.get(file_id, {})
+        path = entry.get("path")
+        original_name = entry.get("original_name")
         self._status[file_id] = {"status": "processing", "started_at": time.time()}
 
         service = ExcelIngestionService()
         if path:
-            file_record = await service.process_file(Path(str(path)))
+            file_record = await service.process_file(
+                Path(str(path)), original_name=original_name if isinstance(original_name, str) else None
+            )
         else:
             file_record = await service.process_existing(file_id)
 
