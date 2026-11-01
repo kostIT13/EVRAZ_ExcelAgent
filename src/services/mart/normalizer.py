@@ -375,6 +375,13 @@ async def _find_confirmed_template(
     )
     template = result.scalar_one_or_none()
     if template and template.schema_json:
+        logger.info(
+            "Template reuse: sheet '{}' (file_id={}) matched confirmed template "
+            "fingerprint={} — разбор переиспользован",
+            sheet.original_name,
+            sheet.file_id,
+            fingerprint[:12],
+        )
         try:
             return SheetSchema.model_validate(template.schema_json)
         except Exception:
