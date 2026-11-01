@@ -23,9 +23,9 @@ class ExcelIngestionService:
                 await session.commit()
             return result
 
-    async def process_file(self, file_path: Path) -> File:
+    async def process_file(self, file_path: Path, original_name: Optional[str] = None) -> File:
         async def _process(repo):
-            file_record = await repo.process_file(file_path)
+            file_record = await repo.process_file(file_path, original_name=original_name)
 
             stats = await normalize_file_to_mart(file_record.id, session=repo.session)
 
@@ -40,12 +40,12 @@ class ExcelIngestionService:
 
         return await self._run_with_session(_process)
 
-    async def create_pending_file(self, file_path: Path) -> File:
+    async def create_pending_file(self, file_path: Path, original_name: Optional[str] = None) -> File:
         from src.core.excel.parser import ExcelParser
 
         async def _create(repo):
             parsed = ExcelParser(file_path).parse()
-            return await repo.save_pending_file(parsed)
+            return await repo.save_pending_file(parsed, original_name=original_name)
 
         return await self._run_with_session(_create)
 
