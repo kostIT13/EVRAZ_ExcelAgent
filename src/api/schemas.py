@@ -225,3 +225,23 @@ class TraceListResponse(BaseModel):
     total: int = Field(default=0, description="Всего записей под фильтры")
     limit: int = Field(default=20, description="Размер страницы")
     offset: int = Field(default=0, description="Смещение страницы")
+
+
+class LLMConfigResponse(BaseModel):
+    """Текущая конфигурация LLM, которую использует бэкенд."""
+    model: str = Field(..., description="Имя основной LLM-модели (LLM_MODEL_PRIMARY)")
+    base_url: str = Field(..., description="Базовый URL LLM-провайдера")
+    temperature: float = Field(..., description="Температура по умолчанию (LLM_TEMPERATURE)")
+    max_tokens: int = Field(..., description="Лимит токенов на ответ (LLM_MAX_TOKENS)")
+    request_timeout_s: int = Field(..., description="Таймаут запроса к LLM, сек")
+    llm_max_retries: int = Field(
+        ..., description="HTTP-retry на уровне клиента LLM (MAX_RETRIES)"
+    )
+    graph_max_retry_count: int = Field(
+        ...,
+        description="Максимум graph-level retry кодогенерации/проверки (MAX_RETRY_COUNT)",
+    )
+    max_codegen_attempts: int = Field(
+        ...,
+        description="Максимум попыток генерации SQL внутри codegen-ноды",
+    )

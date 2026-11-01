@@ -8,6 +8,7 @@ from src.api.agent_router import router as agent_router
 from src.api.trace_router import router as trace_router
 from src.api.schema_router import router as schema_router
 from src.api.cache_router import router as cache_router
+from src.api.llm_router import router as llm_router
 from src.api.errors import register_exception_handlers
 from src.core.ratelimit import get_limiter
 from slowapi.errors import RateLimitExceeded
@@ -75,6 +76,7 @@ app.include_router(agent_router)
 app.include_router(trace_router)
 app.include_router(schema_router)
 app.include_router(cache_router)
+app.include_router(llm_router)
 
 
 @app.get("/health")
