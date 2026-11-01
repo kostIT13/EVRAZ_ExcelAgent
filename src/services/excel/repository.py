@@ -26,7 +26,7 @@ class SQLAlchemyExcelRepository(ExcelRepository):
         self.session = session
         self._entity_resolver = EntityResolver()
 
-    async def process_file(self, file_path: Path) -> File:
+    async def process_file(self, file_path: Path, original_name: Optional[str] = None) -> File:
         from src.core.excel.parser import ExcelParser
         from src.core.excel.normalize import ExcelNormalizer
         from src.core.excel.comment_extractor import extract_comments
@@ -49,7 +49,7 @@ class SQLAlchemyExcelRepository(ExcelRepository):
                 col_type = ExcelNormalizer.infer_column_type(header, sample_values)
                 logger.debug("Column '{}' → type={}, samples={}", header.col_name, col_type, sample_values[:3])
 
-        file_record = await self.save_parsed_file(parsed)
+        file_record = await self.save_parsed_file(parsed, original_name=original_name)
 
         try:
             comments = extract_comments(file_path)
@@ -93,13 +93,16 @@ class SQLAlchemyExcelRepository(ExcelRepository):
         logger.info("Deleted file id={}", file_id)
         return True
 
-    async def save_pending_file(self, parsed: ParsedFile) -> File:
+    async def save_pending_file(self, parsed: ParsedFile, original_name: Optional[str] = None) -> File:
+        # original_name — имя файла, переданное пользователем при загрузке через API
+        # (tmp_path имеет временное имя tempfile, которое нельзя показывать в UI).
+        display_name = original_name or parsed.filename
         result = await self.session.execute(
             select(File).where(File.file_hash == parsed.file_hash)
         )
         file_record = result.scalar_one_or_none()
         if file_record is not None:
-            file_record.filename = parsed.filename
+            file_record.filename = display_name
             file_record.total_sheets = len(parsed.sheets)
             file_record.status = "uploaded"
             file_record.error_message = None
@@ -107,7 +110,7 @@ class SQLAlchemyExcelRepository(ExcelRepository):
             return file_record
 
         file_record = File(
-            filename=parsed.filename,
+            filename=display_name,
             file_hash=parsed.file_hash,
             total_sheets=len(parsed.sheets),
             status="uploaded",
@@ -117,21 +120,24 @@ class SQLAlchemyExcelRepository(ExcelRepository):
         await self.session.refresh(file_record)
         return file_record
 
-    async def save_parsed_file(self, parsed: ParsedFile) -> File:
+    async def save_parsed_file(self, parsed: ParsedFile, original_name: Optional[str] = None) -> File:
+        # original_name — имя файла, переданное пользователем при загрузке через API
+        # (tmp_path имеет временное имя tempfile, которое нельзя показывать в UI).
+        display_name = original_name or parsed.filename
         result = await self.session.execute(
             select(File).where(File.file_hash == parsed.file_hash)
         )
         file_record = result.scalar_one_or_none()
         if file_record is None:
             file_record = File(
-                filename=parsed.filename,
+                filename=display_name,
                 file_hash=parsed.file_hash,
                 total_sheets=len(parsed.sheets),
                 status="processed",
             )
             self.session.add(file_record)
         else:
-            file_record.filename = parsed.filename
+            file_record.filename = display_name
             file_record.total_sheets = len(parsed.sheets)
             file_record.status = "processed"
             file_record.error_message = None
