@@ -50,7 +50,7 @@
    | `LLM_API_KEY` | API-ключ LLM |
    | `LLM_MODEL_PRIMARY` | основная модель (например `deepseek-ai/DeepSeek-V4-Flash`) |
    | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | учётные данные БД |
-   | `API_KEY` | API-ключ для `/files/*` и `/ask/*` (пусто = auth отключён в dev) |
+   | `API_KEY` | API-ключ для `/files/*`, `/ask/*`, `/cache/*`, `/llm/*` (пусто = auth отключён в dev) |
 
    Остальные параметры имеют разумные значения по умолчанию.
 

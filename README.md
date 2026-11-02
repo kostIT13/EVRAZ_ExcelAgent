@@ -70,6 +70,8 @@ read-only генерация SQL, диалоговая память и уточ�
 - **Prometheus-метрики** `/metrics` + JSON-сводка `/metrics/summary` (токены и стоимость LLM),
   расширенный журнал `query_logs` (трейсы узлов графа).
 - **Golden dataset** (pytest, marker `golden`) и **бенчмарк** запросов для контроля качества.
+- **Демо-страница ПМИ** (`/demo`) — интерактивный прогон чек-листа Приложения А ПМИ с вердиктами
+  и заметками по каждому пункту.
 
 ---
 
@@ -90,7 +92,7 @@ flowchart TD
         ING[Excel: парсер → repository → mart-normalizer]
         QUEUE["Ingestion Queue (async worker)"]
         AGENT[LangGraph агент: classifier → ... → answer]
-        ENT[Entity Resolution: rapidfuzz + pg_trgm + BM25]
+        ENT[Entity Resolution: rapidfuzz + pg_trgm]
         LLM_CLI[LLMClient: OpenAI-совместимый API]
         CACHE[/Query Cache/]
         METRICS[/Prometheus /metrics/]
@@ -276,6 +278,8 @@ docker compose exec service alembic upgrade head
 - `GET /trace` — список трейсов; `GET /trace/{request_id}` — детальный трейс выполнения графа.
 - `GET /metrics` — метрики Prometheus.
 - `GET /metrics/summary` — JSON-сводка метрик (запросы, latency, токены и стоимость LLM).
+- `GET /metrics/history?hours=24` — почасовые ряды запросов/латентности из `query_logs`.
+- `GET /llm/config` — текущая конфигурация LLM (модель, temperature, ретраи, таймауты).
 
 ---
 
@@ -706,7 +710,8 @@ erDiagram
   (item_name / supplier / sheet_period) через нечёткое сравнение (rapidfuzz) и триграммный поиск
   PostgreSQL (`pg_trgm`).
 - `query_cache.py` — кэш результатов разрешения.
-- `data/bm25_index.pkl` — BM25-индекс для поиска релевантных листов/сущностей (`top_k`).
+- Векторный и BM25-поиск не используются (удалены миграцией `d9f2c3a1e5b7_remove_vector_tables`) —
+  только pg_trgm + rapidfuzz, без индексов на диске.
 
 Entity-resolution выполняется на этапе Classifier/Planner и подставляет в промпт codegen реальные
 значения-кандидаты, что снижает галлюцинации названий.
@@ -745,7 +750,7 @@ Grafana (порт 3001) подключена к Prometheus через provisioni
 
 ## Auth и rate limiting
 
-- `/files/*`, `/ask/*` и `/cache/*` защищены API-ключом (заголовок `X-API-Key`); проверка через `verify_api_key`.
+- `/files/*`, `/ask/*`, `/cache/*` и `/llm/*` защищены API-ключом (заголовок `X-API-Key`); проверка через `verify_api_key`.
   Если `API_KEY` пуст — auth отключён (dev-режим).
 - Rate limiting через **slowapi** (`RATE_LIMIT_ASK`, `RATE_LIMIT_UPLOAD`, `RATE_LIMIT_CACHE_CLEAR`).
 
@@ -780,8 +785,9 @@ python -m pytest -m golden tests/   # эквивалентный способ о
 ```bash
 docker compose up -d                # PostgreSQL + сервисы
 docker compose exec service alembic upgrade head
-python scripts/load_demo_data.py --check-mart   # загрузка data/*.xlsx и проверка витрины
-python scripts/run_golden_report.py --json out/golden_report.json  # отчёт по точности (pass rate)
+# загрузить данные: data/data_proportional_prices.xlsx и data/Faked_List_proportional (2).xlsx
+# через UI (страница «Файлы») или POST /files/upload, дождаться статуса ready
+python scripts/run_golden_report.py --json scripts/golden_report.json  # отчёт по точности (pass rate)
 python scripts/seed_golden_db.py --drop         # загрузка эталонов в таблицу golden_dataset
 ```
 
@@ -808,7 +814,8 @@ python benchmark/run_first6.py
 python benchmark/run_all.py --top-k 20 --json benchmark/results.json
 ```
 
-Требования: запущенный сервер API и данные в PostgreSQL (`python scripts/load_demo_data.py`).
+Требования: запущенный сервер API и загруженные в PostgreSQL данные (Excel-файлы из `data/`
+через `POST /files/upload` или UI).
 Подробности — в [`benchmark/README.md`](benchmark/README.md).
 
 ---
@@ -817,10 +824,21 @@ python benchmark/run_all.py --top-k 20 --json benchmark/results.json
 
 | Файл | Что проверяет |
 |---|---|
-| `test_sql_compiler.py` | безопасный компилятор SQL |
-| `test_normalizer_dimension.py` | нормализация измерений |
+| `test_sql_compiler.py` / `test_sql_compiler_extra.py` | безопасный компилятор SQL |
+| `test_codegen_helpers.py` | детерминированные правки SQL в codegen |
 | `test_classifier_domain.py` | классификатор доменов |
+| `test_structured_schemas.py` | Pydantic-схемы структурированного вывода LLM |
+| `test_agent_helpers.py` | вспомогательные функции агента (графики, фильтры) |
+| `test_chart_intent.py` | детект запроса графика и SQL для timeseries |
+| `test_entity_resolver_helpers.py` | утилиты fuzzy-резолвера сущностей |
+| `test_query_cache.py` | кэш запросов |
+| `test_api_schemas.py` | Pydantic-схемы API |
+| `test_api_security.py` | API-key auth и rate limiting |
+| `test_config.py` | конфигурация (`Settings`) |
+| `test_benchmark_extract.py` | извлечение чисел для метрики бенчмарка |
+| `test_infra_helpers.py` | инфраструктурные утилиты (checkpointer и др.) |
 | `test_material_synonyms.py` | синонимы материалов |
+| `test_normalizer_dimension.py` | нормализация измерений |
 | `test_parser_header_detection.py` | определение шапки Excel |
 | `test_price_sheet_*.py` | unit-тесты пайплайна первой таблицы (парсер/структуратор/нормализация) |
 | `test_sheet_kind_detector_domain.py` | детектор типа листа (prices/matrix/generic) |
@@ -875,16 +893,17 @@ flowchart TD
 ```
 ├── alembic/                  # миграции БД
 ├── benchmark/                # бенчмарк запросов (run_first6, run_all, benchmark_core)
-├── data/                     # рабочие данные, bm25_index.pkl, примеры xlsx, pptx
+├── data/                     # рабочие данные: примеры xlsx, презентации
 ├── diagrams/                 # Mermaid-диаграммы (.mmd / .md)
 ├── docs/                     # презентация, примеры запросов
 ├── frontend/
 │   └── src/
 │       ├── api/              # клиент API
-│       ├── components/       # UI-компоненты (chat, files, layout, trace, ui)
+│       ├── components/       # UI-компоненты (chat, files, layout, pmi, trace, ui)
+│       ├── data/             # данные для демо-страницы (pmiAnnexA.ts)
 │       ├── hooks/            # хуки (useToast)
 │       ├── lib/              # утилиты
-│       ├── pages/            # Chat, Files, Dashboard, Metrics, Trace
+│       ├── pages/            # Chat, Demo, Files, Dashboard, Metrics, Trace
 │       └── types/            # TS-типы
 ├── scripts/                  # init-db, prometheus, grafana, mermaid, verify-скрипты
 ├── src/
@@ -923,6 +942,11 @@ flowchart TD
 | [`PROJECT.md`](PROJECT.md) | подробное техническое описание (архитектура, модули, БД) |
 | [`INSTRUCTIONS.md`](INSTRUCTIONS.md) | инструкция по запуску (Docker / локально, миграции, тесты) |
 | [`docs/PRESENTATION.md`](docs/PRESENTATION.md) | презентация проекта |
+| [`docs/PMI_demo_script.md`](docs/PMI_demo_script.md) | сценарий демонстрации ПМИ |
+| [`docs/PMI_run_plan.md`](docs/PMI_run_plan.md) | план прогона ПМИ |
+| [`docs/SPEECH_DEFENSE.md`](docs/SPEECH_DEFENSE.md) | речь для защиты проекта |
+| [`docs/request_examples.txt`](docs/request_examples.txt) | примеры запросов и эталонные ответы |
+| [`technical_specification/pmi_protocol_annex_a_2026-11-02.md`](technical_specification/pmi_protocol_annex_a_2026-11-02.md) | протокол ПМИ, Приложение А |
 | [`diagrams/README.md`](diagrams/README.md) | каталог Mermaid-диаграмм |
 | [`benchmark/README.md`](benchmark/README.md) | описание бенчмарка запросов |
 | [`frontend/README.md`](frontend/README.md) | документация фронтенда |

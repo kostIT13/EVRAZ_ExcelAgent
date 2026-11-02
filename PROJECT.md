@@ -17,7 +17,7 @@
    - Парсинг Excel и нормализация данных в витрину (mart).
    - LLM-агент на базе LangGraph (классификация → планирование → генерация SQL → выполнение → проверка → ответ).
 2. **Frontend** (`frontend/`) — React 18 + TypeScript + Vite.
-   - Страницы: чат, файлы, дашборд, метрики, трейс.
+   - Страницы: чат, файлы, дашборд, метрики, трейс, демо (ПМИ, Приложение А).
 3. **Инфраструктура** (`docker-compose.yml`) — PostgreSQL, сам сервис, frontend (Nginx), Prometheus, Grafana.
 
 ### Поток данных (высокоуровнево)
@@ -91,15 +91,16 @@ Excel файл ──► Парсинг (src/core/excel) ──► RAW табл�
 ```
 ├── alembic/                  # Миграции БД
 │   └── versions/             # a1b2..., b7a4..., c2d3..., cee213..., d9f2..., f1a2...
-├── data/                     # Рабочие данные, bm25_index.pkl, примеры xlsx
-├── docs/                     # Примеры запросов
+├── data/                     # Рабочие данные: примеры xlsx, презентации
+├── docs/                     # Примеры запросов, сценарии ПМИ, презентация
 ├── frontend/                 # React-приложение
 │   └── src/
 │       ├── api/              # Клиент API
-│       ├── components/       # UI-компоненты (чат, файлы, графики, модалки...)
+│       ├── components/       # UI-компоненты (чат, файлы, графики, PMI, модалки...)
+│       ├── data/             # данные для демо-страницы (pmiAnnexA.ts)
 │       ├── hooks/            # кастомные хуки (useToast)
 │       ├── lib/              # утилиты, sheet
-│       ├── pages/            # ChatPage, DashboardPage, FilesPage, MetricsPage, TracePage
+│       ├── pages/            # ChatPage, DemoPage, DashboardPage, FilesPage, MetricsPage, TracePage
 │       └── types/            # TS-типы API
 ├── scripts/                  # init-db, prometheus.yml, grafana, verify-скрипты
 ├── src/                      # Backend
@@ -116,18 +117,22 @@ Excel файл ──► Парсинг (src/core/excel) ──► RAW табл�
 
 | Роутер | Пути | Назначение |
 |---|---|---|
-| `router.py` | `/health` | проверка живости |
-| `agent_router.py` | `POST /ask` | задать вопрос агенту |
+| `router.py` | `/files/*` | загрузка и просмотр Excel-файлов |
+| `agent_router.py` | `/ask/*` | вопросы агенту (`/ask`, `/ask/resume`, `/ask/chart`) |
 | `cache_router.py` | `POST /cache/clear` | очистка кэша запросов |
 | `schema_router.py` | схема/метаданные | работа со схемой данных |
 | `trace_router.py` | трейсы | история выполнения агента |
+| `llm_router.py` | `GET /llm/config` | текущая конфигурация LLM |
 | `dependencies.py` | — | DI и сессии БД |
 | `security.py` | — | безопасность |
 | `errors.py` | — | обработка ошибок |
 | `schemas.py` | — | Pydantic-схемы запросов/ответов |
 
-Основной эндпоинт — `POST /ask` с параметрами `question`, `top_k`, `mode`, `retry`.
-Он запускает `pipeline.run_agent()`, который вызывает LangGraph-агента и логирует результат в `query_logs`.
+Основной эндпоинт — `POST /ask` с параметрами `question`, `top_k`, `mode`
+(`auto`/`rag`/`agent`), `response_mode` (`detailed`/`concise`), `conversation_history`
+и `conversation_id`. Он запускает `pipeline.run_agent()`, который вызывает LangGraph-агента
+и логирует результат в `query_logs`. Дополнительно: `POST /ask/resume` (продолжение после
+уточняющего вопроса) и `POST /ask/chart` (timeseries без вызова LLM).
 
 ---
 
@@ -139,13 +144,15 @@ Excel файл ──► Парсинг (src/core/excel) ──► RAW табл�
 - `DashboardPage.tsx` — общая панель.
 - `MetricsPage.tsx` — метрики (Prometheus).
 - `TracePage.tsx` — просмотр трейсов выполнения.
+- `DemoPage.tsx` — демо-режим ПМИ: интерактивный чек-лист Приложения А (`AnnexRunner`).
 
 **Компоненты** (`components/`):
 - `chat/`: `AgentProgress`, `ChatMessage`, `ResultChart`, `ResultTable`, `SourcesModal`, `SqlBlock`, `TypingIndicator`.
 - `files/`: `FileList`, `FileUpload`, `SheetViewer`.
 - `layout/`: `AnimatedPage`, `Background`, `Header`.
 - `ui/`: `EmptyState`, `Modal`, `Tabs`, `Toast`.
-- `trace/`: `TraceStepCard`.
+- `pmi/`: `AnnexRunner` — прогон чек-листа Приложения А ПМИ.
+- `trace/`: `TraceStepCard`, `StepInspector`, `TraceWaterfall`.
 
 Общение с backend — через `src/api/index.ts`; типы — в `src/types/api.ts`.
 
@@ -185,8 +192,10 @@ Excel файл ──► Парсинг (src/core/excel) ──► RAW табл�
 
 **Статусы результата** (по `confidence`):
 - `confidence >= 0.7` → `success`;
-- иначе → `low_confidence` (триггерит self-correction на уровне pipeline);
-- при ошибках графа → `failed`.
+- `0.5 <= confidence < 0.7` → `low_confidence` (self-correction не запускается);
+- `confidence < 0.5`, пустой ответ или ошибки графа → self-correction на уровне pipeline
+  запускается только при реальном провале (`failed` / низкая уверенность / пустой ответ).
+- ожидание уточнения → `waiting_for_input` (продолжение через `POST /ask/resume`).
 
 ### Узлы (`src/services/agent/nodes/`)
 
@@ -291,9 +300,10 @@ Excel файл ──► Парсинг (src/core/excel) ──► RAW табл�
 
 ## 11. Сущности и разрешение (`src/services/entity_resolution/`)
 
-- `entity_resolver.py` — сопоставление упомянутых сущностей с реальными (rapidfuzz fuzzy match + словарь).
+- `entity_resolver.py` — сопоставление упомянутых сущностей с реальными
+  (rapidfuzz fuzzy match + триграммный поиск `pg_trgm`).
 - `query_cache.py` — кэш результатов разрешения.
-- `bm25_index.pkl` в `data/` — BM25-индекс для поиска релевантных листов/сущностей (`top_k`).
+- Векторный и BM25-поиск не используются (удалены миграцией `d9f2c3a1e5b7_remove_vector_tables`).
 
 ---
 
@@ -313,7 +323,11 @@ Excel файл ──► Парсинг (src/core/excel) ──► RAW табл�
 | `POSTGRES_*` | подключение к БД |
 | `DB_STATEMENT_TIMEOUT_MS` | таймаут SQL (30000) |
 | `TRIGRAM_THRESHOLD` | порог триграммного совпадения (0.25) |
-| `RATE_LIMIT_*` | ограничения частоты API |
+| `API_KEY` | ключ для `/files/*`, `/ask/*`, `/cache/*`, `/llm/*` (пусто = dev без auth) |
+| `RATE_LIMIT_*` | ограничения частоты API (`30/minute`, `10/minute`) |
+| `INGESTION_QUEUE_MODE` | режим очереди ingestion (`inproc`) |
+| `INGESTION_STATUS_MAX_AGE_DAYS` | срок хранения статусов ingestion (7) |
+| `LOG_LEVEL` / `DEBUG` | логирование (`INFO` / `false`) |
 
 ---
 
@@ -328,11 +342,19 @@ Excel файл ──► Парсинг (src/core/excel) ──► RAW табл�
 
 ## 14. Тесты (`tests/`)
 
-- `test_sql_compiler.py` — безопасный компилятор SQL.
-- `test_normalizer_dimension.py` — нормализация измерений.
+- `test_sql_compiler.py` / `test_sql_compiler_extra.py` — безопасный компилятор SQL.
+- `test_codegen_helpers.py` — детерминированные правки SQL в codegen.
 - `test_classifier_domain.py` — классификатор доменов.
+- `test_structured_schemas.py` — Pydantic-схемы структурированного вывода LLM.
+- `test_agent_helpers.py`, `test_chart_intent.py` — вспомогательные функции агента и графиков.
+- `test_entity_resolver_helpers.py`, `test_query_cache.py` — entity-resolution и кэш.
+- `test_api_schemas.py`, `test_api_security.py`, `test_config.py` — API-схемы, auth, конфигурация.
+- `test_benchmark_extract.py`, `test_infra_helpers.py` — метрика бенчмарка, инфраструктурные утилиты.
+- `test_normalizer_dimension.py` — нормализация измерений.
 - `test_parser_header_detection.py` — определение шапки Excel.
+- `test_price_sheet_*.py`, `test_sheet_kind_detector_domain.py` — пайплайн первой таблицы.
 - `test_golden_dataset.py` — интеграционные тесты на golden-датасете (требуют LLM и данные; маркер `golden`).
+- `tests/integration/` — интеграционные тесты с PostgreSQL (маркер `integration`).
 - `golden_questions.json` — набор эталонных вопросов.
 
 Запуск:
