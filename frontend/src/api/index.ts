@@ -7,6 +7,7 @@ import type {
   FileDetailResponse,
   FileListResponse,
   HealthResponse,
+  LlmConfigResponse,
   MetricsHistory,
   MetricsSummary,
   SheetDetailResponse,
@@ -163,6 +164,11 @@ export function getMetricsHistory(params: { hours?: number } = {}) {
   return get<MetricsHistory>('/metrics/history', { params });
 }
 
+// ---------- LLM ----------
+export function getLlmConfig() {
+  return get<LlmConfigResponse>('/llm/config');
+}
+
 export const api = {
   checkHealth,
   uploadFile,
@@ -180,6 +186,7 @@ export const api = {
   getTrace,
   getMetricsSummary,
   getMetricsHistory,
+  getLlmConfig,
 };
 
 export default api;
