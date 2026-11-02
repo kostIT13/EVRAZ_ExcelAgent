@@ -29,9 +29,10 @@ LLM-агент «вопрос → SQL → ответ»: преобразует �
 
 ```
 src/services/agent/
-├── graph.py                   # построение графа, LangGraphAgent, AgentResult
+├── graph.py                   # построение графа, LangGraphAgent, AgentResult, build_chart
 ├── graph_state.py             # состояние графа (GraphState) и константы узлов
 ├── checkpointer.py            # менеджер Postgres-checkpointer'а (lazy init)
+├── chart_intent.py            # SQL для timeseries/диаграмм (кнопка «Сделай график», POST /ask/chart)
 ├── prompts.py                 # системные промпты для узлов
 ├── structured_schemas.py      # Pydantic-схемы structured output
 ├── sql_compiler.py            # безопасный компилятор спеки в SELECT
@@ -99,7 +100,9 @@ Classifier → Disambiguation → Planner → CodeGen → Executor → Verifier 
 | `route_after_verifier` | `needs_retry` → CodeGen; иначе → Answer |
 
 Также работает **self-correction** на уровне pipeline ([`src/services/generation/pipeline.py`](../generation/pipeline.py)):
-при `low_confidence` результат перепроверяется.
+он запускается **только при реальном провале** — статус `failed`, `confidence < 0.5`
+или пустой/слишком короткий ответ. Статус `low_confidence` (0.5–0.7) повторный прогон
+**не** запускает (защита от удвоения латентности).
 
 ---
 
@@ -110,7 +113,8 @@ Classifier → Disambiguation → Planner → CodeGen → Executor → Verifier 
 | Условие | Статус |
 |---|---|
 | `confidence >= 0.7` | `success` |
-| иначе | `low_confidence` (запускает self-correction) |
+| `0.5 <= confidence < 0.7` | `low_confidence` (self-correction не запускается) |
+| `confidence < 0.5` / пустой ответ | `low_confidence` (запускает self-correction) |
 | ошибки графа | `failed` |
 | ожидание уточнения | `waiting_for_input` |
 

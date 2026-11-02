@@ -1,7 +1,8 @@
 # EVRAZ Agent — Frontend (React)
 
 Frontend-часть проекта: одностраничное приложение для работы с агентной системой —
-чат с LLM-агентом, загрузка Excel-файлов, дашборд, метрики и трейсы выполнения.
+чат с LLM-агентом, загрузка Excel-файлов, дашборд, метрики, трейсы выполнения
+и демо-режим ПМИ (Приложение А).
 
 - Стек: **React 18** + **TypeScript** + **Vite**
 - Роутинг: `react-router-dom` · Графики: `chart.js` · Анимации: `framer-motion`
@@ -33,6 +34,7 @@ frontend/
     ├── App.tsx                 # роутер и layout
     ├── styles/main.css         # глобальные стили
     ├── api/index.ts            # клиент REST API (axios/fetch)
+    ├── data/pmiAnnexA.ts       # чек-лист Приложения А ПМИ (данные демо-страницы)
     ├── types/api.ts            # TypeScript-типы ответов API
     ├── hooks/useToast.ts       # уведомления (toast)
     ├── lib/                    # утилиты (sheet.ts, utils.ts)
@@ -40,7 +42,8 @@ frontend/
     │   ├── chat/               # компоненты чата
     │   ├── files/              # компоненты файлов
     │   ├── layout/             # шапка, фон, анимированные страницы
-    │   ├── trace/              # карточка шага трейса
+    │   ├── pmi/                # демо-режим ПМИ (AnnexRunner)
+    │   ├── trace/              # карточки/инспектор шагов, waterfall трейса
     │   └── ui/                 # базовые UI (Modal, Tabs, Toast, EmptyState)
     └── pages/                  # страницы приложения
 ```
@@ -52,6 +55,7 @@ frontend/
 | Страница | Файл | Возможности |
 |---|---|---|
 | **Чат** | [`pages/ChatPage.tsx`](src/pages/ChatPage.tsx) | вопросы к агенту, история, прогресс шагов графа, SQL-блок, таблица/график результата, источники ответа |
+| **Демо (ПМИ)** | [`pages/DemoPage.tsx`](src/pages/DemoPage.tsx) | интерактивный чек-лист Приложения А ПМИ: вердикты, заметки, автоматические пробы запросов (`AnnexRunner`) |
 | **Файлы** | [`pages/FilesPage.tsx`](src/pages/FilesPage.tsx) | загрузка `.xlsx`, список файлов и статусы, просмотр листов (`SheetViewer`) |
 | **Дашборд** | [`pages/DashboardPage.tsx`](src/pages/DashboardPage.tsx) | общая панель состояния системы |
 | **Метрики** | [`pages/MetricsPage.tsx`](src/pages/MetricsPage.tsx) | Prometheus-метрики (RPS, латентность, статусы) |
@@ -78,7 +82,10 @@ frontend/
 ### UI и прочее
 - [`components/ui/`](src/components/ui/) — `Modal`, `Tabs`, `Toast`, `EmptyState`;
 - [`components/layout/`](src/components/layout/) — `Header`, `Background`, `AnimatedPage`;
-- [`components/trace/TraceStepCard.tsx`](src/components/trace/TraceStepCard.tsx) — карточка шага трейса.
+- [`components/pmi/AnnexRunner.tsx`](src/components/pmi/AnnexRunner.tsx) — прогон чек-листа
+  Приложения А ПМИ (страница «Демо»);
+- [`components/trace/`](src/components/trace/) — `TraceStepCard` (карточка шага трейса),
+  `StepInspector` (детали шага), `TraceWaterfall` (waterfall-диаграмма узлов графа).
 
 ---
 

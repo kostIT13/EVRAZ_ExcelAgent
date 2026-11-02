@@ -10,6 +10,8 @@
 
 ## Юнит-тесты
 
+### Пайплайн первой таблицы
+
 Покрывают пайплайн обработки первой таблицы
 ([`data/data_proportional_prices.xlsx`](../data/data_proportional_prices.xlsx)):
 
@@ -21,6 +23,28 @@
   значений и типов колонок;
 - [`test_sheet_kind_detector_domain.py`](test_sheet_kind_detector_domain.py) —
   детектор типа листа (prices / matrix / generic).
+
+### Backend: API, агент, конфигурация
+
+- [`test_api_schemas.py`](test_api_schemas.py) — Pydantic-схемы запросов/ответов API;
+- [`test_api_security.py`](test_api_security.py) — API-key auth и rate limiting;
+- [`test_config.py`](test_config.py) — конфигурация (`Settings`, `.env`);
+- [`test_sql_compiler.py`](test_sql_compiler.py) / [`test_sql_compiler_extra.py`](test_sql_compiler_extra.py) —
+  безопасный компилятор SQL;
+- [`test_codegen_helpers.py`](test_codegen_helpers.py) — детерминированные правки SQL в codegen;
+- [`test_structured_schemas.py`](test_structured_schemas.py) — схемы структурированного вывода LLM;
+- [`test_agent_helpers.py`](test_agent_helpers.py) — вспомогательные функции агента
+  (графики, извлечение фильтров);
+- [`test_chart_intent.py`](test_chart_intent.py) — детект запроса графика и SQL для timeseries;
+- [`test_classifier_domain.py`](test_classifier_domain.py) — классификатор доменов;
+- [`test_entity_resolver_helpers.py`](test_entity_resolver_helpers.py) — утилиты
+  fuzzy-резолвера сущностей;
+- [`test_query_cache.py`](test_query_cache.py) — кэш запросов;
+- [`test_material_synonyms.py`](test_material_synonyms.py) — синонимы материалов;
+- [`test_normalizer_dimension.py`](test_normalizer_dimension.py) — нормализация измерений;
+- [`test_parser_header_detection.py`](test_parser_header_detection.py) — определение шапки Excel;
+- [`test_benchmark_extract.py`](test_benchmark_extract.py) — извлечение чисел для метрики бенчмарка;
+- [`test_infra_helpers.py`](test_infra_helpers.py) — инфраструктурные утилиты (checkpointer и др.).
 
 Запуск:
 

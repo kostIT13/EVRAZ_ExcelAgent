@@ -11,11 +11,14 @@ API агента с метрикой точности (pass rate). Сравне�
 |---|---|
 | [`run_first6.py`](run_first6.py) | Прогон **первых 6** запросов из `docs/request_examples.txt` |
 | [`run_all.py`](run_all.py) | Прогон **всех** запросов из `docs/request_examples.txt` |
+| [`benchmark_core.py`](benchmark_core.py) | ядро метрики + самопроверка парсинга |
 
 ## Требования
 
 - Запущенный сервер API: `uvicorn src.main:app` (или `docker compose up`).
-- Данные загружены в PostgreSQL: `python scripts/load_demo_data.py`.
+- Данные загружены в PostgreSQL: Excel-файлы из `data/`
+  (`data_proportional_prices.xlsx`, `Faked_List_proportional (2).xlsx`) — через UI
+  (страница «Файлы») или `POST /files/upload`; дождитесь статуса `ready`.
 - Если сервер запущен с `API_KEY`, передайте его через `--api-key` или
   переменную окружения `API_KEY`.
 

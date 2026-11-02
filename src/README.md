@@ -28,17 +28,20 @@ src/
 ├── main.py                      # точка входа FastAPI (lifespan, роутеры, /health, /metrics)
 ├── api/                         # FastAPI-роутеры и схемы
 │   ├── router.py                #   файлы: upload / status / sheets / columns / cells
-│   ├── agent_router.py          #   POST /ask — вопросы к агенту
+│   ├── agent_router.py          #   /ask, /ask/resume, /ask/chart — вопросы к агенту
 │   ├── schema_router.py         #   Schema Inference и подтверждение схем
 │   ├── trace_router.py          #   трейсы выполнения графа
 │   ├── cache_router.py          #   очистка кэша запросов
+│   ├── llm_router.py            #   GET /llm/config — конфигурация LLM
+│   ├── dependencies.py          #   DI и сессии БД
 │   ├── security.py              #   API-key auth
-│   ├── ratelimit.py             #   slowapi-лимиты
 │   ├── errors.py                #   обработчики исключений
 │   └── schemas.py               #   Pydantic-схемы запросов/ответов
 ├── core/
 │   ├── config.py                # настройки через pydantic-settings (.env)
 │   ├── logging_settings.py      # loguru
+│   ├── ratelimit.py             # slowapi-лимиты
+│   ├── material_synonyms.py     # синонимы материалов
 │   ├── metrics.py               # Prometheus-метрики
 │   ├── db/                      # engine, session, Base, ORM-модели
 │   └── excel/                   # парсинг Excel, schema inference, fingerprint
@@ -47,7 +50,7 @@ src/
     ├── llm/                     # LLMClient, structured output
     ├── mart/                    # нормализация в mart.price_facts / mart.metrics
     ├── excel/                   # ingestion-сервис и очередь
-    ├── entity_resolution/       # fuzzy-резолвер сущностей, BM25-индекс
+    ├── entity_resolution/       # fuzzy-резолвер сущностей (rapidfuzz + pg_trgm)
     ├── generation/              # pipeline.run_agent()
     ├── evaluation/              # golden-датасет
     └── db_tables/               # сервисы доступа к таблицам БД
@@ -82,7 +85,7 @@ rate limiting — `slowapi`.
   и фабрика structured-output через `langchain-openai` (`with_structured_output(json_mode)`);
 - **mart** — нормализация сырых ячеек в long-факт-таблицы витрины, идемпотентно;
 - **excel** — асинхронная очередь ingestion (`inproc`) и сервис обработки файлов;
-- **entity_resolution** — сопоставление сущностей (rapidfuzz + pg_trgm), кэш, BM25-индекс;
+- **entity_resolution** — сопоставление сущностей (rapidfuzz + pg_trgm), кэш результатов;
 - **agent** — см. [`services/agent/README.md`](services/agent/README.md);
 - **generation** — `pipeline.run_agent()`: запуск агента, self-correction, логирование в `query_logs`;
 - **db_tables** — сервисы по таблицам (`cell_service`, `column_service`, `file_service`,
@@ -98,20 +101,28 @@ rate limiting — `slowapi`.
 |---|---|---|
 | `GET` | `/health` | проверка живости |
 | `GET` | `/metrics` | метрики Prometheus |
+| `GET` | `/metrics/summary` | JSON-сводка метрик (запросы, latency, токены, стоимость LLM) |
+| `GET` | `/metrics/history?hours=24` | почасовые ряды запросов/латентности из `query_logs` |
 | `POST` | `/files/upload` | загрузка Excel-файла (асинхронно, возвращает `file_id`) |
-| `GET` | `/files` | список файлов |
+| `GET` | `/files` | список файлов (пагинация, фильтр по статусу) |
 | `GET` | `/files/{id}` | детали файла |
 | `GET` | `/files/{id}/status` | статус обработки |
+| `DELETE` | `/files/{id}` | удаление файла |
 | `GET` | `/files/{id}/sheets` | листы файла |
-| `GET` | `/files/{id}/columns` | колонки листов |
-| `GET` | `/files/{id}/cells` | сырые ячейки |
+| `GET` | `/files/{id}/sheets/{sheet_id}` | детали листа |
+| `GET` | `/files/{id}/sheets/{sheet_id}/columns` | колонки листа |
+| `GET` | `/files/{id}/sheets/{sheet_id}/cells` | ячейки листа (пагинация) |
 | `POST` | `/files/{id}/sheets/{sheet_id}/infer-schema` | Schema Inference (LLM) |
 | `POST` | `/files/{id}/sheets/{sheet_id}/confirm-schema` | подтверждение схемы |
-| `POST` | `/ask` | вопрос к агенту: `{question, top_k, mode, retry, response_mode}` |
+| `POST` | `/ask` | вопрос к агенту: `{question, top_k, mode, response_mode, conversation_id}` |
+| `POST` | `/ask/resume` | продолжение после уточняющего вопроса |
+| `POST` | `/ask/chart` | timeseries по контексту диалога (без LLM) |
 | `POST` | `/cache/clear` | очистка кэша запросов |
 | `GET` | `/trace/...` | трейсы выполнения графа |
+| `GET` | `/llm/config` | текущая конфигурация LLM |
 
-Эндпоинты `/files/*` и `/ask/*` защищены API-ключом (если `API_KEY` задан в `.env`).
+Эндпоинты `/files/*`, `/ask/*`, `/cache/*` и `/llm/*` защищены API-ключом
+(если `API_KEY` задан в `.env`).
 
 ---
 
@@ -152,9 +163,11 @@ uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
 | `POSTGRES_*` | подключение к PostgreSQL | — |
 | `DB_STATEMENT_TIMEOUT_MS` | timeout выполнения SQL | `30000` |
 | `TRIGRAM_THRESHOLD` | порог fuzzy-совпадения сущностей | `0.25` |
-| `API_KEY` | ключ для `/files/*` и `/ask/*` (пусто = dev) | — |
-| `RATE_LIMIT_ASK` / `RATE_LIMIT_UPLOAD` | rate limits | `30/minute` / `10/minute` |
+| `API_KEY` | ключ для `/files/*`, `/ask/*`, `/cache/*`, `/llm/*` (пусто = dev) | — |
+| `RATE_LIMIT_ASK` / `RATE_LIMIT_UPLOAD` / `RATE_LIMIT_CACHE_CLEAR` | rate limits | `30/min` / `10/min` / `10/min` |
 | `INGESTION_QUEUE_MODE` | режим очереди ingestion | `inproc` |
+| `INGESTION_STATUS_MAX_AGE_DAYS` | срок хранения статусов ingestion | `7` |
+| `LOG_LEVEL` / `DEBUG` | логирование | `INFO` / `false` |
 
 ---
 
