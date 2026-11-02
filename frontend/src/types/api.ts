@@ -188,6 +188,17 @@ export interface MetricsSummary {
   cost_by_node: Record<string, number>;
 }
 
+export interface LlmConfigResponse {
+  model: string;
+  base_url: string;
+  temperature: number;
+  max_tokens: number;
+  request_timeout_s: number;
+  llm_max_retries: number;
+  graph_max_retry_count: number;
+  max_codegen_attempts: number;
+}
+
 export interface MetricsHistory {
   period_hours: number;
   labels: string[];
