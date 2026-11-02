@@ -159,4 +159,5 @@ erDiagram
 - `files` → `sheets` (каскадное удаление), `sheets` → `column_metadata` / `cells` / `excel_comments`.
 - `files` → `mart.price_facts` / `mart.metrics` по `file_id` (`ON DELETE CASCADE`).
 - Агент напрямую читает только `mart.price_facts` и `mart.metrics` (whitelist в `sql_compiler`).
-- `entity_dictionary` и `bm25_index.pkl` / `rapidfuzz` используются для разрешения сущностей до генерации SQL.
+- `entity_dictionary` и `rapidfuzz` + `pg_trgm` используются для разрешения сущностей
+  до генерации SQL (векторный и BM25-поиск удалены миграцией `d9f2c3a1e5b7_remove_vector_tables`).
