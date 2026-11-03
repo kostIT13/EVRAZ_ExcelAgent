@@ -54,3 +54,29 @@ def test_ask_response_confidence_bounds():
     assert resp.confidence == 0.7
     assert resp.status == "success"
     assert resp.mode_used == "rag"
+
+
+def _agent_result(from_cache: bool):
+    from src.services.agent.graph import AgentResult
+
+    return AgentResult(
+        answer="2 697 900 руб./тн",
+        confidence=1.0,
+        request_id="req-1",
+        question="цена в декабре 2025",
+        latency_ms=32,
+        trace={},
+        query_type="lookup",
+        sql_query="SELECT 1",
+        sql_result=[],
+        retry_count=0,
+        status="success",
+        from_cache=from_cache,
+    )
+
+
+def test_ask_response_exposes_from_cache_flag():
+    from src.api.agent_router import _build_agent_response
+
+    assert _build_agent_response(_agent_result(True)).from_cache is True
+    assert _build_agent_response(_agent_result(False)).from_cache is False

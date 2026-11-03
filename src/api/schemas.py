@@ -160,6 +160,10 @@ class AskResponse(BaseModel):
     retry_count: int = Field(default=0, description="Количество retry (только для agent)")
     status: str = Field(default="success", description="Статус: success/low_confidence/failed/waiting_for_input")
     self_corrected: bool = Field(default=False, description="Был ли применён self-correction")
+    from_cache: bool = Field(
+        default=False,
+        description="Ответ взят из кэша запросов (SQL не перевыполнялся, LLM не вызывался)",
+    )
     thread_id: Optional[str] = Field(
         default=None,
         description="Идентификатор диалога (thread_id) для продолжения через /ask/resume",

@@ -47,6 +47,7 @@ def _build_agent_response(result: AgentResult, response_mode: str = "detailed") 
         retry_count=result.retry_count,
         status=result.status,
         self_corrected=result.self_corrected,
+        from_cache=result.from_cache,
         thread_id=result.thread_id,
         waiting_question=waiting,
         chart_available=result.chart_available,
