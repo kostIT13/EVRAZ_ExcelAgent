@@ -280,6 +280,11 @@ docker compose exec service alembic upgrade head
 - `GET /metrics/summary` — JSON-сводка метрик (запросы, latency, токены и стоимость LLM).
 - `GET /metrics/history?hours=24` — почасовые ряды запросов/латентности из `query_logs`.
 - `GET /llm/config` — текущая конфигурация LLM (модель, temperature, ретраи, таймауты).
+- `GET /llm/models` — список моделей с LLM-прокси + текущая модель и значение из `.env`.
+- `PUT /llm/model` — сменить модель на живом стенде (`{model, verify}`): при `verify=true` сначала
+  делается проверочный вызов кандидата, и при его неудаче текущая модель не меняется.
+  Переключение живёт в памяти процесса до перезапуска сервиса, `.env` не правится.
+- `POST /llm/model/reset` — вернуть модель, заданную в `.env`.
 
 ---
 

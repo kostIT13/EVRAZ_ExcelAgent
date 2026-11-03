@@ -32,7 +32,7 @@ src/
 │   ├── schema_router.py         #   Schema Inference и подтверждение схем
 │   ├── trace_router.py          #   трейсы выполнения графа
 │   ├── cache_router.py          #   очистка кэша запросов
-│   ├── llm_router.py            #   GET /llm/config — конфигурация LLM
+│   ├── llm_router.py            #   GET /llm/config, GET /llm/models, PUT /llm/model, POST /llm/model/reset
 │   ├── dependencies.py          #   DI и сессии БД
 │   ├── security.py              #   API-key auth
 │   ├── errors.py                #   обработчики исключений
@@ -120,6 +120,9 @@ rate limiting — `slowapi`.
 | `POST` | `/cache/clear` | очистка кэша запросов |
 | `GET` | `/trace/...` | трейсы выполнения графа |
 | `GET` | `/llm/config` | текущая конфигурация LLM |
+| `GET` | `/llm/models` | модели с прокси + текущая и значение из `.env` |
+| `PUT` | `/llm/model` | сменить модель в памяти процесса (с проверкой ответа кандидата) |
+| `POST` | `/llm/model/reset` | вернуть модель из `.env` |
 
 Эндпоинты `/files/*`, `/ask/*`, `/cache/*` и `/llm/*` защищены API-ключом
 (если `API_KEY` задан в `.env`).

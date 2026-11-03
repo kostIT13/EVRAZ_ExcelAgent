@@ -122,7 +122,7 @@ Excel файл ──► Парсинг (src/core/excel) ──► RAW табл�
 | `cache_router.py` | `POST /cache/clear` | очистка кэша запросов |
 | `schema_router.py` | схема/метаданные | работа со схемой данных |
 | `trace_router.py` | трейсы | история выполнения агента |
-| `llm_router.py` | `GET /llm/config` | текущая конфигурация LLM |
+| `llm_router.py` | `GET /llm/config`, `GET /llm/models`, `PUT /llm/model`, `POST /llm/model/reset` | конфигурация LLM, список моделей с прокси и горячая смена модели |
 | `dependencies.py` | — | DI и сессии БД |
 | `security.py` | — | безопасность |
 | `errors.py` | — | обработка ошибок |

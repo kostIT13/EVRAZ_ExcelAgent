@@ -91,6 +91,12 @@ frontend/
   `/trace`, `/metrics/summary`, `/llm/config`) для карточек прогона;
 - [`lib/pmiChecks.ts`](src/lib/pmiChecks.ts) — автопроверки пунктов: настоящие вызовы API
   (загрузка файлов, `/ask`, трассы, метрики, OpenAPI) с доказательством в строках фактов;
+- [`components/pmi/ModelSwitcher.tsx`](src/components/pmi/ModelSwitcher.tsx) — панель А-5:
+  смена модели прямо в демо (`GET /llm/models`, `PUT /llm/model`, `POST /llm/model/reset`)
+  с проверкой ответа кандидата и подтверждением через `GET /llm/config`;
+- [`components/pmi/BenchmarkFiveRunner.tsx`](src/components/pmi/BenchmarkFiveRunner.tsx) —
+  панель А-6: прогон пяти задач Заказчика из браузера (те же вопросы и допуск 1 %, что у
+  `benchmark/run_first5.py`) с PASS RATE, флагом «из кэша» по `from_cache` и ссылкой на трассу;
 - [`components/trace/`](src/components/trace/) — `TraceStepCard` (карточка шага трейса),
   `StepInspector` (детали шага), `TraceWaterfall` (waterfall-диаграмма узлов графа).
 
