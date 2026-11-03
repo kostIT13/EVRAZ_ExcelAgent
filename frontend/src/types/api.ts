@@ -100,6 +100,8 @@ export interface AskResponse {
   retry_count: number;
   status: string;
   self_corrected: boolean;
+  /** Ответ взят из кэша (SQL не перевыполнялся); false и undefined — считался заново. */
+  from_cache?: boolean;
   thread_id?: string | null;
   /** Уточняющий вопрос агента, когда status = waiting_for_input. */
   waiting_question?: WaitForInputInfo | null;
@@ -203,6 +205,24 @@ export interface LlmConfigResponse {
   llm_max_retries: number;
   graph_max_retry_count: number;
   max_codegen_attempts: number;
+}
+
+export interface LlmModelsResponse {
+  models: string[];
+  current: string;
+  default: string;
+  listed: boolean;
+  error: string;
+}
+
+export interface LlmModelSwitchResponse {
+  previous: string;
+  current: string;
+  default: string;
+  changed: boolean;
+  verified: boolean;
+  probe_ms: number;
+  note: string;
 }
 
 export interface MetricsHistory {

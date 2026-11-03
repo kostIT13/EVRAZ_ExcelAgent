@@ -8,6 +8,8 @@ import type {
   FileListResponse,
   HealthResponse,
   LlmConfigResponse,
+  LlmModelsResponse,
+  LlmModelSwitchResponse,
   MetricsHistory,
   MetricsSummary,
   SheetDetailResponse,
@@ -73,6 +75,10 @@ function post<T>(path: string, options?: { body?: unknown }) {
 
 function del<T>(path: string) {
   return request<T>('DELETE', path);
+}
+
+function put<T>(path: string, options?: { body?: unknown }) {
+  return request<T>('PUT', path, options);
 }
 
 // ---------- Health ----------
@@ -169,6 +175,18 @@ export function getLlmConfig() {
   return get<LlmConfigResponse>('/llm/config');
 }
 
+export function listLlmModels() {
+  return get<LlmModelsResponse>('/llm/models');
+}
+
+export function switchLlmModel(model: string, verify: boolean) {
+  return put<LlmModelSwitchResponse>('/llm/model', { body: { model, verify } });
+}
+
+export function resetLlmModel() {
+  return post<LlmModelSwitchResponse>('/llm/model/reset');
+}
+
 export const api = {
   checkHealth,
   uploadFile,
@@ -187,6 +205,9 @@ export const api = {
   getMetricsSummary,
   getMetricsHistory,
   getLlmConfig,
+  listLlmModels,
+  switchLlmModel,
+  resetLlmModel,
 };
 
 export default api;

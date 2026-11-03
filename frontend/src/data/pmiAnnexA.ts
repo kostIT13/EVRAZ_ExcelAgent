@@ -74,6 +74,10 @@ export interface AnnexItem {
   probe?: PmiProbe;
   links?: PmiLink[];
   artifacts?: string[];
+  /** Показывать в карточке панель смены модели на живом стенде (А-5). */
+  modelSwitch?: boolean;
+  /** Показывать в карточке панель прогона пяти задач Заказчика (А-6). */
+  benchmarkFive?: boolean;
 }
 
 export const chatQ = (question: string) => `/?q=${encodeURIComponent(question)}`;
@@ -334,6 +338,11 @@ export const ANNEX_A_ITEMS: AnnexItem[] = [
       { label: 'Чтение конфигурации', value: 'src/core/config.py (pydantic-settings), переменные окружения приходят через env_file: .env в docker-compose — без правки кода' },
       { label: 'Живое подтверждение', value: 'GET /api/llm/config отдаёт фактические model, base_url, temperature, max_tokens, request_timeout_s, llm_max_retries — видно «до» и «после» перезапуска', tone: 'ok' },
       { label: 'Секрет', value: 'LLM_API_KEY читается только из .env; .env исключён из репозитория (.gitignore, строка 23); в .env.example — плейсхолдеры' },
+      {
+        label: 'Смена модели вживую',
+        value: 'Панель «Сменить модель прямо здесь» ниже: PUT /api/llm/model меняет модель в памяти сервиса, сначала получив ответ кандидата, и подтверждает смену чтением GET /api/llm/config. Действует до перезапуска service, .env не меняется',
+        tone: 'ok',
+      },
     ],
     commands: [
       { title: 'Перезапуск сервиса после правки .env', cmd: 'docker compose up -d --build service' },
@@ -345,6 +354,7 @@ export const ANNEX_A_ITEMS: AnnexItem[] = [
       kind: 'llmConfig',
       hint: 'GET /api/llm/config — модель, temperature, retries, таймаут; ключа в ответе нет',
     },
+    modelSwitch: true,
     links: [
       { label: 'Спросить в чате', to: chatQ('Сколько составила среднерыночная цена на Лом твердых сплавов (без припоя) в декабре 2025 года?') },
       { label: 'Открыть /docs', href: '/api/docs' },
@@ -390,6 +400,11 @@ export const ANNEX_A_ITEMS: AnnexItem[] = [
     facts: [
       { label: 'Эталон зафиксирован', value: 'docs/request_examples.txt · SHA-256 087423f164e5686dd94248e1734f5bd45d60d30337d74adc9175d43ef336ac3a (п. 5.3 ПМИ — хэш до испытаний)' },
       { label: 'Сверка', value: 'числовой ответ агента сравнивается с эталоном; допуски округления и единиц комиссия фиксирует в протоколе до прогона (п. 6.1 ПМИ)' },
+      {
+        label: 'Прогон из браузера',
+        value: 'Панель «Прогон пяти задач Заказчика» ниже: те же пять вопросов и допуск 1 %, кэш перед прогоном не чистится — уже отвеченные стендом вопросы приходят за миллисекунды, PASS RATE считается по фактическим ответам /ask, а не по таблице ниже',
+        tone: 'ok',
+      },
     ],
     commands: [
       { title: 'Прогон пяти задач Заказчика', cmd: 'python benchmark/run_first5.py', expect: 'PASS RATE: 100.0%' },
@@ -425,6 +440,7 @@ export const ANNEX_A_ITEMS: AnnexItem[] = [
       kind: 'traces',
       hint: 'GET /api/trace — длительность и статус каждого ответа прогона: 30–80 с на живой вопрос, миллисекунды при попадании в кэш',
     },
+    benchmarkFive: true,
     artifacts: [
       'benchmark/results/run_first5_20261031_233102.txt',
       'docs/request_examples.txt',

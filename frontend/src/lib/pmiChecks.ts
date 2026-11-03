@@ -128,7 +128,7 @@ function err(summary: string, e: unknown): CheckResult {
   return { status: 'error', summary: `${summary}: ${detailed}`, lines: [], at: stamp() };
 }
 
-function fmt(n: number): string {
+export function fmt(n: number): string {
   return n.toLocaleString('ru-RU', { maximumFractionDigits: 2 });
 }
 
@@ -260,7 +260,7 @@ export function numbersIn(text: string): number[] {
   return out;
 }
 
-function findMatch(numbers: number[], expect: number, tolPct: number): number | undefined {
+export function findMatch(numbers: number[], expect: number, tolPct: number): number | undefined {
   const tol = (Math.abs(expect) * tolPct) / 100;
   return numbers.find((n) => Math.abs(n - expect) <= Math.max(tol, 0.01));
 }

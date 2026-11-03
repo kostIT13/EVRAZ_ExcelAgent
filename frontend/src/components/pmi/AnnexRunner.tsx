@@ -15,6 +15,8 @@ import {
 } from 'lucide-react';
 import ResultChart from '@/components/chat/ResultChart';
 import SqlBlock from '@/components/chat/SqlBlock';
+import BenchmarkFiveRunner from '@/components/pmi/BenchmarkFiveRunner';
+import ModelSwitcher from '@/components/pmi/ModelSwitcher';
 import { ToastContainer } from '@/components/ui/Toast';
 import { useToast } from '@/hooks/useToast';
 import { api } from '@/api';
@@ -821,6 +823,8 @@ export default function AnnexRunner() {
           </div>
 
           <div className="annex__col">
+            {active.modelSwitch && <ModelSwitcher />}
+            {active.benchmarkFive && <BenchmarkFiveRunner />}
             {(activeChecks.length > 0 || active.probe) && (
               <div className="annex__checks">
                 <div className="annex__checksHead">
