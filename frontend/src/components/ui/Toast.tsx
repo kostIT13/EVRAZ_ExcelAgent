@@ -1,7 +1,7 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { CheckCircle2, AlertCircle, Info, X } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, AlertCircle, Info, X } from 'lucide-react';
 
-export type ToastType = 'success' | 'error' | 'info';
+export type ToastType = 'success' | 'error' | 'info' | 'warn';
 
 export interface ToastItem {
   id: number;
@@ -18,6 +18,7 @@ const icons = {
   success: CheckCircle2,
   error: AlertCircle,
   info: Info,
+  warn: AlertTriangle,
 };
 
 export function ToastContainer({ toasts, onDismiss }: ToastContainerProps) {

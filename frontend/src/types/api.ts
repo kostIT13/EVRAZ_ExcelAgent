@@ -81,6 +81,11 @@ export interface SourceInfo {
   rank: number;
 }
 
+export interface WaitForInputInfo {
+  question: string;
+  options: string[];
+}
+
 export interface AskResponse {
   answer: string;
   confidence: number;
@@ -95,8 +100,9 @@ export interface AskResponse {
   retry_count: number;
   status: string;
   self_corrected: boolean;
-  trace_id?: string | null;
   thread_id?: string | null;
+  /** Уточняющий вопрос агента, когда status = waiting_for_input. */
+  waiting_question?: WaitForInputInfo | null;
   chart_available?: boolean;
   chart_data?: ChartPoint[] | null;
   chart_type?: 'line' | 'bar' | null;
