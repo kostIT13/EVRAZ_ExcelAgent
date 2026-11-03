@@ -2,7 +2,8 @@
 
 Frontend-часть проекта: одностраничное приложение для работы с агентной системой —
 чат с LLM-агентом, загрузка Excel-файлов, дашборд, метрики, трейсы выполнения
-и демо-режим ПМИ (Приложение А).
+и страница «Демо» — прогон контрольных примеров ПМИ (Приложение А) с автопроверками
+на живом стенде.
 
 - Стек: **React 18** + **TypeScript** + **Vite**
 - Роутинг: `react-router-dom` · Графики: `chart.js` · Анимации: `framer-motion`
@@ -35,14 +36,15 @@ frontend/
     ├── styles/main.css         # глобальные стили
     ├── api/index.ts            # клиент REST API (axios/fetch)
     ├── data/pmiAnnexA.ts       # чек-лист Приложения А ПМИ (данные демо-страницы)
+    ├── data/pmiRunBook.ts      # рабочая книга прогона: речь, вопросы, автопроверки по каждому пункту
     ├── types/api.ts            # TypeScript-типы ответов API
     ├── hooks/useToast.ts       # уведомления (toast)
-    ├── lib/                    # утилиты (sheet.ts, utils.ts)
+    ├── lib/                    # утилиты (sheet.ts, utils.ts, pmiProbes.ts, pmiChecks.ts)
     ├── components/
     │   ├── chat/               # компоненты чата
     │   ├── files/              # компоненты файлов
     │   ├── layout/             # шапка, фон, анимированные страницы
-    │   ├── pmi/                # демо-режим ПМИ (AnnexRunner)
+    │   ├── pmi/                # страница «Демо» (AnnexRunner)
     │   ├── trace/              # карточки/инспектор шагов, waterfall трейса
     │   └── ui/                 # базовые UI (Modal, Tabs, Toast, EmptyState)
     └── pages/                  # страницы приложения
@@ -55,7 +57,7 @@ frontend/
 | Страница | Файл | Возможности |
 |---|---|---|
 | **Чат** | [`pages/ChatPage.tsx`](src/pages/ChatPage.tsx) | вопросы к агенту, история, прогресс шагов графа, SQL-блок, таблица/график результата, источники ответа |
-| **Демо (ПМИ)** | [`pages/DemoPage.tsx`](src/pages/DemoPage.tsx) | интерактивный чек-лист Приложения А ПМИ: вердикты, заметки, автоматические пробы запросов (`AnnexRunner`) |
+| **Демо (ПМИ)** | [`pages/DemoPage.tsx`](src/pages/DemoPage.tsx) | прогон Приложения А ПМИ (А-1…А-17): требования, шаги, вопросы в чат, речь для комиссии, автопроверки на живом стенде, вердикты и выгрузка протокола (приложение Б) |
 | **Файлы** | [`pages/FilesPage.tsx`](src/pages/FilesPage.tsx) | загрузка `.xlsx`, список файлов и статусы, просмотр листов (`SheetViewer`) |
 | **Дашборд** | [`pages/DashboardPage.tsx`](src/pages/DashboardPage.tsx) | общая панель состояния системы |
 | **Метрики** | [`pages/MetricsPage.tsx`](src/pages/MetricsPage.tsx) | Prometheus-метрики (RPS, латентность, статусы) |
@@ -83,7 +85,12 @@ frontend/
 - [`components/ui/`](src/components/ui/) — `Modal`, `Tabs`, `Toast`, `EmptyState`;
 - [`components/layout/`](src/components/layout/) — `Header`, `Background`, `AnimatedPage`;
 - [`components/pmi/AnnexRunner.tsx`](src/components/pmi/AnnexRunner.tsx) — прогон чек-листа
-  Приложения А ПМИ (страница «Демо»);
+  Приложения А ПМИ: вкладка на каждый контрольный пример, автопроверки стенда, вердикты
+  комиссии и выгрузка протокола (приложение Б) + шпаргалки спикера;
+- [`lib/pmiProbes.ts`](src/lib/pmiProbes.ts) — живые пробы стенда (`/health`, `/files`,
+  `/trace`, `/metrics/summary`, `/llm/config`) для карточек прогона;
+- [`lib/pmiChecks.ts`](src/lib/pmiChecks.ts) — автопроверки пунктов: настоящие вызовы API
+  (загрузка файлов, `/ask`, трассы, метрики, OpenAPI) с доказательством в строках фактов;
 - [`components/trace/`](src/components/trace/) — `TraceStepCard` (карточка шага трейса),
   `StepInspector` (детали шага), `TraceWaterfall` (waterfall-диаграмма узлов графа).
 
