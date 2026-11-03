@@ -1,6 +1,7 @@
 from __future__ import annotations
 import asyncio
 import json
+import time
 from typing import (
     AsyncGenerator,
     Dict,
@@ -150,6 +151,16 @@ class LLMClient:
         async for chunk in stream:
             if chunk.choices[0].delta.content:
                 yield chunk.choices[0].delta.content
+
+    async def list_models(self) -> List[str]:
+        page = await self._chat.models.list()
+        return sorted({item.id for item in page.data})
+
+    async def probe(self, model: str) -> int:
+        """Один короткий вызов модели-кандидата; возвращает длительность в мс."""
+        started = time.perf_counter()
+        await self.chat([{"role": "user", "content": "ping"}], model=model, max_tokens=1)
+        return int((time.perf_counter() - started) * 1000)
 
     @staticmethod
     async def _try_with_retries(

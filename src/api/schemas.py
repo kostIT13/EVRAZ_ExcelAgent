@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import List, Optional, Any, Dict
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class FileResponse(BaseModel):
@@ -249,3 +249,47 @@ class LLMConfigResponse(BaseModel):
         ...,
         description="Максимум попыток генерации SQL внутри codegen-ноды",
     )
+
+
+class LLMModelsResponse(BaseModel):
+    """Модели, отданные LLM-прокси, плюс текущая модель и значение из .env."""
+
+    models: List[str] = Field(default_factory=list, description="Идентификаторы моделей на прокси")
+    current: str = Field(..., description="Модель, которой сервис отвечает прямо сейчас")
+    default: str = Field(..., description="LLM_MODEL_PRIMARY из .env — куда возвращает сброс")
+    listed: bool = Field(
+        default=True, description="Прокси отдал список; false — только ручной ввод имени"
+    )
+    error: str = Field(default="", description="Почему список моделей недоступен")
+
+
+class LLMModelSwitchRequest(BaseModel):
+    model: str = Field(
+        ..., min_length=1, max_length=200, description="Идентификатор целевой модели"
+    )
+    verify: bool = Field(
+        default=True,
+        description="Сначала получить ответ модели-кандидата; при ошибке модель не меняется",
+    )
+
+    @field_validator("model")
+    @classmethod
+    def _clean_model(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("model must not be blank")
+        if any(ord(c) < 32 for c in cleaned):
+            raise ValueError("model must not contain control characters")
+        return cleaned
+
+
+class LLMModelSwitchResponse(BaseModel):
+    previous: str = Field(..., description="Модель до переключения")
+    current: str = Field(..., description="Модель после переключения")
+    default: str = Field(..., description="LLM_MODEL_PRIMARY из .env")
+    changed: bool = Field(..., description="Значение действительно сменилось")
+    verified: bool = Field(
+        default=False, description="Модель ответила на проверочный вызов до переключения"
+    )
+    probe_ms: int = Field(default=0, description="Длительность проверочного вызова, мс")
+    note: str = Field(default="", description="Как долго действует переключение")
