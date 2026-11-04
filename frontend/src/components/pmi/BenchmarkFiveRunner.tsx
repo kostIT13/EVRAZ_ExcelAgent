@@ -221,7 +221,7 @@ export default function BenchmarkFiveRunner() {
       </ol>
 
       <div className="b5__foot">
-        Полный набор К-1 (44 вопроса) и разбивка по типам — <code>python benchmark/run_all.py</code>;
+        Полный набор К-1 (55 вопросов) и разбивка по типам — <code>python benchmark/run_all.py</code>;
         здесь только пять задач Заказчика из таблицы А.1.
       </div>
     </div>
