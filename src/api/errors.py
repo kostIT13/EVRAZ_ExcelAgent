@@ -29,6 +29,15 @@ class FileTooLargeError(AppError):
     status_code = 413
 
 
+class InvalidFileError(AppError):
+    """Чужой тип или нечитаемая книга Excel.
+
+    400, а не 422/500: недопустимый файл — отказ валидации, а не авария сервиса.
+    """
+
+    status_code = 400
+
+
 class ProcessingError(AppError):
     status_code = 500
 

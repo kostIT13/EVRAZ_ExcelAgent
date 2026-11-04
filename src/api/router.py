@@ -4,7 +4,7 @@ from typing import List
 from fastapi import APIRouter, Depends, UploadFile, Query, Request
 from fastapi import File as FastAPIFile
 from src.core.logging_settings import logger
-from src.api.errors import AppError, FileTooLargeError, ValidationError
+from src.api.errors import FileTooLargeError, InvalidFileError
 from src.api.security import verify_api_key
 from src.core.ratelimit import get_limiter, upload_limit
 
@@ -45,7 +45,7 @@ async def upload_file(
     request = request  # noqa: F841
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in ALLOWED_EXTENSIONS:
-        raise ValidationError(
+        raise InvalidFileError(
             f"Invalid file type '{suffix}'. Allowed: {', '.join(ALLOWED_EXTENSIONS)}"
         )
 

@@ -4,6 +4,7 @@ from fastapi import HTTPException
 from src.api.errors import (
     AppError,
     FileTooLargeError,
+    InvalidFileError,
     NotFoundError,
     ProcessingError,
     ValidationError,
@@ -51,6 +52,7 @@ def test_app_error_custom_status_code():
 def test_error_hierarchy_status_codes():
     assert NotFoundError("нет").status_code == 404
     assert ValidationError("невалидно").status_code == 422
+    assert InvalidFileError("чужой файл").status_code == 400
     assert FileTooLargeError("слишком большой").status_code == 413
     assert ProcessingError("упало").status_code == 500
     assert issubclass(NotFoundError, AppError)

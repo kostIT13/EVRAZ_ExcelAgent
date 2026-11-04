@@ -41,10 +41,20 @@ class ExcelIngestionService:
         return await self._run_with_session(_process)
 
     async def create_pending_file(self, file_path: Path, original_name: Optional[str] = None) -> File:
+        from src.api.errors import InvalidFileError
         from src.core.excel.parser import ExcelParser
 
         async def _create(repo):
-            parsed = ExcelParser(file_path).parse()
+            try:
+                parsed = ExcelParser(file_path).parse()
+            except Exception as exc:
+                # Разбор читает только байты загруженного файла, поэтому любая его
+                # ошибка — плохой файл, а не поломка сервиса: отдаём 400 вместо 500.
+                # Ошибки БД возникают ниже, в save_pending_file, и остаются 500.
+                name = original_name or file_path.name
+                reason = " ".join(str(exc).split())[:200]
+                logger.warning("Upload rejected, unreadable workbook '{}': {}", name, exc)
+                raise InvalidFileError(f"Invalid Excel workbook '{name}': {reason}") from exc
             return await repo.save_pending_file(parsed, original_name=original_name)
 
         return await self._run_with_session(_create)
