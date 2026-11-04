@@ -40,3 +40,5 @@ alembic.ini
 
 node_modules/
 frontend/node_modules/
+
+.qwen
