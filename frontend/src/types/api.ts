@@ -150,6 +150,7 @@ export interface TraceResponse {
   retry_count?: number;
   error_message?: string;
   from_cache?: boolean;
+  source_latency_ms?: number;
   created_at?: string | null;
 }
 

@@ -75,8 +75,13 @@ export default function TracePage() {
 
   const steps = trace?.steps || [];
   const stepsTotalMs = steps.reduce((acc, s) => acc + stepDuration(s), 0);
+  // Ответ из кэша отдаётся за миллисекунды, а длительности шагов достались от
+  // прогона-источника: сравнивать их нужно с его латентностью, а не с этой.
+  const waterfallTotalMs = trace?.from_cache
+    ? trace?.source_latency_ms || trace?.latency_ms || 0
+    : trace?.latency_ms || 0;
   const stepsCoveredPct =
-    stepsTotalMs > 0 && trace?.latency_ms ? Math.round((stepsTotalMs / trace.latency_ms) * 100) : 0;
+    stepsTotalMs > 0 && waterfallTotalMs ? Math.round((stepsTotalMs / waterfallTotalMs) * 100) : 0;
   const activeStep = activeIndex != null ? steps[activeIndex] ?? null : null;
 
   const filteredSteps = useMemo(() => {
@@ -372,10 +377,15 @@ export default function TracePage() {
               {trace.from_cache && (
                 <div className="trace-kpi">
                   <span className="trace-kpi__label">Кэш</span>
-                  <span className="trace-kpi__value trace-kpi__value--ok"><Clock size={13} /> из кэша</span>
+                  <span className="trace-kpi__value trace-kpi__value--ok">
+                    <Clock size={13} /> из кэша
+                    {trace.source_latency_ms ? (
+                      <em className="trace-kpi__hint">(прогон {formatMs(trace.source_latency_ms)})</em>
+                    ) : null}
+                  </span>
                 </div>
               )}
-              {stepsTotalMs > 0 && trace?.latency_ms ? (
+              {stepsTotalMs > 0 && waterfallTotalMs ? (
                 <div className="trace-kpi">
                   <span className="trace-kpi__label">Покрытие шагами</span>
                   <span className="trace-kpi__value">
@@ -416,17 +426,20 @@ export default function TracePage() {
               </div>
             )}
 
-            {steps.length > 1 && (trace.latency_ms > 0 || stepsTotalMs > 0) && (
+            {steps.length > 1 && (waterfallTotalMs > 0 || stepsTotalMs > 0) && (
               <div className="twc-wrap">
                 <div className="twc-wrap__title">
                   <Timer size={12} /> Водопад шагов по времени
-                  {trace?.latency_ms ? (
+                  {waterfallTotalMs ? (
                     <span className="twc-wrap__sub">
-                      {formatMs(stepsTotalMs)} из {formatMs(trace.latency_ms)} · остальное — вне узлов графа
+                      {formatMs(stepsTotalMs)} из {formatMs(waterfallTotalMs)}
+                      {trace.from_cache
+                        ? ` · длительности прогона-источника, ответ отдан из кэша за ${formatMs(trace.latency_ms)}`
+                        : ' · остальное — вне узлов графа'}
                     </span>
                   ) : null}
                 </div>
-                <TraceWaterfall steps={steps} totalMs={trace?.latency_ms || 0} activeIndex={activeIndex} onSelect={selectStep} />
+                <TraceWaterfall steps={steps} totalMs={waterfallTotalMs} activeIndex={activeIndex} onSelect={selectStep} />
               </div>
             )}
 
@@ -476,7 +489,7 @@ export default function TracePage() {
               <StepInspector
                 step={activeStep}
                 index={activeIndex ?? 0}
-                totalMs={trace?.latency_ms || 0}
+                totalMs={waterfallTotalMs}
                 onClose={() => setActiveIndex(null)}
               />
             </div>

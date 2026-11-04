@@ -12,6 +12,7 @@ export const STEP_COLORS: Record<string, string> = {
   verifier: '#3fbf8a',
   verification: '#3fbf8a',
   retrieval: '#e5b53d',
+  cache: '#a3b1c2',
   answer: '#3fbf8a',
 };
 const FALLBACK_COLOR = '#8a97a6';
