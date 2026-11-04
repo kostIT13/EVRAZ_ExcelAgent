@@ -221,6 +221,10 @@ class TraceResponse(BaseModel):
     retry_count: int = Field(default=0, description="Число повторов генерации/проверки")
     error_message: str = Field(default="", description="Текст ошибки, если запрос упал")
     from_cache: bool = Field(default=False, description="Ответ взят из кэша")
+    source_latency_ms: int = Field(
+        default=0,
+        description="Длительность прогона, ответ которого отдан из кэша (0 — не из кэша)",
+    )
     created_at: Optional[str] = Field(default=None, description="Время запроса (ISO)")
 
 

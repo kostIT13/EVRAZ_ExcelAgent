@@ -17,8 +17,12 @@ STEP_LABELS = {
     "executor": {"icon": "⚡", "label": "Выполнение SQL"},
     "verifier": {"icon": "✅", "label": "Верификация"},
     "retrieval": {"icon": "📚", "label": "Поиск в RAG"},
+    "cache": {"icon": "🗂", "label": "Ответ из кэша"},
     "answer": {"icon": "🤖", "label": "Формирование ответа"},
 }
+
+# Узлы графа, шаги которых собираются в трассу (в порядке выполнения).
+AGENT_STEPS = ("classifier", "planner", "codegen", "executor", "verifier")
 
 # Порядок поиска текста ошибки: узел, который упал первым, и есть причина.
 ERROR_STEP_ORDER = ("codegen", "executor", "verifier", "classifier", "planner")
@@ -26,6 +30,11 @@ ERROR_STEP_ORDER = ("codegen", "executor", "verifier", "classifier", "planner")
 
 def _as_dict(value: Any) -> Dict[str, Any]:
     return value if isinstance(value, dict) else {}
+
+
+def _as_int(value: Any) -> int:
+    """Число из JSON-колонки, где вместо него может быть null или строка."""
+    return int(value) if isinstance(value, (int, float)) else 0
 
 
 def _step_error(agent_trace: Dict[str, Any]) -> str:
@@ -70,7 +79,10 @@ def _summary_fields(log) -> Dict[str, Any]:
         or trace_data.get("error")
         or _step_error(agent_trace)
         or "",
-        "from_cache": bool(trace_data.get("from_cache")),
+        "from_cache": bool(
+            trace_data.get("from_cache") or agent_trace.get("from_cache")
+        ),
+        "source_latency_ms": _as_int(agent_trace.get("source_latency_ms")),
         "created_at": log.created_at.isoformat() if log.created_at else None,
     }
 
@@ -137,8 +149,26 @@ async def get_trace(request_id: str) -> TraceResponse:
     steps.append(make_step("question", {"question": log.question}))
 
     agent_trace = _as_dict(trace_data.get("agent_trace"))
+    from_cache = bool(trace_data.get("from_cache") or agent_trace.get("from_cache"))
+    if from_cache:
+        # Шаги ниже — снимок прогона-источника: этот запрос отдан из кэша,
+        # его длительность (latency_ms) на водопаде не объясняет.
+        steps.append(
+            make_step(
+                "cache",
+                {
+                    "source_request_id": agent_trace.get("source_request_id", ""),
+                    "source_latency_ms": _as_int(agent_trace.get("source_latency_ms")),
+                    "cached_sql": trace_data.get("sql_query")
+                    or agent_trace.get("cached_sql", ""),
+                    "node_trace_stored": any(
+                        agent_trace.get(name) for name in AGENT_STEPS
+                    ),
+                },
+            )
+        )
     if agent_trace:
-        for step_name in ["classifier", "planner", "codegen", "executor", "verifier"]:
+        for step_name in AGENT_STEPS:
             step_data = agent_trace.get(step_name)
             if step_data:
                 duration = 0
