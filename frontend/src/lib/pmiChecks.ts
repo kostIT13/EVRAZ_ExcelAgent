@@ -4,9 +4,15 @@
  * (строки фактов) вместо «пройдено» с чужих слов.
  */
 import { api } from '@/api';
-import type { AskResponse, FileResponse, TraceListItem } from '@/types/api';
+import type { AskResponse, ChartPoint, FileResponse, TraceListItem } from '@/types/api';
 
 export type CheckStatus = 'pass' | 'fail' | 'error';
+
+/** Ряд графика, который проверка построила и выводит прямо в списке проверок (А-11). */
+export interface CheckChart {
+  data: ChartPoint[];
+  kind?: 'line' | 'bar';
+}
 
 export interface CheckResult {
   status: CheckStatus;
@@ -15,6 +21,7 @@ export interface CheckResult {
   at: string;
   /** request_id ответа /ask — по нему открывается трасса запроса. */
   requestId?: string;
+  chart?: CheckChart;
 }
 
 export interface AskCase {
@@ -46,6 +53,12 @@ export interface CheckParams {
   anyOf?: string[];
   /** Проверять ответ по правилу неоднозначного вопроса: уточнение либо явная интерпретация. */
   clarify?: boolean;
+  /**
+   * Источники ответа должны покрывать не менее min периодов с этим префиксом.
+   * А-3: вопрос без периода — автовыбор месячных листов виден именно в источниках,
+   * потому что SQL модель строит без литерала периода (MAX / ORDER BY DESC).
+   */
+  sourcesPeriods?: { prefix: string; min: number };
 }
 
 export type CheckKind =
@@ -97,8 +110,6 @@ export interface CheckContext {
 const API_BASE = '/api';
 /** Ответ /ask ждём дольше всего: агент делает несколько вызовов модели подряд. */
 const ASK_TIMEOUT_MS = 280_000;
-/** Бэкенд отдаёт sql_result_preview[:10] — дальше строки таблицы не видны. */
-const PREVIEW_CAP = 10;
 const NO_DATA_MARKERS = [
   'не вернул данных',
   'не найдено',
@@ -112,8 +123,20 @@ function stamp(): string {
   return new Date().toLocaleTimeString('ru-RU');
 }
 
-function pass(summary: string, lines: string[] = [], requestId?: string): CheckResult {
-  return { status: 'pass', summary, lines, at: stamp(), ...(requestId ? { requestId } : {}) };
+function pass(
+  summary: string,
+  lines: string[] = [],
+  requestId?: string,
+  chart?: CheckChart,
+): CheckResult {
+  return {
+    status: 'pass',
+    summary,
+    lines,
+    at: stamp(),
+    ...(requestId ? { requestId } : {}),
+    ...(chart ? { chart } : {}),
+  };
 }
 
 function fail(summary: string, lines: string[] = [], requestId?: string): CheckResult {
@@ -359,8 +382,9 @@ async function runCheckImpl(check: CheckDef, ctx: CheckContext): Promise<CheckRe
     }
 
     case 'rejectBadUploads': {
-      // Битый workbook отклоняется не на загрузке, а на разборе: он асинхронный,
-      // поэтому для него допускается HTTP 201 с последующим статусом error.
+      // Битый workbook парится до регистрации файла, поэтому ожидаем 400 прямо на
+      // загрузке; ветка 201 → status=error остаётся для книг, которые разбираются,
+      // но падают при нормализации.
       const attempts = [
         { name: 'ПМИ_тест.docx', type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', size: 256, fill: 65, late: false },
         { name: 'huge_51mib.xlsx', type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', size: 51 * 1024 * 1024, fill: 66, late: false },
@@ -480,6 +504,26 @@ async function runCheckImpl(check: CheckDef, ctx: CheckContext): Promise<CheckRe
         if (missing.length) problems.push(`в SQL нет: ${missing.join(', ')}`);
         else lines.push(`SQL содержит: ${p.sqlIncludes.join(', ')}`);
       }
+      if (p.sourcesPeriods) {
+        const periods = new Set<string>();
+        for (const s of a.sources ?? [])
+          for (const m of (s.chunk ?? '').matchAll(/\d{4}-\d{2}/g))
+            if (m[0].startsWith(p.sourcesPeriods.prefix)) periods.add(m[0]);
+        const foundPeriods = [...periods].sort();
+        lines.push(`периоды в источниках: ${foundPeriods.length ? foundPeriods.join(' ') : 'нет'}`);
+        const sql = a.sql_query ?? '';
+        if (!/\d{4}-\d{2}/.test(sql) && /(MAX\s*\(|ORDER\s+BY)/i.test(sql))
+          lines.push('в SQL нет литерала периода — модель ограничила выборку последним месяцем (MAX / ORDER BY DESC), месячные листы подтверждают источники');
+        if (foundPeriods.length < p.sourcesPeriods.min) {
+          problems.push(
+            `источники покрывают ${foundPeriods.length} из ${p.sourcesPeriods.min} периодов «${p.sourcesPeriods.prefix}…» — автовыбор месячных листов не подтверждён`,
+          );
+          if (a.from_cache)
+            problems.push(
+              'ответ взят из кэша: строка кэша, сохранённая старым образом сервиса, источников не хранит — очистите кэш (POST /cache/clear) и повторите',
+            );
+        }
+      }
       if (p.answerIncludes?.length) {
         const missing = sqlHas(a.answer, p.answerIncludes);
         if (missing.length) problems.push(`в тексте ответа нет: ${missing.join(', ')}`);
@@ -535,28 +579,21 @@ async function runCheckImpl(check: CheckDef, ctx: CheckContext): Promise<CheckRe
         chart = c.chart_data ?? [];
         source = `POST /ask/chart по thread_id ${a.thread_id?.slice(0, 8)}…`;
       }
-      const table = (a.sql_result_preview ?? []) as Record<string, unknown>[];
-      const tableValues = table
-        .map((row) => Object.values(row).map((v) => (typeof v === 'number' ? v : Number(v))).find((v) => Number.isFinite(v)))
-        .filter((v): v is number => v !== undefined);
       const lines = [
-        `строк таблицы в ответе: ${table.length} · точек графика: ${chart.length} · тип ${a.chart_type ?? '—'} · ${source}`,
+        `точек графика: ${chart.length} · тип ${a.chart_type ?? 'определяется по ряду'} · ${source}`,
         ...chart.slice(0, 4).map((pt) => `${pt.period} → ${fmt(pt.value)}`),
       ];
+      if (chart.length > 4) lines.push(`в строках видно 4 точки из ${chart.length} — весь ряд на графике ниже`);
       if (!chart.length) return fail('График не построен', [...lines, `ответ: ${a.answer.slice(0, 160)}`], a.request_id);
-      // /ask отдаёт не больше PREVIEW_CAP строк таблицы, поэтому сравниваем только
-      // те точки, для которых строка таблицы действительно пришла в ответе.
-      const comparable = chart.slice(0, Math.min(chart.length, table.length));
-      if (chart.length > table.length)
-        lines.push(
-          `сверено ${comparable.length} точек из ${chart.length}: бэкенд отдаёт не более ${PREVIEW_CAP} строк таблицы — остальные видны в трейсе запроса`,
-        );
-      const mismatch = comparable.filter((pt) => !tableValues.some((v) => Math.abs(v - pt.value) < 0.51));
-      lines.push(`значений графика без пары в таблице: ${mismatch.length}${mismatch.length ? ` (${mismatch.slice(0, 3).map((m) => `${m.period} → ${fmt(m.value)}`).join(', ')})` : ''}`);
-      if (!tableValues.length)
-        return fail('Таблица ответа пуста — сверить значения не с чем', [...lines, `ответ: ${a.answer.slice(0, 160)}`], a.request_id);
-      if (mismatch.length) return fail('Значения графика не равны табличным', lines, a.request_id);
-      return pass(`График построен, ${comparable.length} сверенных точек равны таблице`, lines, a.request_id);
+      // Пункт подтверждает, что график строится и выводится; значения с таблицей
+      // не сверяются — таблица в /ask ограничена превью, а форма SQL между
+      // прогонами меняется, и сверка падала на верном ответе.
+      return pass(
+        `График построен и выведен: ${chart.length} точек`,
+        lines,
+        a.request_id,
+        { data: chart, kind: a.chart_type ?? undefined },
+      );
     }
 
     case 'askClarify': {

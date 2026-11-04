@@ -97,6 +97,10 @@ frontend/
 - [`components/pmi/BenchmarkFiveRunner.tsx`](src/components/pmi/BenchmarkFiveRunner.tsx) —
   панель А-6: прогон пяти задач Заказчика из браузера (те же вопросы и допуск 1 %, что у
   `benchmark/run_first5.py`) с PASS RATE, флагом «из кэша» по `from_cache` и ссылкой на трассу;
+- [`components/pmi/AnnexUploader.tsx`](src/components/pmi/AnnexUploader.tsx) — панель загрузки книги
+  прямо в карточке пункта (А-4): `POST /files/upload`, ожидание итогового статуса разбора через
+  `GET /files/{id}`, показ листов/хэша/ошибки и перезапуск быстрых проверок пункта; включается
+  флагом `upload` в `data/pmiAnnexA.ts`;
 - [`components/trace/`](src/components/trace/) — `TraceStepCard` (карточка шага трейса),
   `StepInspector` (детали шага), `TraceWaterfall` (waterfall-диаграмма узлов графа).
 

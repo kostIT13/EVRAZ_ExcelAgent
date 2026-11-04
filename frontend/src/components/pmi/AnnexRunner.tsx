@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import ResultChart from '@/components/chat/ResultChart';
 import SqlBlock from '@/components/chat/SqlBlock';
+import AnnexUploader from '@/components/pmi/AnnexUploader';
 import BenchmarkFiveRunner from '@/components/pmi/BenchmarkFiveRunner';
 import ModelSwitcher from '@/components/pmi/ModelSwitcher';
 import { ToastContainer } from '@/components/ui/Toast';
@@ -500,14 +501,6 @@ export default function AnnexRunner() {
       <div className="annex__head">
         <div>
           <h2 className="demo__title">Прогон ПМИ: {ANNEX_A_ITEMS.length} контрольных примеров</h2>
-          <p className="demo__subtitle">
-            Вкладка на каждый пункт приложения А (таблица А.1): шаги и ожидаемый результат дословно из ПМИ,
-            проверяемые требования с пунктами ТЗ и критериями приёмки, вопросы для живого чата, речь для
-            комиссии и автопроверки стенда — они действительно обращаются к API и показывают доказательство.
-            Статусы и замечания правятся на месте и сохраняются в браузере, итог выгружается в таблицу
-            протокола (приложение Б). Общие предусловия (раздел 5 ПМИ): система развёрнута, модель
-            подключена, эталонные файлы загружены — кроме А-1 и А-17, где файл и стенд готовятся в ходе проверки.
-          </p>
         </div>
         <div className="annex__headActions">
           <button
@@ -825,6 +818,14 @@ export default function AnnexRunner() {
           <div className="annex__col">
             {active.modelSwitch && <ModelSwitcher />}
             {active.benchmarkFive && <BenchmarkFiveRunner />}
+            {active.upload && (
+              <AnnexUploader
+                key={active.id}
+                expectFilename={active.upload.expectFilename}
+                hint={active.upload.hint}
+                onSettled={() => void runCheckList(active, fastChecks, 'Быстрые проверки')}
+              />
+            )}
             {(activeChecks.length > 0 || active.probe) && (
               <div className="annex__checks">
                 <div className="annex__checksHead">
@@ -974,6 +975,14 @@ export default function AnnexRunner() {
                                         <li key={`${c.id}-${i}`}>{l}</li>
                                       ))}
                                     </ul>
+                                  )}
+                                  {res.chart && res.chart.data.length > 0 && (
+                                    <div className="annex__chart">
+                                      <div className="annex__h">
+                                        График, построенный проверкой ({res.chart.data.length} точек)
+                                      </div>
+                                      <ResultChart data={res.chart.data} chartType={res.chart.kind} />
+                                    </div>
                                   )}
                                 </>
                               )}

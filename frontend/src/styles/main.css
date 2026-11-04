@@ -3791,6 +3791,75 @@ body {
 .b5__err { font-size: 12px; line-height: 1.45; color: #fca5a5; overflow-wrap: anywhere; }
 .b5__foot { font-size: 11.5px; line-height: 1.5; color: var(--color-text-muted); }
 
+/* ---------- Загрузка книги прямо в карточке пункта (А-4) ---------- */
+.up {
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(34, 211, 238, 0.26);
+  background: rgba(34, 211, 238, 0.05);
+  overflow: hidden;
+}
+.up__summary {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  cursor: pointer;
+  list-style: none;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+.up__summary::-webkit-details-marker { display: none; }
+.up__summary svg { flex-shrink: 0; color: #67e8f9; }
+.up__expect {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  color: #9fe8c8;
+  border: 1px solid rgba(52, 211, 153, 0.35);
+  background: var(--color-success-bg);
+  overflow-wrap: anywhere;
+}
+.up__body {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  padding: 4px 14px 14px;
+  border-top: 1px solid var(--color-border);
+}
+.up__hint { font-size: 12px; line-height: 1.5; color: var(--color-text-muted); }
+.up__hint code, .up__lines code { font-family: var(--font-mono); font-size: 11.5px; color: var(--evraz-gold); }
+.up__row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.up__name { font-size: 12px; color: var(--color-text-muted); overflow-wrap: anywhere; }
+.up__progress { font-size: 12px; line-height: 1.5; color: #9fe8c8; }
+.up__lines {
+  margin: 0;
+  padding: 10px 12px;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--glass-border);
+  background: rgba(0, 0, 0, 0.26);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+}
+.up__error {
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: #fca5a5;
+  border: 1px solid rgba(248, 113, 113, 0.3);
+  background: rgba(248, 113, 113, 0.06);
+  overflow-wrap: anywhere;
+}
+
 /* ---------- Responsive ---------- */
 @media (max-width: 1100px) {
   .dashboard__row { grid-template-columns: 1fr; }
