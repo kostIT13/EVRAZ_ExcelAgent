@@ -32,3 +32,130 @@ def test_hash_question_is_sha256_hex():
     h = _hash_question("вопрос")
     assert len(h) == 64
     assert all(c in "0123456789abcdef" for c in h)
+
+
+def test_cached_result_sources_reads_stored_list():
+    from src.services.agent.graph import _cached_result_sources
+
+    sources = [{"chunk": "data.xlsx · лист «цв.лом(на дек25)» · 2025-12", "source_id": 67}]
+    assert _cached_result_sources({"result": {"sources": sources}}) == sources
+
+
+def test_cached_result_sources_empty_for_rows_without_sources():
+    from src.services.agent.graph import _cached_result_sources
+
+    assert _cached_result_sources({}) == []
+    assert _cached_result_sources({"result": {"data": []}}) == []
+    assert _cached_result_sources({"result": {"sources": []}}) == []
+
+
+def _agent_result(trace):
+    from src.services.agent.graph import AgentResult
+
+    return AgentResult(
+        answer="ответ",
+        confidence=0.9,
+        request_id="req-1",
+        question="вопрос",
+        latency_ms=31000,
+        trace=trace,
+        query_type="lookup",
+        sql_query="SELECT 1",
+        sql_result=[{"v": 1}],
+        retry_count=0,
+        status="success",
+    )
+
+
+def test_cache_agent_trace_keeps_node_steps_and_provenance():
+    from src.services.agent.graph import _cache_agent_trace
+
+    snapshot = _cache_agent_trace(
+        _agent_result(
+            {
+                "classifier": {"query_type": "lookup", "duration_ms": 800},
+                "verifier": {"confidence": 0.9, "duration_ms": 120},
+                "conversation_history": [{"role": "user", "content": "…"}],
+            }
+        )
+    )
+
+    assert snapshot["classifier"]["duration_ms"] == 800
+    assert snapshot["verifier"]["confidence"] == 0.9
+    assert "conversation_history" not in snapshot
+    assert snapshot["source_request_id"] == "req-1"
+    assert snapshot["source_latency_ms"] == 31000
+
+
+def test_cached_agent_trace_replays_nodes_and_marks_cache():
+    from src.services.agent.graph import _cached_agent_trace
+
+    trace = _cached_agent_trace(
+        {
+            "sql_query": "SELECT 1",
+            "agent_trace": {"classifier": {"query_type": "lookup"}, "source_latency_ms": 31000},
+        }
+    )
+
+    assert trace["classifier"] == {"query_type": "lookup"}
+    assert trace["from_cache"] is True
+    assert trace["cached_sql"] == "SELECT 1"
+    assert trace["source_latency_ms"] == 31000
+
+
+def test_cached_agent_trace_without_snapshot_is_cache_marker_only():
+    """Старые строки кэша снимка узлов не хранят."""
+    from src.services.agent.graph import _cached_agent_trace
+
+    trace = _cached_agent_trace({"sql_query": "SELECT 1"})
+
+    assert trace == {"from_cache": True, "cached_sql": "SELECT 1"}
+
+
+def test_cached_payload_stores_agent_trace_next_to_answer():
+    from decimal import Decimal
+
+    from src.services.entity_resolution.query_cache import _cached_payload
+
+    payload = _cached_payload(
+        {"data": [{"v": Decimal("1.5")}], "formatted_answer": "ответ"},
+        {"classifier": {"query_type": "lookup"}},
+    )
+
+    assert payload["data"] == [{"v": 1.5}]
+    assert payload["agent_trace"] == {"classifier": {"query_type": "lookup"}}
+
+
+def test_cached_payload_without_trace_keeps_previous_shape():
+    from src.services.entity_resolution.query_cache import _cached_payload
+
+    assert _cached_payload({"formatted_answer": "ответ"}) == {
+        "formatted_answer": "ответ"
+    }
+    assert _cached_payload(None) is None
+
+
+def test_cached_chart_restores_series_and_type():
+    """Попадание в кэш обязано отдать и график: checkpoint'а потока у него нет."""
+    from src.services.agent.graph import _cached_chart
+
+    points = [
+        {"period": "2025-01", "value": 891480.0},
+        {"period": "2025-02", "value": 906729.0},
+    ]
+
+    assert _cached_chart({"result": {"chart_data": points, "chart_type": "line"}}) == (
+        points,
+        "line",
+    )
+
+
+def test_cached_chart_empty_without_a_series():
+    from src.services.agent.graph import _cached_chart
+
+    assert _cached_chart({}) == (None, None)
+    assert _cached_chart({"result": {"chart_data": [], "chart_type": "bar"}}) == (None, None)
+    # Одна точка — не ряд; неизвестный тип графика не восстанавливаем.
+    assert _cached_chart(
+        {"result": {"chart_data": [{"period": "2025-01", "value": 1.0}], "chart_type": "pie"}}
+    ) == (None, None)

@@ -34,6 +34,19 @@ def _json_safe_result(result: Optional[Dict[str, Any]]) -> Optional[Dict[str, An
     return {k: _json_safe(v) for k, v in result.items()}
 
 
+def _cached_payload(
+    result: Optional[Dict[str, Any]],
+    agent_trace: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Payload кэша: ответ плюс снимок узлов графа для трассы кэшированного ответа."""
+    payload = _json_safe_result(result)
+    if payload is None:
+        return None
+    if agent_trace:
+        payload["agent_trace"] = _json_safe(agent_trace)
+    return payload
+
+
 def _normalize_question(question: str) -> str:
     q = question.lower().strip()
     q = re.sub(r'[^\w\sа-яё]', ' ', q)
@@ -74,11 +87,13 @@ class QueryCacheService:
                     question[:60],
                     record.hit_count,
                 )
+                payload = record.result if isinstance(record.result, dict) else {}
                 return {
                     "sql_query": record.sql_query,
                     "result": record.result,
                     "query_type": record.query_type,
                     "entities": record.entities,
+                    "agent_trace": payload.get("agent_trace") or {},
                 }
 
         logger.debug("Query cache MISS: '{}'", question[:60])
@@ -93,6 +108,7 @@ class QueryCacheService:
         entities: Optional[List[str]] = None,
         session: Optional[AsyncSession] = None,
         response_mode: str = "",
+        agent_trace: Optional[Dict[str, Any]] = None,
     ) -> None:
         question_hash = _hash_question(question, response_mode)
         normalized = _normalize_question(question)
@@ -103,11 +119,11 @@ class QueryCacheService:
                 select(QueryCache).where(QueryCache.question_hash == question_hash)
             )
             existing_record = existing.scalar_one_or_none()
-            result = _json_safe_result(result)
+            payload = _cached_payload(result, agent_trace)
             if existing_record is not None:
                 # Обновляем существующую запись
                 existing_record.sql_query = sql_query
-                existing_record.result = result
+                existing_record.result = payload
                 existing_record.query_type = query_type or "unknown"
                 existing_record.entities = entities
                 existing_record.hit_count = (existing_record.hit_count or 0) + 1
@@ -120,7 +136,7 @@ class QueryCacheService:
                 question=question,
                 normalized_question=normalized,
                 sql_query=sql_query,
-                result=result,
+                result=payload,
                 query_type=query_type or "unknown",
                 entities=entities,
             )

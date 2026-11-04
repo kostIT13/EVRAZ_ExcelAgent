@@ -349,6 +349,66 @@ class AgentResult:
         }
 
 
+def _cached_result_sources(cached: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Источники, сохранённые вместе с ответом кэша.
+
+    Пусто для строк, закэшированных до появления поля, — тогда источники
+    восстанавливают по SQL (_sources_from_cached_sql), но SQL вида
+    «sheet_period = (SELECT MAX(...))» период литералом не содержит.
+    """
+    sources = (cached.get("result") or {}).get("sources")
+    return list(sources) if sources else []
+
+
+def _cached_chart(
+    cached: Dict[str, Any],
+) -> tuple[Optional[List[Dict[str, Any]]], Optional[str]]:
+    """Ряд графика и его тип, сохранённые вместе с ответом кэша.
+
+    Без них попадание в кэш график не построит: `/ask/chart` строит ряд по
+    checkpoint'у потока, а у попадания в кэш граф не выполнялся.
+    """
+    payload = cached.get("result")
+    if not isinstance(payload, dict):
+        return None, None
+    data = payload.get("chart_data")
+    chart_data = list(data) if data and len(data) > 1 else None
+    if chart_data is None:
+        return None, None
+    chart_type = payload.get("chart_type")
+    return chart_data, (chart_type if chart_type in ("line", "bar") else None)
+
+
+# Узлы, чьи шаги показывает страница трассы: их снимок и кладётся в кэш, чтобы
+# трасса попадания в кэш не сводилась к паре «вопрос → ответ».
+CACHE_TRACE_NODES = ("classifier", "planner", "codegen", "executor", "verifier")
+
+
+def _cache_agent_trace(result: AgentResult) -> Dict[str, Any]:
+    """Снимок узлов графа прогона-источника для будущей трассы из кэша."""
+    snapshot = {
+        name: result.trace[name]
+        for name in CACHE_TRACE_NODES
+        if isinstance(result.trace.get(name), dict)
+    }
+    snapshot["source_request_id"] = result.request_id
+    snapshot["source_latency_ms"] = result.latency_ms
+    return snapshot
+
+
+def _cached_agent_trace(cached: Dict[str, Any]) -> Dict[str, Any]:
+    """Трасса попадания в кэш: узлы прогона-источника плюс отметка о кэше.
+
+    Длительности узлов относятся к прогону-источнику, не к этому запросу:
+    он отдаётся за единицы миллисекунд.
+    """
+    stored = cached.get("agent_trace")
+    trace = dict(stored) if isinstance(stored, dict) else {}
+    trace["from_cache"] = True
+    trace["cached_sql"] = cached.get("sql_query", "")
+    return trace
+
+
 async def _sources_from_cached_sql(sql_query: str) -> List[Dict[str, Any]]:
     """Восстанавливает источники (файл · лист · период) для ответа из кэша.
 
@@ -591,14 +651,17 @@ class LangGraphAgent:
                 observe_ask_finish()
             except Exception:
                 pass
-            cached_sources = await _sources_from_cached_sql(cached["sql_query"])
+            cached_sources = _cached_result_sources(cached) or await _sources_from_cached_sql(
+                cached["sql_query"]
+            )
+            cached_chart_data, cached_chart_type = _cached_chart(cached)
             return AgentResult(
                 answer=cached.get("result", {}).get("formatted_answer", "Данные из кэша."),
                 confidence=1.0,
                 request_id=request_id,
                 question=question,
                 latency_ms=latency_ms,
-                trace={"from_cache": True, "cached_sql": cached["sql_query"]},
+                trace=_cached_agent_trace(cached),
                 query_type=cached.get("query_type", "unknown"),
                 sql_query=cached["sql_query"],
                 sql_result=cached.get("result", {}).get("data", []),
@@ -607,6 +670,9 @@ class LangGraphAgent:
                 from_cache=True,
                 thread_id=thread_id,
                 sources=cached_sources,
+                chart_available=cached_chart_data is not None,
+                chart_data=cached_chart_data,
+                chart_type=cached_chart_type,
             )
 
         initial_state: GraphState = {
@@ -681,10 +747,17 @@ class LangGraphAgent:
             await query_cache_service.store(
                 question=question,
                 sql_query=result.sql_query,
-                result={"data": result.sql_result[:100], "formatted_answer": result.answer},
+                result={
+                    "data": result.sql_result[:100],
+                    "formatted_answer": result.answer,
+                    "sources": result.sources,
+                    "chart_data": result.chart_data or [],
+                    "chart_type": result.chart_type,
+                },
                 query_type=result.query_type,
                 entities=final_state.get("entities", []),
                 response_mode=response_mode,
+                agent_trace=_cache_agent_trace(result),
             )
 
         try:
@@ -775,10 +848,14 @@ class LangGraphAgent:
                     result={
                         "data": result.sql_result[:100],
                         "formatted_answer": result.answer,
+                        "sources": result.sources,
+                        "chart_data": result.chart_data or [],
+                        "chart_type": result.chart_type,
                     },
                     query_type=result.query_type,
                     entities=final_state.get("entities", []),
                     response_mode=response_mode,
+                    agent_trace=_cache_agent_trace(result),
                 )
             except Exception as exc:
                 logger.warning("Resume [{}]: cache store failed: {}", request_id[:8], exc)
