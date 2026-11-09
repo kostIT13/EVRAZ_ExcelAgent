@@ -1,0 +1,5 @@
+Generated with built-in image_gen, 10 November 2026.
+Asset: hero-3d.png
+
+Prompt:
+Create a premium editorial 3D illustration for the cover of an enterprise AI analytics presentation. Landscape 1536x1024. Background solid warm off-white #F5F3EF seamless studio. Main subject placed on the RIGHT two thirds: floating layered spreadsheet sheets made of matte white ceramic with subtle precise grey grid lines (no letters or numbers), a sculptural translucent smoky glass cube at their center, one bright vermilion orange small sphere and a brushed aluminum curved ribbon linking the sheets. Beautiful physically realistic materials, architectural product visualization, sophisticated restrained futuristic industrial aesthetic, soft large studio lighting, ambient occlusion, delicate shadows on ground, isometric three quarter angle. Left third mostly empty offwhite. Crisp exquisite edges, elegant composition, no text, no words, no logos, no people, no watermarks. For a Russian Excel AI agent project, visual metaphor of turning disorganized spreadsheets into a clear structured intelligent answer.
