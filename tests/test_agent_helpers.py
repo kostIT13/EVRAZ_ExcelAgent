@@ -1,4 +1,7 @@
-from src.services.agent.nodes.answer_node import _deterministic_answer
+from src.services.agent.nodes.answer_node import (
+    _deterministic_answer,
+    _result_has_values,
+)
 from src.services.agent.nodes.classifier_node import _heuristic_domain, _pick_best_candidate
 from src.services.agent.nodes.verifier_node import (
     _format_result_deterministically,
@@ -79,8 +82,28 @@ def test_sanity_check_all_null_values():
     assert "all_null_values" in issues
 
 
+def test_sanity_check_null_aggregate_counts_as_empty_result():
+    """AVG() по пустой выборке даёт одну строку из NULL — это те же «нет данных»."""
+    assert _sanity_check_result([{"avg_price": None}]) == [
+        "empty_result",
+        "all_null_values",
+    ]
+
+
+def test_sanity_check_partial_null_is_not_empty():
+    issues = _sanity_check_result([{"value": None, "item_name": "Лом меди"}])
+    assert "empty_result" not in issues
+    assert "all_null_values" not in issues
+
+
 def test_sanity_check_ok():
     assert _sanity_check_result([{"value": 100.0}]) == []
+
+
+def test_result_has_values_null_aggregate_is_not_data():
+    assert _result_has_values([{"avg_price": None}]) is False
+    assert _result_has_values([]) is False
+    assert _result_has_values([{"avg_price": 2697900.0}]) is True
 
 
 def test_format_result_deterministically_empty():

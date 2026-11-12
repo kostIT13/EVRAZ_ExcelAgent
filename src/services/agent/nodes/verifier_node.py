@@ -149,14 +149,17 @@ def _sanity_check_result(sql_result: List[Dict[str, Any]]) -> List[str]:
         issues.append("empty_result")
         return issues
 
+    # SELECT AVG(...) без GROUP BY на пустой выборке возвращает одну строку из
+    # NULL — данных в ней не больше, чем в пустом результате. Без этой проверки
+    # вопрос по уже удалённым данным давал status=success и confidence=0.7.
+    if all(
+        isinstance(row, dict) and all(v is None for v in row.values())
+        for row in sql_result
+    ):
+        return ["empty_result", "all_null_values"]
+
     if len(sql_result) > MAX_ROWS_WARNING:
         issues.append(f"large_result:{len(sql_result)}")
-
-    if sql_result:
-        first_row = sql_result[0]
-        all_nulls = all(v is None for v in first_row.values())
-        if all_nulls:
-            issues.append("all_null_values")
 
     return issues
 

@@ -108,6 +108,21 @@ def _result_has_numbers(sql_result: list) -> bool:
     return False
 
 
+def _result_has_values(sql_result: list) -> bool:
+    """True, если в результате есть хотя бы одно не-NULL значение.
+
+    Агрегат без GROUP BY на пустой выборке отдаёт одну строку из NULL: данных в
+    ней нет, и просить LLM формулировать по ней ответ нельзя — она выдумывает
+    формулировку вместо честного «данных нет».
+    """
+    return any(
+        v is not None
+        for row in sql_result or []
+        if isinstance(row, dict)
+        for v in row.values()
+    )
+
+
 def _has_digit(text: str) -> bool:
     """True, если в тексте есть хотя бы одна цифра."""
     return any(ch.isdigit() for ch in (text or ""))
@@ -211,7 +226,7 @@ SQL-запрос:
                 exc,
             )
             answer = _chart_fallback_answer(sql_result, chart_request)
-    elif sql_result and question:
+    elif _result_has_values(sql_result) and question:
         # Пытаемся сгенерировать ответ по вопросу + данным в выбранном режиме.
         try:
             system_prompt = (
