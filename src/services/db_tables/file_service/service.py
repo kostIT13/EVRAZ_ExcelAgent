@@ -1,4 +1,5 @@
 from src.services.db_tables.file_service.repository import SQLAlchemyFileRepository
+from src.services.entity_resolution.query_cache import query_cache_service
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional, List
 from src.core.db.models import File as DBFile
@@ -47,5 +48,9 @@ class FileService:
             if not record:
                 raise HTTPException(status_code=404, detail=f"File with id={file_id} not found")
             await self.repository.delete(record)
-            logger.info("Deleted file id={}", file_id)
+            # Ответы кэша переживают удаление витрины: попадание в кэш отдаёт
+            # старый ответ, не обращаясь к mart, и «данных нет» становится
+            # недостижимым, пока кэш чистят вручную.
+            cleared = await query_cache_service.clear(session=session)
+            logger.info("Deleted file id={}, query cache rows removed={}", file_id, cleared)
         return await self._run(_delete)

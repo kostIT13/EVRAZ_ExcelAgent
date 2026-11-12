@@ -1,3 +1,6 @@
+import asyncio
+from types import SimpleNamespace
+
 from src.services.entity_resolution.query_cache import _hash_question, _normalize_question
 
 
@@ -159,3 +162,90 @@ def test_cached_chart_empty_without_a_series():
     assert _cached_chart(
         {"result": {"chart_data": [{"period": "2025-01", "value": 1.0}], "chart_type": "pie"}}
     ) == (None, None)
+
+
+def test_cached_confidence_reads_stored_value():
+    """Попадание в кэш обязано отдать уверенность прогона-источника, а не 1.0."""
+    from src.services.agent.graph import _cached_confidence
+
+    assert _cached_confidence({"result": {"confidence": 0.0}}) == 0.0
+    assert _cached_confidence({"result": {"confidence": 0.7}}) == 0.7
+
+
+def test_cached_confidence_falls_back_to_verifier_snapshot():
+    from src.services.agent.graph import _cached_confidence
+
+    cached = {"result": {"formatted_answer": "ответ"}, "agent_trace": {"verifier": {"confidence": 0.0}}}
+
+    assert _cached_confidence(cached) == 0.0
+
+
+def test_cached_confidence_ignores_garbage_and_clamps():
+    from src.services.agent.graph import _cached_confidence
+
+    assert _cached_confidence({"result": {"confidence": "0.5"}}) == 1.0
+    assert _cached_confidence({"result": {"confidence": True}}) == 1.0
+    assert _cached_confidence({"result": {"confidence": 4.0}}) == 1.0
+    # Строки, закэшированные до появления поля и без снимка узлов.
+    assert _cached_confidence({"result": {"formatted_answer": "ответ"}}) == 1.0
+
+
+def test_clear_on_borrowed_session_deletes_without_committing():
+    """Сессия вызывающего (удаление файла) владеет транзакцией — коммитит она."""
+    from types import SimpleNamespace
+
+    from src.services.entity_resolution.query_cache import QueryCacheService
+
+    class _Session:
+        def __init__(self):
+            self.statements = []
+
+        async def execute(self, statement):
+            self.statements.append(str(statement))
+            return SimpleNamespace(rowcount=7)
+
+        async def flush(self):
+            self.flushed = True
+
+        async def commit(self):
+            raise AssertionError("заимствованную сессию кэш коммитить не должен")
+
+    session = _Session()
+
+    cleared = asyncio.run(QueryCacheService().clear(session=session))
+
+    assert cleared == 7
+    assert session.flushed is True
+    assert len(session.statements) == 1
+    assert "DELETE FROM query_cache" in session.statements[0]
+
+
+def test_delete_file_invalidates_answer_cache():
+    """Строка кэша переживает удаление витрины: без сброса вопрос ответил бы из кэша."""
+    from src.services.db_tables.file_service.service import FileService
+
+    calls = []
+
+    class _Session:
+        flushed = False
+
+        async def execute(self, statement):
+            calls.append(str(statement))
+            return SimpleNamespace(rowcount=2)
+
+        async def flush(self):
+            self.flushed = True
+
+    class _Repo:
+        async def get_by_id(self, file_id):
+            return SimpleNamespace(id=file_id)
+
+        async def delete(self, record):
+            calls.append(f"file:{record.id}")
+
+    service = FileService(_Session())
+    service.repository = _Repo()
+
+    asyncio.run(service.delete(3))
+
+    assert calls == ["file:3", "DELETE FROM query_cache"]

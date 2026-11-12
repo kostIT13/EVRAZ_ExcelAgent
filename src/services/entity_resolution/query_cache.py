@@ -212,8 +212,20 @@ class QueryCacheService:
         self,
         session: Optional[AsyncSession] = None,
     ) -> int:
-        """Полностью очищает таблицу кэша запросов и возвращает число удалённых записей."""
-        async with session or async_session_maker() as s:
+        """Полностью очищает таблицу кэша запросов и возвращает число удалённых записей.
+
+        Переданная сессия — заимствованная: вызывающий владеет транзакцией, поэтому
+        её не закрываем и не коммитим (иначе commit вызывающего упадёт на закрытой
+        сессии). Так удаление данных и сброс кэша уходят в одном коммите.
+        """
+        if session is not None:
+            result = await session.execute(delete(QueryCache))
+            await session.flush()
+            deleted = result.rowcount or 0
+            logger.info("Query cache cleared: {} records removed", deleted)
+            return deleted
+
+        async with async_session_maker() as s:
             result = await s.execute(delete(QueryCache))
             await s.commit()
 
