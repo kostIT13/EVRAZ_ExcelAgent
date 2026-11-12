@@ -162,6 +162,7 @@ export interface TraceListItem {
   created_at?: string | null;
   confidence?: number;
   query_type?: string;
+  retry_count?: number;
   error_message?: string;
   from_cache?: boolean;
 }

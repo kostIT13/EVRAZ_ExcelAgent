@@ -113,10 +113,14 @@ const ASK_TIMEOUT_MS = 280_000;
 const NO_DATA_MARKERS = [
   'не вернул данных',
   'не найдено',
+  'не найдена',
+  'не найдены',
+  'не обнаружено',
+  'не обнаружен',
   'данных нет',
   'нет данных',
   'не удалось получить',
-  'не найдено данных',
+  'не удалось найти',
 ];
 
 function stamp(): string {
@@ -477,7 +481,14 @@ async function runCheckImpl(check: CheckDef, ctx: CheckContext): Promise<CheckRe
 
     case 'clearCache': {
       const res = await api.clearCache();
-      return pass(res.message || 'Кэш очищен', [`очищено ответов: ${res.cleared}`]);
+      return pass(
+        res.message || 'Кэш очищен',
+        [
+          res.cleared
+            ? `очищено ответов: ${res.cleared}`
+            : 'очищено ответов: 0 — устаревших строк кэша не осталось',
+        ],
+      );
     }
 
     case 'askNumber': {
@@ -627,6 +638,15 @@ async function runCheckImpl(check: CheckDef, ctx: CheckContext): Promise<CheckRe
           `файл «${p.filename}» присутствует — вопрос вернёт реальные данные`,
           'порядок прогона: метрики → удаление файла → «Очистить кэш» → эта проверка',
         ]);
+      // Строка кэша переживает удаление файла: попадание в кэш отдаёт старый
+      // ответ, не обращаясь к витрине, — честный «данных нет» без сброса кэша
+      // недостижим. Проверка чистит кэш сама, чтобы не зависеть от порядка
+      // нажатия кнопок оператором.
+      ctx.onProgress?.('Сбрасываем кэш ответов…');
+      const cleared = await api.clearCache().catch((e) => ({
+        message: `сбой POST /cache/clear: ${String((e as Error)?.message ?? e)}`,
+        cleared: -1,
+      }));
       ctx.onProgress?.('Запрос к агенту — 30–80 секунд…');
       const res = await ask(p.question ?? '');
       if (res.status >= 500) return fail(`Сервис упал: HTTP ${res.status}`, [res.text.slice(0, 200)]);
@@ -635,17 +655,31 @@ async function runCheckImpl(check: CheckDef, ctx: CheckContext): Promise<CheckRe
       const after = await api.listFiles({ limit: 50 });
       const text = a.answer.toLowerCase();
       const admitted = NO_DATA_MARKERS.some((m) => text.includes(m));
-      const numbers = numbersIn(a.answer).filter((n) => n > 1000);
+      // Числа из самого вопроса (период «2025», «декабрь») агент пересказывает —
+      // выдумкой они не считаются; выдумка — это цена/сумма, которых в базе нет.
+      const asked = new Set(numbersIn(p.question ?? ''));
+      const numbers = numbersIn(a.answer).filter((n) => n > 1000 && !asked.has(n));
       const lines = [
         `HTTP ${res.status} · статус ${a.status} · уверенность ${a.confidence} · повторов ${a.retry_count} · ${a.latency_ms} мс`,
         `ответ: ${a.answer.slice(0, 220)}`,
         `файлов на стенде: до ${before.total} · после ${after.total}`,
+        cleared.cleared < 0
+          ? `кэш перед вопросом: ${cleared.message}`
+          : `кэш перед вопросом: очищено ${cleared.cleared} ответов · ответ из кэша: ${a.from_cache ? 'да' : 'нет'}`,
       ];
       if (p.filename) lines.push(`файл «${p.filename}» удалён — данные действительно отсутствуют`);
       const problems: string[] = [];
       if (!admitted) problems.push('в ответе нет признания отсутствия данных');
       if (numbers.length) problems.push(`ответ содержит числа: ${numbers.slice(0, 4).map(fmt).join(', ')}`);
-      if (a.confidence > 0) problems.push(`уверенность ${a.confidence} > 0`);
+      if (a.from_cache)
+        problems.push('ответ пришёл из кэша — витрина не опрашивалась, уверенность унаследована от прогона-источника');
+      if (a.confidence > 0) {
+        problems.push(`уверенность ${a.confidence} > 0`);
+        if (admitted && !a.from_cache)
+          lines.push(
+            'текст ответа честный, а уверенность ненулевая — на стенде образ сервиса собран до правки верификатора (агрегат по пустой выборке даёт строку из NULL); пересоберите: docker compose up -d --build service',
+          );
+      }
       return problems.length
         ? fail('Система не сообщила об отсутствии данных честно', [...lines, ...problems], a.request_id)
         : pass('Честный ответ «данных нет», HTTP без ошибки', lines, a.request_id);
@@ -717,19 +751,39 @@ async function runCheckImpl(check: CheckDef, ctx: CheckContext): Promise<CheckRe
 
     case 'journalEvidence': {
       const res = await api.listTraces({ limit: 50 });
-      const failed = res.items.filter((i) => i.status === 'failed' || (i.error_message ?? '').length > 0);
-      const rejected = res.items.filter((i) => (i.error_message ?? '').toLowerCase().includes('несбалансиров'));
+      // Отклонённые попытки уходят вглубь журнала после первых же успешных
+      // прогонов, поэтому их ищем серверной фильтрацией по статусу: по
+      // последним 50 записям запись недельной давности не находится.
+      const failedRes = await api.listTraces({ limit: 50, status: 'failed' });
+      const REJECTED_SQL =
+        /несбалансир|запрещённ|должен начинаться|должен содержать from|sql-запрос пуст|ошибк\w* sql|syntax error|does not exist/i;
+      const hasError = (i: TraceListItem) => (i.error_message ?? '').length > 0;
+      const byId = new Map<string, TraceListItem>();
+      for (const i of [...failedRes.items, ...res.items])
+        if (i.status === 'failed' || hasError(i)) byId.set(i.request_id, i);
+      const rejected = [...byId.values()].sort((a, b) => (b.created_at ?? '').localeCompare(a.created_at ?? ''));
+      const withReason = rejected.filter(hasError);
+      const validation = withReason.filter((i) => REJECTED_SQL.test(i.error_message ?? ''));
+      const silent = rejected.length - withReason.length;
+      const retries = rejected.filter((i) => (i.retry_count ?? 0) >= 3).length;
       const slow = res.items.filter((i) => i.latency_ms > 30000).length;
+      const newest = withReason[0] ?? rejected[0];
       const lines = [
         `записей в журнале: ${res.total}`,
         `последние ${res.items.length}: ${res.items.slice(0, 5).map((i) => `${i.status}/${i.latency_ms}мс`).join(', ')}`,
-        `с ошибкой: ${failed.length}${rejected.length ? ` · отклонено валидацией SQL: ${rejected.length}` : ''}`,
+        `отклонённых попыток: ${rejected.length}${validation.length ? ` · из них ошибок валидации SQL: ${validation.length}` : ''}`,
+        `статус failed всего: ${failedRes.total}${silent ? ` · ${silent} без текста причины` : ''}`,
+        `с ретраями (retry_count ≥ 3): ${retries}`,
         `долгих (> 30 с): ${slow}`,
       ];
-      if (failed[0]?.error_message) lines.push(`последняя отклонённая попытка: «${failed[0].error_message}»`);
+      if (newest) {
+        const when = newest.created_at ? new Date(newest.created_at).toLocaleString('ru-RU') : 'дата не указана';
+        const reason = newest.error_message ? `«${newest.error_message}»` : 'без текста причины';
+        lines.push(`последняя отклонённая попытка: ${reason} от ${when} · ${newest.request_id}`);
+      }
       if (!res.total) return fail('Журнал пуст', lines);
-      if (!failed.length) return fail('В журнале нет ни одной отклонённой попытки — попросите агента сделать ошибочный SQL или загрузите данные заново', lines);
-      return pass(`Журнал заполнен, отклонённые попытки видны (${failed.length})`, lines, failed[0]?.request_id);
+      if (!rejected.length) return fail('В журнале нет ни одной отклонённой попытки — попросите агента сделать ошибочный SQL или загрузите данные заново', lines);
+      return pass(`Журнал заполнен, отклонённые попытки видны (${rejected.length})`, lines, newest?.request_id);
     }
 
     case 'askJournal': {
@@ -868,9 +922,20 @@ async function runCheckImpl(check: CheckDef, ctx: CheckContext): Promise<CheckRe
       const after = await api.listFiles({ limit: 50 });
       const gone = !after.files.some((f) => f.id === file.id);
       const orphanSheets = await api.getFileSheets(file.id).then((s) => s.length).catch(() => 0);
+      // POST /cache/clear после DELETE: 0 удалённых записей означает, что сам
+      // DELETE стёр кэш ответов (иначе вопрос ниже ответил бы из кэша).
+      const cacheLeft = await api
+        .clearCache()
+        .then((r) => r.cleared)
+        .catch(() => null);
       const lines = [
         `удалён id ${file.id} · ${file.filename} · было ${files.total} · стало ${after.total}`,
         `листов файла после DELETE: ${orphanSheets} — производные записи не остались (каскад ON DELETE CASCADE)`,
+        cacheLeft === null
+          ? 'кэш ответов не проверен — сбой POST /cache/clear'
+          : cacheLeft === 0
+            ? 'кэш ответов пуст — DELETE стёр его вместе с витриной'
+            : `кэш ответов чистился вручную: удалено ${cacheLeft} — образ сервиса собран до инвалидации кэша при удалении`,
         'объём витрины после каскада: docker exec evraz_postgres psql -U user -d postgres -t -A -c "SELECT count(*) FROM mart.price_facts" → 0',
         'после этого пункта загрузите эталонный файл заново (А-1), иначе остальные проверки невоспроизводимы',
       ];
