@@ -83,8 +83,43 @@ def _timed(node_name: str, node):
 async def failed_node(state: GraphState, **kwargs: Any) -> GraphState:
     request_id = state.get("request_id", "?")[:8]
     logger.error("Failed Node [{}]: graph reached failed state", request_id)
-    state["error"] = state.get("error") or "Граф достиг ошибочного состояния"
+    state["error"] = state.get("error") or _last_failure_detail(state)
     return state
+
+
+def _last_failure_detail(state: GraphState) -> str:
+    """Причина отказа для журнала (Н-2): конкретнее, чем «граф в ошибочном состоянии»."""
+    if state.get("validation_errors"):
+        return str(state["validation_errors"][0])
+    if state.get("sql_error"):
+        return f"Ошибка SQL: {state['sql_error']}"
+    trace = state.get("trace") or {}
+    for node_name in ("codegen", "executor", "planner", "classifier", "verifier"):
+        step = trace.get(node_name)
+        if isinstance(step, dict) and (step.get("error") or step.get("sql_error")):
+            return f"{node_name}: {step.get('error') or step.get('sql_error')}"
+    return "Граф достиг ошибочного состояния"
+
+
+CLARIFY_FALLBACK_QUESTION = "Можете уточнить подробнее?"
+
+
+def _clarifying_question(raw: Any) -> str:
+    """Текст уточняющего вопроса: пустой payload interrupt'а не должен молчать."""
+    return (str(raw).strip() if raw is not None else "") or CLARIFY_FALLBACK_QUESTION
+
+
+def _clarifying_answer(question: str, options: List[Any]) -> str:
+    """Ответ для статуса waiting_for_input.
+
+    Пока вопрос не был текстом ответа, чат показывал пустое сообщение, а в
+    query_logs попадала запись с пустым answer — уточнение было видно только в
+    поле waiting_question.
+    """
+    variants = [str(o).strip() for o in options if str(o).strip()]
+    if variants:
+        return f"{question}\n\nНапример: {'; '.join(variants[:5])}."
+    return question
 
 
 def build_agent_graph() -> StateGraph:
@@ -316,6 +351,7 @@ class AgentResult:
     sql_result: List[Dict[str, Any]]
     retry_count: int
     status: str
+    error: str = ""
     self_corrected: bool = False
     from_cache: bool = False
     thread_id: Optional[str] = None
@@ -382,6 +418,29 @@ def _cached_chart(
 # Узлы, чьи шаги показывает страница трассы: их снимок и кладётся в кэш, чтобы
 # трасса попадания в кэш не сводилась к паре «вопрос → ответ».
 CACHE_TRACE_NODES = ("classifier", "planner", "codegen", "executor", "verifier")
+
+
+def _cached_confidence(cached: Dict[str, Any]) -> float:
+    """Уверенность прогона-источника, сохранённая рядом с ответом кэша.
+
+    Попадание в кэш не проверяло ответ заново и всегда отдавало 1.0 — честный
+    ответ «данных нет» из старой строки кэша доходил до проверки ПМИ с
+    уверенностью 1. Строки, закэшированные до появления поля, берут уверенность
+    верификатора из снимка узлов; без снимка остаётся 1.0.
+    """
+    payload = cached.get("result")
+    if isinstance(payload, dict):
+        value = payload.get("confidence")
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return max(0.0, min(1.0, float(value)))
+    trace = cached.get("agent_trace")
+    if isinstance(trace, dict):
+        verifier = trace.get("verifier")
+        if isinstance(verifier, dict):
+            value = verifier.get("confidence")
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                return max(0.0, min(1.0, float(value)))
+    return 1.0
 
 
 def _cache_agent_trace(result: AgentResult) -> Dict[str, Any]:
@@ -538,7 +597,8 @@ class LangGraphAgent:
         waiting_question, waiting_options = self._extract_interrupt(final_state)
         if waiting_question is not None:
             status = STATUS_WAITING
-            answer = ""
+            waiting_question = _clarifying_question(waiting_question)
+            answer = _clarifying_answer(waiting_question, waiting_options)
 
         # Case A: если результат уже является временным рядом — отдаём chart_data сразу.
         # При явном запросе «по поставщикам» сначала пробуем агрегировать
@@ -590,6 +650,7 @@ class LangGraphAgent:
             sql_result=sql_result,
             retry_count=final_state.get("retry_count", 0),
             status=status,
+            error=str(final_state.get("error") or ""),
             from_cache=from_cache,
             sources=sources,
             thread_id=thread_id,
@@ -655,9 +716,13 @@ class LangGraphAgent:
                 cached["sql_query"]
             )
             cached_chart_data, cached_chart_type = _cached_chart(cached)
+            cached_confidence = _cached_confidence(cached)
             return AgentResult(
                 answer=cached.get("result", {}).get("formatted_answer", "Данные из кэша."),
-                confidence=1.0,
+                confidence=cached_confidence,
+                # Порог тот же, что в _finalize: статус не должен расходиться с
+                # уверенностью прогона-источника.
+                status="success" if cached_confidence >= 0.7 else "low_confidence",
                 request_id=request_id,
                 question=question,
                 latency_ms=latency_ms,
@@ -666,7 +731,6 @@ class LangGraphAgent:
                 sql_query=cached["sql_query"],
                 sql_result=cached.get("result", {}).get("data", []),
                 retry_count=0,
-                status="success",
                 from_cache=True,
                 thread_id=thread_id,
                 sources=cached_sources,
@@ -750,6 +814,7 @@ class LangGraphAgent:
                 result={
                     "data": result.sql_result[:100],
                     "formatted_answer": result.answer,
+                    "confidence": result.confidence,
                     "sources": result.sources,
                     "chart_data": result.chart_data or [],
                     "chart_type": result.chart_type,
@@ -848,6 +913,7 @@ class LangGraphAgent:
                     result={
                         "data": result.sql_result[:100],
                         "formatted_answer": result.answer,
+                        "confidence": result.confidence,
                         "sources": result.sources,
                         "chart_data": result.chart_data or [],
                         "chart_type": result.chart_type,

@@ -51,8 +51,11 @@ class GenerationPipeline:
         # уверенность / пустой ответ). Раньше он срабатывал и на low_confidence
         # (0.5–0.7) из-за сбоя парсинга верификатора — это удваивало латентность
         # (45→90+ сек) и приводило к 504 в nginx при повторном прогоне всего графа.
+        # Попадание в кэш не корректируют: повторный прогон ищет кэш по тому же
+        # вопросу и вернул бы ровно эту же строку.
         needs_correction = (
             result.status not in (STATUS_WAITING,)
+            and not result.from_cache
             and (
                 result.status == "failed"
                 or result.confidence < 0.5
@@ -160,6 +163,7 @@ class GenerationPipeline:
                 sql_query=result.sql_query,
                 latency_ms=result.latency_ms,
                 status=result.status,
+                error_message=result.error or None,
             ))
             await s.commit()
 
