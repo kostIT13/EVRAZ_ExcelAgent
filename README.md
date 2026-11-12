@@ -823,6 +823,23 @@ python benchmark/run_all.py --top-k 20 --json benchmark/results.json
 через `POST /files/upload` или UI).
 Подробности — в [`benchmark/README.md`](benchmark/README.md).
 
+### Заглушка сбоев модели (ПМИ п. 5.2, метод 6.3)
+
+[`benchmark/llm_fault_stub.py`](benchmark/llm_fault_stub.py) — OpenAI-совместимый API, который по
+требованию эмулирует сбои модели: таймаут, HTTP 429, пустой ответ, HTTP 500 и нормальный ответ.
+Нужна для проверки надёжности (Н-2): эти сбои нельзя воспроизвести на реальной модели по заказу.
+
+```bash
+python -m benchmark.llm_fault_stub                 # http://localhost:8100, режим normal
+curl -X POST localhost:8100/admin/fault -H "Content-Type: application/json" -d "{\"mode\":\"rate_limit\"}"
+curl localhost:8100/admin/stats                    # режим и число обращений
+```
+
+Режим переключается на ходу, без перезапуска. Чтобы агент ходил в заглушку, укажите в `.env`
+`LLM_BASE_URL=http://host.docker.internal:8100/v1` (для запуска вне Docker — `http://localhost:8100/v1`)
+и перезапустите сервис. Повторы клиента задаются `MAX_RETRIES`, отказ фиксируется в
+`query_logs.status` и `query_logs.error_message`.
+
 ---
 
 ## Тесты
@@ -845,6 +862,9 @@ python benchmark/run_all.py --top-k 20 --json benchmark/results.json
 | `test_material_synonyms.py` | синонимы материалов |
 | `test_normalizer_dimension.py` | нормализация измерений |
 | `test_parser_header_detection.py` | определение шапки Excel |
+| `test_llm_fault_stub.py` | повторы клиента LLM при HTTP 429, таймауте и пустом ответе (на живой заглушке) |
+| `test_agent_failure_journal.py` | отказ модели попадает в журнал как статус + причина, без стека в ответе |
+| `test_agent_clarifying_question.py` | на паузе уточнения (`waiting_for_input`) текстом ответа становится уточняющий вопрос |
 | `test_price_sheet_*.py` | unit-тесты пайплайна первой таблицы (парсер/структуратор/нормализация) |
 | `test_sheet_kind_detector_domain.py` | детектор типа листа (prices/matrix/generic) |
 | `test_golden_dataset.py` | интеграционные golden-тесты (маркер `golden`) |
