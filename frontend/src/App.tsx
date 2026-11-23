@@ -4,7 +4,6 @@ import Header from '@/components/layout/Header';
 import Background from '@/components/layout/Background';
 import AnimatedPage from '@/components/layout/AnimatedPage';
 import ChatPage from '@/pages/ChatPage';
-import DemoPage from '@/pages/DemoPage';
 import FilesPage from '@/pages/FilesPage';
 import TracePage from '@/pages/TracePage';
 import DashboardPage from '@/pages/DashboardPage';
@@ -25,14 +24,6 @@ export default function App() {
               element={
                 <AnimatedPage>
                   <ChatPage />
-                </AnimatedPage>
-              }
-            />
-            <Route
-              path="/demo"
-              element={
-                <AnimatedPage>
-                  <DemoPage />
                 </AnimatedPage>
               }
             />
